@@ -21,8 +21,8 @@ serve(async (req) => {
   try {
     const { system, message, action, client_id, history } = await req.json();
     const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_KEY");
-    const SUPABASE_URL = Deno.env.get("URL_SUPABASE");
-    const SUPABASE_SERVICE_KEY = Deno.env.get("SERVICE_ROLE_KEY_SUPABASE");
+    const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
+    const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
     if (!ANTHROPIC_KEY) {
       return new Response(
@@ -56,7 +56,7 @@ serve(async (req) => {
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
+          model: "claude-sonnet-4-5",
           max_tokens: 600,
           system:
             "Tu es un assistant qui résume des sessions de travail de manière factuelle et concise. " +
@@ -219,7 +219,7 @@ serve(async (req) => {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-5",
         max_tokens: 1200,
         system,
         messages: [{ role: "user", content: message }],
