@@ -770,7 +770,7 @@ async function send(){
     // Initiales (ex: "ph", "kb")
     memberIndex[norm(m.initials)] = ini;
     // Chaque mot du nom (prénom, particule, nom de famille)
-    norm(m.name).split(/\s+/).filter(w=>w.length>1).forEach(w => {
+    norm(m.name || m.initials).split(/\s+/).filter(w=>w.length>1).forEach(w => {
       memberIndex[w] = ini;
     });
   }
