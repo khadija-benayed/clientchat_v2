@@ -21,8 +21,8 @@ serve(async (req) => {
   try {
     const { system, message, action, client_id, history } = await req.json();
     const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_KEY");
-    const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
-    const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const SUPABASE_URL = Deno.env.get("URL_SUPABASE");
+    const SUPABASE_SERVICE_KEY = Deno.env.get("SERVICE_ROLE_KEY_SUPABASE");
 
     if (!ANTHROPIC_KEY) {
       return new Response(
