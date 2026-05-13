@@ -500,7 +500,11 @@ function leaveClient(e, clientId) {
   renderSidebar();
 }
 
-function logout(){session=[];localStorage.removeItem('cc-sess');location.reload();}
+function logout(){
+  // CC-102 — Sauvegarder avant de quitter
+  if(cur && !sessionSaved && sessionExchangeCount >= 3) saveSessionSummary();
+  session=[];localStorage.removeItem('cc-sess');location.reload();
+}
 
 function enterApp(client){
   hide('login'); show('app');
@@ -525,6 +529,10 @@ function renderSidebar(){
 }
 
 async function selectClient(c){
+  // CC-102 — Sauvegarder la session courante avant de switcher
+  if(cur && cur.id !== c.id && !sessionSaved && sessionExchangeCount >= 3) {
+    await saveSessionSummary();
+  }
   const {data} = await sb.from('clients').select('*').eq('id',c.id).single();
   cur=data||c;
   addSession(cur); renderSidebar();
@@ -992,6 +1000,10 @@ async function send(){
     if($('msgs').querySelector('.thinking')) th.remove();
     addMsg('a','Erreur : '+e.message);
   }
+  // CC-102 — Sauvegarde intelligente : au 5e échange, puis tous les 10
+  // On lance en arrière-plan sans bloquer l'UI
+  const shouldSave = !sessionSaved && (sessionExchangeCount === 5 || (sessionExchangeCount > 5 && sessionExchangeCount % 10 === 0));
+  if(shouldSave) saveSessionSummary();
 }
 
 function renderFilters(){
@@ -1282,20 +1294,9 @@ window.addEventListener('load', async () => {
   if(session.length){ enterApp(null); }
 });
 
-// CC-102 — Sauvegarder la session à la fermeture de la page
-window.addEventListener('beforeunload', () => {
-  if(!cur || sessionSaved || sessionExchangeCount < 3) return;
-  // Utiliser sendBeacon pour un appel non-bloquant à la fermeture
-  const payload = JSON.stringify({
-    action: 'summarize_session',
-    client_id: cur.id,
-    history: extractChatHistory()
-  });
-  navigator.sendBeacon(
-    EDGE_URL,
-    new Blob([payload], {type: 'application/json'})
-  );
-});
+// CC-102 — beforeunload supprimé : non fiable pour appels IA async
+// La sauvegarde se fait au 5e échange, tous les 10 ensuite,
+// au changement de client et à la déconnexion.
 </script>
 </body>
 </html>
