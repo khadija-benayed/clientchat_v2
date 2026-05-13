@@ -134,7 +134,11 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
 .notes-section{margin-top:4px}
 .notes-label{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--tx3);margin-bottom:10px}
 .notes-list{display:flex;flex-direction:column;gap:8px;margin-bottom:14px;max-height:220px;overflow-y:auto}
-.note-entry{background:var(--sur2);border-radius:var(--rs);padding:10px 12px}
+/* Bouton suppression note */
+.note-entry{background:var(--sur2);border-radius:var(--rs);padding:10px 12px;position:relative}
+.note-entry:hover .note-del{opacity:1}
+.note-del{position:absolute;top:6px;right:8px;background:transparent;border:none;cursor:pointer;font-size:14px;color:var(--tx3);opacity:0;transition:opacity .15s;line-height:1;padding:2px 4px;border-radius:4px}
+.note-del:hover{color:var(--red);background:var(--rbg)}
 .note-entry-date{font-size:10px;color:var(--tx3);font-family:'DM Mono',monospace;margin-bottom:4px}
 .note-entry-text{font-size:13px;color:var(--tx);line-height:1.5;white-space:pre-wrap}
 .note-add{display:flex;gap:8px;align-items:flex-end}
@@ -1141,13 +1145,26 @@ function renderNotesInModal(noteStr) {
     el.innerHTML = '<div style="font-size:12px;color:var(--tx3);font-style:italic">Aucune note pour l\'instant.</div>';
     return;
   }
-  el.innerHTML = notes.map(n =>
+  el.innerHTML = notes.map((n, i) =>
     '<div class="note-entry">'
+    + '<button class="note-del" onclick="deleteNoteFromModal('+i+')" title="Supprimer cette note">×</button>'
     + (n.date ? '<div class="note-entry-date">'+n.date+'</div>' : '')
     + '<div class="note-entry-text">'+n.text+'</div>'
     + '</div>'
   ).join('');
   el.scrollTop = el.scrollHeight;
+}
+
+async function deleteNoteFromModal(index) {
+  if(!modalTaskId) return;
+  const t = tasks.find(x => x.id === modalTaskId);
+  if(!t) return;
+  const lines = (t.note||'').split('\n').filter(Boolean);
+  lines.splice(index, 1);
+  t.note = lines.join('\n') || null;
+  renderNotesInModal(t.note);
+  await upsertTask(t);
+  renderTodo([t.id]);
 }
 
 async function addNoteFromModal() {
@@ -1237,6 +1254,8 @@ async function saveSettings(){
 
 async function openModal(id){
   $(id).classList.add('open');
+  // Fermer en cliquant sur le backdrop
+  $(id).onclick = (e) => { if(e.target === $(id)) closeModal(id); };
   // Charger la liste des clients si c'est la modal join-existing
   if(id === 'modal-new') {
     // Réinitialiser la liste membres
@@ -1287,11 +1306,11 @@ async function createClientModal(){
 }
 
 window.addEventListener('load', async () => {
-  // Initialiser la liste membres du formulaire de création (login)
   addMemberRow('c-members-list');
   sb = supabase.createClient(SB_URL, SB_KEY);
   await loadClientList();
-  if(session.length){ enterApp(null); }
+  // CC-FIX : passer le premier client directement à enterApp pour éviter le double selectClient
+  if(session.length){ enterApp(session[0]); }
 });
 
 // CC-102 — beforeunload supprimé : non fiable pour appels IA async
