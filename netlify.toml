@@ -1,0 +1,4 @@
+[build]
+  publish = "public"
+  # Les Netlify Functions ont été migrées vers Supabase Edge Functions (CC-101)
+  # Backend : https://erpjerfvswesipmdqxab.supabase.co/functions/v1/chat
