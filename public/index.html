@@ -142,6 +142,15 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
 .note-add textarea:focus{border-color:var(--acc)}
 .note-add-btn{padding:8px 14px;background:var(--acc);color:white;border:none;border-radius:var(--rs);font-family:'DM Sans',sans-serif;font-size:13px;cursor:pointer;white-space:nowrap}
 .note-add-btn:hover{opacity:.9}
+/* CC-102 — badge sauvegarde session */
+.session-saved-badge{position:fixed;bottom:70px;left:50%;transform:translateX(-50%);background:var(--gbg);color:var(--green);border:1px solid var(--green);border-radius:20px;padding:5px 14px;font-size:11px;font-family:'DM Mono',monospace;z-index:50;pointer-events:none;transition:opacity .4s}
+/* CC-102 — onglets modal paramètres */
+.settings-tabs{display:flex;border-bottom:1px solid var(--brd);margin-bottom:18px;gap:0}
+.stab{flex:1;padding:8px;text-align:center;font-size:12px;font-weight:500;cursor:pointer;background:transparent;border:none;color:var(--tx3);font-family:'DM Sans',sans-serif;border-bottom:2px solid transparent;transition:all .15s}
+.stab.on{color:var(--acc);border-bottom-color:var(--acc)}
+.hist-entry{background:var(--sur2);border:1px solid var(--brd);border-radius:var(--rs);padding:10px 12px;margin-bottom:8px}
+.hist-date{font-size:10px;color:var(--tx3);font-family:'DM Mono',monospace;margin-bottom:5px}
+.hist-text{font-size:12px;color:var(--tx);white-space:pre-wrap;line-height:1.6}
 .task-modal-del{font-size:12px;color:var(--red);background:transparent;border:1px solid var(--rbg);border-radius:var(--rs);padding:5px 10px;cursor:pointer;font-family:'DM Sans',sans-serif}
 .task-modal-del:hover{background:var(--rbg)}
 .member-row{display:flex;gap:6px;align-items:center;margin-bottom:8px}
@@ -236,6 +245,14 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
 <div class="modal-bg" id="modal-settings">
 <div class="modal">
   <h2 id="stitle">Paramètres</h2>
+  <!-- CC-102 : onglets Paramètres / Historique -->
+  <div class="settings-tabs">
+    <button class="stab on" id="stab-params" onclick="switchSettingsTab('params')">Paramètres</button>
+    <button class="stab" id="stab-hist" onclick="switchSettingsTab('hist')">Historique sessions</button>
+  </div>
+
+  <!-- Panneau Paramètres -->
+  <div id="settings-panel-params">
   <label>Membres de l'équipe</label>
   <div class="note-txt">Format recommandé : entre les initiales et le prénom+nom complet. Ex : KB = Khadija Ben Ayed, PH = Pierre Henry. Utile si deux membres ont le même prénom.</div>
   <div class="members-wrap" id="mwrap"></div>
@@ -257,6 +274,16 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
   <div class="modal-foot">
     <button class="btn btn-sec" onclick="closeModal('modal-settings')">Annuler</button>
     <button class="btn" style="width:auto" onclick="saveSettings()">Enregistrer</button>
+  </div>
+  </div>
+
+  <!-- CC-102 : Panneau Historique sessions -->
+  <div id="settings-panel-hist" class="hide">
+    <div id="hist-loading" style="font-size:12px;color:var(--tx3);font-style:italic;padding:8px 0">Chargement…</div>
+    <div id="hist-list"></div>
+    <div class="modal-foot">
+      <button class="btn btn-sec" onclick="closeModal('modal-settings')">Fermer</button>
+    </div>
   </div>
 </div>
 </div>
@@ -348,6 +375,10 @@ const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 let sb = null;
 let cur = null, tasks = [], activeF = 'all', rtChan = null;
 let session = JSON.parse(localStorage.getItem('cc-sess') || '[]');
+// CC-102 — Persistance des sessions
+let inactivityTimer = null;
+let sessionExchangeCount = 0;   // nb d'échanges user↔assistant dans la session courante
+let sessionSaved = false;        // éviter de sauvegarder deux fois la même session
 const MC = [{bg:'#EAF4EE',c:'#2D6A4F'},{bg:'#EAF0FA',c:'#1A4F8A'},{bg:'#FDF0DC',c:'#7A4B0F'},{bg:'#EDE9FE',c:'#5B21B6'},{bg:'#FAEAEA',c:'#8B2020'}];
 
 function $(id){ return document.getElementById(id); }
@@ -500,11 +531,18 @@ async function selectClient(c){
   $('tb-name').textContent=cur.name;
   $('msgs').innerHTML='';
   tasks=[]; activeF='all'; renderFilters();
+  // CC-102 — Reset compteurs de session
+  sessionExchangeCount=0; sessionSaved=false;
+  resetInactivityTimer();
   setSyncDot('#EF9F27','chargement…');
   await loadTasks();
   subscribeRT();
+  // CC-102 — Charger les résumés des sessions précédentes
+  const prevSummaries = await loadPreviousSummaries(cur.id);
   const mems=getMembers();
   const mStr=mems.map(m=>m.name||m.initials).join(' & ');
+  // Stocker pour injection dans le system prompt
+  cur._summaries = prevSummaries;
   addMsg('a','Bonjour ! Je suis au courant du projet '+cur.name+(mStr?' — équipe : '+mStr:'')+'. Pose tes questions ou dis-moi ce que tu avances.');
 }
 
@@ -531,6 +569,109 @@ function subscribeRT(){
   rtChan=sb.channel('t-'+cur.id)
     .on('postgres_changes',{event:'*',schema:'public',table:'tasks',filter:'client_id=eq.'+cur.id},()=>loadTasks())
     .subscribe();
+}
+
+// ── CC-102 : Persistance des sessions ──────────────────────────────────────
+
+// Récupérer les N derniers résumés de session pour un client
+async function loadPreviousSummaries(clientId, limit=5){
+  try {
+    const {data, error} = await sb
+      .from('session_summaries')
+      .select('summary_text, created_at')
+      .eq('client_id', clientId)
+      .order('created_at', {ascending: false})
+      .limit(limit);
+    if(error) { console.error('loadPreviousSummaries:', error.message); return []; }
+    return (data||[]).reverse(); // ordre chronologique pour le system prompt
+  } catch(e) { console.error('loadPreviousSummaries:', e); return []; }
+}
+
+// Construire le bloc résumés pour le system prompt
+function buildSummariesBlock(){
+  const summaries = cur?._summaries || [];
+  if(!summaries.length) return '';
+  const lines = summaries.map(s => {
+    const d = new Date(s.created_at).toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'2-digit'});
+    return '— Session du '+d+' :\n'+s.summary_text;
+  });
+  return '\n\n[Sessions précédentes]\n'+lines.join('\n\n');
+}
+
+// Extraire l'historique visible dans le chat (messages user + assistant)
+function extractChatHistory(){
+  return [...$('msgs').querySelectorAll('.msg')].map(m => ({
+    role: m.classList.contains('u') ? 'u' : 'a',
+    text: m.querySelector('.bubble')?.textContent?.trim() || ''
+  })).filter(m => m.text);
+}
+
+// Sauvegarder la session courante si elle a assez d'échanges
+async function saveSessionSummary(){
+  if(!cur || sessionSaved || sessionExchangeCount < 3) return;
+  const history = extractChatHistory();
+  if(history.length < 3) return;
+  sessionSaved = true; // flag optimiste pour éviter les doubles appels
+  try {
+    const r = await fetch('https://erpjerfvswesipmdqxab.supabase.co/functions/v1/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action: 'summarize_session', client_id: cur.id, history})
+    });
+    const data = await r.json();
+    if(data.saved){
+      showSessionSavedBadge();
+      // Mettre à jour le cache local pour la prochaine inactivité éventuelle
+      if(!cur._summaries) cur._summaries = [];
+      cur._summaries.push({summary_text: data.summary, created_at: new Date().toISOString()});
+      if(cur._summaries.length > 5) cur._summaries.shift();
+    } else {
+      sessionSaved = false; // permettre un retry si erreur
+    }
+  } catch(e){ sessionSaved = false; console.error('saveSessionSummary:', e); }
+}
+
+// Badge discret "Session sauvegardée ✓"
+function showSessionSavedBadge(){
+  const existing = document.querySelector('.session-saved-badge');
+  if(existing) existing.remove();
+  const badge = document.createElement('div');
+  badge.className = 'session-saved-badge';
+  badge.textContent = 'Session sauvegardée ✓';
+  document.body.appendChild(badge);
+  setTimeout(() => { badge.style.opacity='0'; setTimeout(()=>badge.remove(), 400); }, 3000);
+}
+
+// Timer d'inactivité : sauvegarde après 10 min sans message
+function resetInactivityTimer(){
+  if(inactivityTimer) clearTimeout(inactivityTimer);
+  inactivityTimer = setTimeout(() => { saveSessionSummary(); }, 10 * 60 * 1000);
+}
+
+// Onglets du modal Paramètres
+function switchSettingsTab(tab){
+  ['params','hist'].forEach(t => {
+    $('stab-'+t).classList.toggle('on', t===tab);
+    $('settings-panel-'+t).classList.toggle('hide', t!==tab);
+  });
+  if(tab==='hist') loadHistoryPanel();
+}
+
+// Charger le panneau Historique
+async function loadHistoryPanel(){
+  if(!cur) return;
+  $('hist-loading').style.display='block';
+  $('hist-list').innerHTML='';
+  const summaries = await loadPreviousSummaries(cur.id, 20);
+  $('hist-loading').style.display='none';
+  if(!summaries.length){
+    $('hist-list').innerHTML='<div style="font-size:12px;color:var(--tx3);font-style:italic;padding:8px 0">Aucun résumé de session enregistré.</div>';
+    return;
+  }
+  $('hist-list').innerHTML = [...summaries].reverse().map(s => {
+    const d = new Date(s.created_at).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+    return `<div class="hist-entry"><div class="hist-date">${d}</div><div class="hist-text">${s.summary_text}</div></div>`;
+  }).join('');
 }
 
 function addMsg(role,text,badge){
@@ -571,6 +712,9 @@ async function send(){
   if(!txt||!cur) return;
   inp.value=''; inp.style.height='auto';
   addMsg('u',txt);
+  // CC-102 — Compteur échanges + reset timer inactivité
+  sessionExchangeCount++;
+  resetInactivityTimer();
   const th=addThinking();
 
   const mems=getMembers();
@@ -752,6 +896,7 @@ async function send(){
     +'TO-DO ACTUELLE : '+snap()+'\n'
     +'Membres valides (initiales et noms complets) : '+mFull+'. Utilise les initiales dans le JSON.\n'
     +'Initiales seules pour JSON : '+mInitials+'. Statuts : todo, inprogress, blocked, waiting, done. Priorités : P1, P2, P3.\n'
+    +buildSummariesBlock()
     +'\nANALYSE AUTOMATIQUE DE CORRESPONDANCE (calculée avant appel) :\n'+matchContext+'\n'
     +(historyStr?'\nHISTORIQUE :\n'+historyStr+'\n':'')
     +'\nINSTRUCTIONS :\n'
@@ -892,6 +1037,8 @@ function openSettings(){
   $('stitle').textContent='Paramètres — '+cur.name;
   $('ctx-ta').value=cur.context||'';
   $('drive-in').value=cur.drive_url||'';
+  // CC-102 — Toujours ouvrir sur l'onglet Paramètres
+  switchSettingsTab('params');
   renderMList(); openModal('modal-settings');
 }
 
@@ -1132,16 +1279,21 @@ window.addEventListener('load', async () => {
   await loadClientList();
   if(session.length){ enterApp(null); }
 });
+
+// CC-102 — Sauvegarder la session à la fermeture de la page
+window.addEventListener('beforeunload', () => {
+  if(!cur || sessionSaved || sessionExchangeCount < 3) return;
+  // Utiliser sendBeacon pour un appel non-bloquant à la fermeture
+  const payload = JSON.stringify({
+    action: 'summarize_session',
+    client_id: cur.id,
+    history: extractChatHistory()
+  });
+  navigator.sendBeacon(
+    'https://erpjerfvswesipmdqxab.supabase.co/functions/v1/chat',
+    new Blob([payload], {type: 'application/json'})
+  );
+});
 </script>
 </body>
-</html>+'Règles JSON :\n'
-    +'- CORRESPONDANCE : SUIS L\'ANALYSE ci-dessus (calculée de façon déterministe).\n'
-    +'  Si UNE tâche identifiée → agis sur elle directement avec son id. clarification=false.\n'
-    +'  Si PLUSIEURS ou AUCUNE → clarification=true, explique et liste les candidats.\n'
-    +'- Note/commentaire : "note que...", "ajoute un commentaire", "précise que...", "on va faire...", "à savoir..." → mettre à jour le champ note de la tâche correspondante (ne pas créer une nouvelle tâche). Ex: {"id":X,"note":"nouveau commentaire"}\n'
-    +'- Priorité : "prio P1/P2/P3" / "priorité haute" → prio dans updates.\n'
-    +'- Renommer : "renomme X en Y" / "appelle-la Y" → new_title dans updates.\n'
-    +'- "passer en relecture côté X" / "envoyer à X" / "X doit relire" → assignee=X + status=waiting.\n'
-    +'- fini/terminé → done | bloqué → blocked | en cours/je travaille → inprogress | retour/retravailler → todo.\n'
-    +'- "assigne à X" → changer assignee. Si "assigne à X ET Y" ou "X et Y" → assignee = initiales séparées par + (ex: PH+KB).\n'
-    
+</html>

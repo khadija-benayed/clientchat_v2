@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const headers = {
   "Access-Control-Allow-Origin": "*",
@@ -18,13 +19,108 @@ serve(async (req) => {
   }
 
   try {
-    const { system, message, action } = await req.json();
+    const { system, message, action, client_id, history } = await req.json();
     const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_KEY");
+    const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
+    const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
     if (!ANTHROPIC_KEY) {
       return new Response(
         JSON.stringify({ error: "ANTHROPIC_KEY non configurée" }),
         { status: 500, headers }
+      );
+    }
+
+    // ── Action : résumé de session ──────────────────────────────────────────
+    if (action === "summarize_session") {
+      if (!client_id || !history || !Array.isArray(history) || history.length === 0) {
+        return new Response(
+          JSON.stringify({ error: "client_id et history requis" }),
+          { status: 400, headers }
+        );
+      }
+
+      // Formater l'historique en texte lisible pour Claude
+      const historyText = history
+        .map((m: { role: string; text: string }) =>
+          `${m.role === "u" ? "Utilisateur" : "Assistant"} : ${m.text}`
+        )
+        .join("\n");
+
+      // Appel Claude pour générer le résumé
+      const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": ANTHROPIC_KEY,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 600,
+          system:
+            "Tu es un assistant qui résume des sessions de travail de manière factuelle et concise. " +
+            "Tu reçois un historique de conversation et tu produis un résumé structuré.",
+          messages: [
+            {
+              role: "user",
+              content:
+                "Résume cette session en 5 points max : décisions prises, infos importantes, actions à faire. " +
+                "Format : liste à tirets, sois factuel et concis. Ne mets pas de titre.\n\n" +
+                "Session :\n" + historyText,
+            },
+          ],
+        }),
+      });
+
+      const claudeData = await claudeRes.json();
+      if (claudeData.error) {
+        return new Response(
+          JSON.stringify({ error: claudeData.error.message }),
+          { status: 400, headers }
+        );
+      }
+
+      const summaryText =
+        claudeData.content
+          ?.filter((c: { type: string }) => c.type === "text")
+          .map((c: { text: string }) => c.text)
+          .join("") || "";
+
+      // Persister dans Supabase via service_role (bypass RLS)
+      if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+        const sbAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+        const { error: insertError } = await sbAdmin
+          .from("session_summaries")
+          .insert({ client_id, summary_text: summaryText });
+
+        if (insertError) {
+          console.error("Insert session_summary error:", insertError.message);
+          // On retourne quand même le résumé même si la persistence échoue
+          return new Response(
+            JSON.stringify({
+              saved: false,
+              summary: summaryText,
+              error: insertError.message,
+            }),
+            { status: 200, headers }
+          );
+        }
+      } else {
+        // Variables Supabase non configurées — résumé généré mais non persisté
+        return new Response(
+          JSON.stringify({
+            saved: false,
+            summary: summaryText,
+            error: "SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY manquante",
+          }),
+          { status: 200, headers }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ saved: true, summary: summaryText }),
+        { status: 200, headers }
       );
     }
 
@@ -123,7 +219,7 @@ serve(async (req) => {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        model: "claude-sonnet-4-20250514",
         max_tokens: 1200,
         system,
         messages: [{ role: "user", content: message }],
