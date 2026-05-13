@@ -372,6 +372,8 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
 <script>
 const SB_URL = 'https://erpjerfvswesipmdqxab.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVycGplcmZ2c3dlc2lwbWRxeGFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4NTQwNDEsImV4cCI6MjA5MjQzMDA0MX0.ftgCx_YzClgkNCPF5PprnPJd-y6mdl_vETtvl6pzG2U';
+const EDGE_URL = SB_URL + '/functions/v1/chat';
+const EDGE_HEADERS = {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SB_KEY};
 let sb = null;
 let cur = null, tasks = [], activeF = 'all', rtChan = null;
 let session = JSON.parse(localStorage.getItem('cc-sess') || '[]');
@@ -613,9 +615,9 @@ async function saveSessionSummary(){
   if(history.length < 3) return;
   sessionSaved = true; // flag optimiste pour éviter les doubles appels
   try {
-    const r = await fetch('https://erpjerfvswesipmdqxab.supabase.co/functions/v1/chat', {
+    const r = await fetch(EDGE_URL, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: EDGE_HEADERS,
       body: JSON.stringify({action: 'summarize_session', client_id: cur.id, history})
     });
     const data = await r.json();
@@ -697,7 +699,7 @@ function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()
 function resize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,120)+'px';}
 
 async function callClaude(system,message){
-  const r=await fetch('https://erpjerfvswesipmdqxab.supabase.co/functions/v1/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({system,message})});
+  const r=await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({system,message})});
   const data=await r.json();
   if(data.error) throw new Error(data.error);
   return data.text;
@@ -1205,7 +1207,7 @@ async function saveSettings(){
   if(du&&du!==cur.drive_url){
     show('drive-status');
     try{
-      const r=await fetch('https://erpjerfvswesipmdqxab.supabase.co/functions/v1/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'read_drive',message:du,system:''})});
+      const r=await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({action:'read_drive',message:du,system:''})});
       const d=await r.json();
       if(d.text&&d.text.length>50){
         const summary=await callClaude("Extrais les infos clés de ce document et résume-les de façon structurée en français (max 600 mots). Retourne uniquement le résumé.",'Contenu :\n\n'+d.text.substring(0,3000));
@@ -1290,7 +1292,7 @@ window.addEventListener('beforeunload', () => {
     history: extractChatHistory()
   });
   navigator.sendBeacon(
-    'https://erpjerfvswesipmdqxab.supabase.co/functions/v1/chat',
+    EDGE_URL,
     new Blob([payload], {type: 'application/json'})
   );
 });
