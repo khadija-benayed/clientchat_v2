@@ -1250,15 +1250,23 @@ async function saveSettings(){
         driveBlock='--- Drive : '+d.error+' ---';
       } else if(d.files&&d.files.length>0){
         $('drive-status').textContent=d.files.length+' fichier(s) lu(s), résumé en cours…';
-        const driveContent = d.files.map((f) =>
-          `[${f.filename} — ${f.type.toUpperCase()} — modifié le ${new Date(f.modifiedTime).toLocaleDateString('fr-FR')}]\n${f.content}`
-        ).join('\n\n---\n\n');
-        const summary=await callClaude(
-          "Extrais les infos clés de ces documents et résume-les de façon structurée en français (max 800 mots). Retourne uniquement le résumé.",
-          'Contenu du dossier Drive :\n\n'+driveContent.substring(0,8000)
-        );
-        driveBlock='--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') — '+d.files.length+' fichier(s) ---\n'+summary;
-        $('drive-status').textContent='✓ '+d.files.length+' fichier(s) intégré(s) dans le contexte';
+        // Résumer chaque fichier individuellement pour ne perdre aucune info
+        const fileSummaries = [];
+        for(let i=0; i<d.files.length; i++){
+          const f = d.files[i];
+          $('drive-status').textContent='Résumé '+(i+1)+'/'+d.files.length+' — '+f.filename+'…';
+          try {
+            const sum = await callClaude(
+              "Extrais les infos clés de ce document en français, de façon factuelle et concise (max 200 mots). Retourne uniquement le résumé, sans titre.",
+              '['+f.filename+' — '+f.type.toUpperCase()+' — modifié le '+new Date(f.modifiedTime).toLocaleDateString('fr-FR')+']\n'+f.content.substring(0,6000)
+            );
+            fileSummaries.push('## '+f.filename+'\n'+sum);
+          } catch(e) {
+            fileSummaries.push('## '+f.filename+'\n(Erreur de lecture)');
+          }
+        }
+        driveBlock='--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') — '+d.files.length+' fichier(s) ---\n'+fileSummaries.join('\n\n---\n\n');
+        $('drive-status').textContent='✓ '+d.files.length+' fichier(s) résumés dans le contexte';
       } else {
         $('drive-status').textContent='Aucun fichier lisible trouvé. '+(d.message||'');
         driveBlock='--- Drive : '+(d.message||'Dossier vide.')+' ---';
