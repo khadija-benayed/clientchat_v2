@@ -212,7 +212,7 @@ serve(async (req) => {
         const url = new URL("https://www.googleapis.com/drive/v3/files");
         url.searchParams.set("q", `'${fId}' in parents and trashed = false`);
         url.searchParams.set("fields", "files(id,name,mimeType,modifiedTime)");
-        url.searchParams.set("pageSize", "50");
+        url.searchParams.set("pageSize", "100");
         url.searchParams.set("supportsAllDrives", "true");
         url.searchParams.set("includeItemsFromAllDrives", "true");
         const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
@@ -237,7 +237,7 @@ serve(async (req) => {
       // Trier par date de modification décroissante, prendre les 20 plus récents
       allFiles.sort((a, b) => new Date(b.modifiedTime).getTime() - new Date(a.modifiedTime).getTime());
 
-      const results = await Promise.all(allFiles.slice(0, 20).map((f) => exportDriveFile(f, token)));
+      const results = await Promise.all(allFiles.slice(0, 50).map((f) => exportDriveFile(f, token)));
       const files: DriveFileResult[] = results.filter((r): r is DriveFileResult => r !== null);
 
       return new Response(JSON.stringify({ files, sa_email: sa.client_email }), { status: 200, headers });
