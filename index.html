@@ -173,6 +173,39 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
 .btn-rem-member:hover{border-color:var(--red);color:var(--red)}
 .btn-add-member{font-size:12px;padding:6px 12px;border:1px dashed var(--brd2);border-radius:var(--rs);background:transparent;cursor:pointer;color:var(--tx2);font-family:'DM Sans',sans-serif;width:100%;margin-top:2px;margin-bottom:14px}
 .btn-add-member:hover{border-color:var(--acc);color:var(--acc)}
+/* CC-104 — Sources de contexte */
+.sources-section{margin-top:20px;padding-top:16px;border-top:1px solid var(--brd)}
+.sources-label{font-size:10px;font-weight:500;letter-spacing:.07em;color:var(--tx3);text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between}
+.sources-list{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+.src-item{display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--sur2);border:1px solid var(--brd);border-radius:var(--r);transition:border-color .15s}
+.src-item:hover{border-color:var(--brd2)}
+.src-icon{font-size:16px;flex-shrink:0;width:24px;text-align:center}
+.src-info{flex:1;min-width:0}
+.src-name{font-size:13px;color:var(--tx);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.src-meta{font-size:10px;color:var(--tx3);font-family:'DM Mono',monospace;margin-top:2px}
+.src-status{font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;flex-shrink:0;font-family:'DM Mono',monospace}
+.src-status.ok{background:var(--gbg);color:var(--green)}
+.src-status.err{background:var(--rbg);color:var(--red)}
+.src-status.syncing{background:var(--abg);color:var(--amb)}
+.src-actions{display:flex;gap:5px;flex-shrink:0}
+.src-sync-btn{font-size:11px;padding:4px 9px;border:1px solid var(--brd2);border-radius:var(--rs);background:transparent;cursor:pointer;color:var(--tx2);font-family:'DM Sans',sans-serif;white-space:nowrap}
+.src-sync-btn:hover{border-color:var(--acc);color:var(--acc);background:var(--gbg)}
+.src-sync-btn:disabled{opacity:.45;cursor:not-allowed}
+.src-del-btn{width:24px;height:24px;border:none;background:transparent;cursor:pointer;color:var(--tx3);font-size:15px;line-height:1;display:flex;align-items:center;justify-content:center;border-radius:4px;padding:0}
+.src-del-btn:hover{color:var(--red);background:var(--rbg)}
+.token-bar{margin-top:10px;padding:8px 12px;background:var(--sur2);border:1px solid var(--brd);border-radius:var(--rs);display:flex;align-items:center;justify-content:space-between}
+.token-bar-lbl{font-size:11px;color:var(--tx3)}
+.token-bar-val{font-size:11px;font-weight:500;font-family:'DM Mono',monospace;color:var(--tx2)}
+.src-empty{font-size:12px;color:var(--tx3);font-style:italic;padding:8px 2px}
+/* CC-104 — sous-modal ajout source */
+.add-src-opts{display:flex;flex-direction:column;gap:8px;margin-bottom:4px}
+.add-src-opt{display:flex;align-items:center;gap:12px;padding:14px 16px;border:1px solid var(--brd2);border-radius:var(--r);cursor:pointer;background:var(--sur2);transition:all .15s}
+.add-src-opt:hover{border-color:var(--acc);background:var(--gbg)}
+.add-src-opt-icon{font-size:22px;flex-shrink:0}
+.add-src-opt-label{font-size:13px;font-weight:500;color:var(--tx)}
+.add-src-opt-sub{font-size:11px;color:var(--tx3);margin-top:2px}
+.add-src-form{display:none;margin-top:16px;padding-top:16px;border-top:1px solid var(--brd)}
+.add-src-form.open{display:block}
 </style>
 </head>
 <body>
@@ -279,9 +312,22 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
   </div>
   <label>Contexte client</label>
   <textarea id="ctx-ta" style="min-height:110px;font-family:'DM Mono',monospace;font-size:12px;margin-bottom:4px" placeholder="Infos clés : secteur, stack, interlocuteurs, enjeux…"></textarea>
-  <label>Google Drive — Dossier client</label>
-  <input type="text" id="drive-in" placeholder="Ex : 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"/>
-  <div class="note-txt">L'ID se trouve dans l'URL du dossier Drive : drive.google.com/drive/folders/<strong>[ID ICI]</strong>. Partage ce dossier avec l'email de la Service Account.</div>
+  <!-- CC-104 — Sources de contexte -->
+  <div class="sources-section">
+    <div class="sources-label">
+      <span>Sources de contexte</span>
+    </div>
+    <div class="sources-list" id="sources-list">
+      <div class="src-empty">Aucune source connectée.</div>
+    </div>
+    <div class="token-bar" id="token-bar">
+      <span class="token-bar-lbl">Contexte total estimé</span>
+      <span class="token-bar-val" id="token-count">~0 tokens</span>
+    </div>
+    <button class="btn-add-member" style="margin-top:8px" onclick="openModal('modal-add-source')">+ Ajouter une source</button>
+  </div>
+  <!-- champ Drive caché — conservé pour rétrocompatibilité saveSettings() -->
+  <input type="text" id="drive-in" class="hide" style="display:none"/>
   <div id="drive-status" class="hide" style="font-size:12px;color:var(--tx3);font-style:italic;margin-bottom:10px">Lecture en cours…</div>
   <div style="margin-top:24px;padding-top:16px;border-top:1px solid var(--brd)">
     <button class="btn" style="width:auto;background:var(--rbg);color:var(--red);border:1px solid var(--red)" onclick="deleteClient()">Supprimer ce client</button>
@@ -299,6 +345,56 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
     <div id="hist-list"></div>
     <div class="modal-foot">
       <button class="btn btn-sec" onclick="closeModal('modal-settings')">Fermer</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- CC-104 — Modal ajout source -->
+<div class="modal-bg" id="modal-add-source">
+<div class="modal" style="max-width:440px">
+  <h2>Ajouter une source</h2>
+  <div class="add-src-opts">
+    <div class="add-src-opt" onclick="showAddSourceForm('drive')">
+      <div class="add-src-opt-icon">📁</div>
+      <div>
+        <div class="add-src-opt-label">Google Drive</div>
+        <div class="add-src-opt-sub">Connecter un dossier Drive via son ID</div>
+      </div>
+    </div>
+    <div class="add-src-opt" onclick="showAddSourceForm('file')">
+      <div class="add-src-opt-icon">📄</div>
+      <div>
+        <div class="add-src-opt-label">Fichier PDF</div>
+        <div class="add-src-opt-sub">Uploader un PDF directement (CC-103)</div>
+      </div>
+    </div>
+    <div class="add-src-opt" onclick="showAddSourceForm('notion')" style="opacity:.55;pointer-events:none">
+      <div class="add-src-opt-icon">🔷</div>
+      <div>
+        <div class="add-src-opt-label">Notion <span style="font-size:10px;color:var(--tx3);font-weight:400">— bientôt</span></div>
+        <div class="add-src-opt-sub">Connecter une page ou base Notion</div>
+      </div>
+    </div>
+  </div>
+  <div class="add-src-form" id="add-src-form-drive">
+    <label>ID du dossier Google Drive</label>
+    <input type="text" id="add-src-drive-id" placeholder="Ex : 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"/>
+    <div class="note-txt">L'ID se trouve dans l'URL Drive : drive.google.com/drive/folders/<strong>[ID ICI]</strong>. Partage le dossier avec l'email de la Service Account.</div>
+    <label>Nom (optionnel)</label>
+    <input type="text" id="add-src-drive-name" placeholder="Ex : Docs Décathlon"/>
+    <div class="modal-foot">
+      <button class="btn btn-sec" onclick="closeModal('modal-add-source')">Annuler</button>
+      <button class="btn" style="width:auto" onclick="confirmAddSource('drive')">Ajouter</button>
+    </div>
+  </div>
+  <div class="add-src-form" id="add-src-form-file">
+    <label>Fichier PDF</label>
+    <input type="file" id="add-src-file-input" accept=".pdf" style="margin-bottom:10px"/>
+    <div class="note-txt">Le fichier sera analysé et son contenu injecté dans le contexte client. Taille max : 20 Mo.</div>
+    <div class="modal-foot">
+      <button class="btn btn-sec" onclick="closeModal('modal-add-source')">Annuler</button>
+      <button class="btn" style="width:auto" onclick="confirmAddSource('file')">Uploader et analyser</button>
     </div>
   </div>
 </div>
@@ -1112,10 +1208,17 @@ function openSettings(){
   // Afficher uniquement le contexte manuel (sans le bloc Drive auto-généré)
   const manualCtxOnly = (cur.context||'').replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
   $('ctx-ta').value=manualCtxOnly;
-  $('drive-in').value=cur.drive_folder_id||'';
+  // CC-104 — Synchroniser le champ Drive caché avec la source Drive si elle existe
+  const srcs = getSources();
+  const driveSrc = srcs.find(s=>s.type==='drive');
+  $('drive-in').value = driveSrc ? (driveSrc.folder_id||'') : (cur.drive_folder_id||'');
   // CC-102 — Toujours ouvrir sur l'onglet Paramètres
   switchSettingsTab('params');
-  renderMList(); openModal('modal-settings');
+  renderMList();
+  // CC-104 — Migration automatique : si drive_folder_id et pas encore de source Drive
+  migrateDriveLegacy();
+  renderSources();
+  openModal('modal-settings');
 }
 
 function renderMList(){
@@ -1132,7 +1235,253 @@ function addMember(){
 
 function remMember(i){const ms=getMembers();ms.splice(i,1);cur.members=JSON.stringify(ms);renderMList();}
 
-// ── Modal tâche ──
+// ── CC-104 : Sources de contexte ──────────────────────────────────────────
+
+function getSources(){
+  try{ return JSON.parse(cur?.sources||'[]'); }catch{ return []; }
+}
+
+function setSources(arr){
+  cur.sources = JSON.stringify(arr);
+}
+
+// Migration automatique : drive_folder_id legacy → sources
+function migrateDriveLegacy(){
+  if(!cur.drive_folder_id) return;
+  const srcs = getSources();
+  if(srcs.find(s=>s.type==='drive')) return; // déjà migré
+  srcs.push({
+    type: 'drive',
+    name: 'Google Drive — ' + cur.name,
+    folder_id: cur.drive_folder_id,
+    status: 'ok',
+    last_synced_at: cur.context ? new Date().toISOString() : null,
+    content_length: cur.context ? (cur.context.match(/---\s*Contenu Drive[\s\S]*$/) || [''])[0].length : 0
+  });
+  setSources(srcs);
+}
+
+function estimateTokens(){
+  const srcs = getSources();
+  const manualCtx = ($('ctx-ta')||{value:''}).value||'';
+  let total = Math.round(manualCtx.length / 4);
+  srcs.forEach(s => { total += Math.round((s.content_length||0) / 4); });
+  if(total > 999) return '~' + (total/1000).toFixed(1) + 'k tokens';
+  return '~' + total + ' tokens';
+}
+
+function renderSources(){
+  const srcs = getSources();
+  const el = $('sources-list');
+  if(!srcs.length){
+    el.innerHTML = '<div class="src-empty">Aucune source connectée.</div>';
+    $('token-count').textContent = estimateTokens();
+    return;
+  }
+  const icons = {drive:'📁', file:'📄', notion:'🔷'};
+  el.innerHTML = srcs.map((s,i) => {
+    const icon = icons[s.type]||'📎';
+    const statusCls = s.status==='ok' ? 'ok' : s.status==='syncing' ? 'syncing' : 'err';
+    const statusLbl = s.status==='ok' ? '✓ Connecté' : s.status==='syncing' ? '⟳ Sync…' : '✗ Erreur';
+    const syncDate = s.last_synced_at
+      ? new Date(s.last_synced_at).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'})
+      : 'jamais';
+    return `<div class="src-item" id="src-item-${i}">
+      <div class="src-icon">${icon}</div>
+      <div class="src-info">
+        <div class="src-name">${s.name||s.type}</div>
+        <div class="src-meta">Dernière sync : ${syncDate}</div>
+      </div>
+      <span class="src-status ${statusCls}">${statusLbl}</span>
+      <div class="src-actions">
+        <button class="src-sync-btn" id="src-sync-${i}" onclick="syncSource(${i})" ${s.type==='notion'?'disabled':''}>Sync</button>
+        <button class="src-del-btn" onclick="removeSource(${i})" title="Supprimer cette source">×</button>
+      </div>
+    </div>`;
+  }).join('');
+  $('token-count').textContent = estimateTokens();
+}
+
+async function syncSource(idx){
+  const srcs = getSources();
+  const s = srcs[idx];
+  if(!s) return;
+
+  // UI : passer en état syncing
+  const syncBtn = $('src-sync-'+idx);
+  const item = $('src-item-'+idx);
+  if(syncBtn){ syncBtn.disabled = true; syncBtn.textContent = '…'; }
+  s.status = 'syncing';
+  srcs[idx] = s;
+  setSources(srcs);
+  renderSources();
+
+  try {
+    if(s.type === 'drive'){
+      const folderId = s.folder_id || $('drive-in').value.trim();
+      if(!folderId) throw new Error('Folder ID manquant');
+      // Appel Edge Function
+      const r = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({action:'read_drive_folder',folder_id:folderId})});
+      const d = await r.json();
+      if(d.error) throw new Error(d.error);
+      if(!d.files||!d.files.length) throw new Error('Aucun fichier lisible');
+
+      // Résumer les fichiers
+      const fileSummaries = [];
+      for(let i=0;i<d.files.length;i++){
+        const f = d.files[i];
+        try {
+          const sum = await callClaude(
+            "Extrais les infos clés de ce document en français, de façon factuelle et concise (max 200 mots). Retourne uniquement le résumé, sans titre.",
+            '['+f.filename+' — '+f.type.toUpperCase()+' — modifié le '+new Date(f.modifiedTime).toLocaleDateString('fr-FR')+']\n'+f.content.substring(0,6000)
+          );
+          fileSummaries.push('## '+f.filename+'\n'+sum);
+        } catch(e){ fileSummaries.push('## '+f.filename+'\n(Erreur de lecture)'); }
+      }
+
+      const driveBlock = '--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') — '+d.files.length+' fichier(s) ---\n'+fileSummaries.join('\n\n---\n\n');
+      s.content_length = driveBlock.length;
+      s.status = 'ok';
+      s.last_synced_at = new Date().toISOString();
+      s.folder_id = folderId;
+
+      // Mettre à jour le contexte : remplacer l'ancien bloc Drive
+      const manualCtx = ($('ctx-ta').value||'').replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
+      const newCtx = [manualCtx, driveBlock].filter(Boolean).join('\n\n');
+
+      // Sync Supabase
+      srcs[idx] = s;
+      setSources(srcs);
+      await sb.from('clients').update({context:newCtx, drive_folder_id:folderId, sources:cur.sources, members:cur.members}).eq('id',cur.id);
+      cur.context = newCtx; cur.drive_folder_id = folderId; addSession(cur);
+      addMsg('a','✓ Drive synchronisé — '+d.files.length+' fichier(s) mis à jour dans le contexte.');
+
+    } else if(s.type === 'file'){
+      // Fichier PDF déjà analysé à l'ajout, la re-sync n'a pas de sens sans nouveau fichier
+      // On indique juste que le contenu est déjà chargé
+      s.status = 'ok';
+      s.last_synced_at = new Date().toISOString();
+      srcs[idx] = s;
+      setSources(srcs);
+      await sb.from('clients').update({sources:cur.sources}).eq('id',cur.id);
+      addSession(cur);
+    } else {
+      throw new Error('Type de source non supporté : '+s.type);
+    }
+  } catch(e){
+    s.status = 'err';
+    srcs[idx] = s;
+    setSources(srcs);
+    await sb.from('clients').update({sources:cur.sources}).eq('id',cur.id).catch(()=>{});
+    addSession(cur);
+    console.error('syncSource error:', e.message);
+  }
+
+  renderSources();
+}
+
+async function removeSource(idx){
+  const srcs = getSources();
+  const s = srcs[idx];
+  if(!window.confirm('Supprimer la source "'+s.name+'" ?')) return;
+  srcs.splice(idx,1);
+  setSources(srcs);
+  // Si c'était la source Drive, vider le champ legacy
+  if(s.type==='drive'){
+    $('drive-in').value='';
+    // Retirer le bloc Drive du contexte
+    const manualCtx = ($('ctx-ta').value||'').replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
+    $('ctx-ta').value = manualCtx;
+    await sb.from('clients').update({sources:cur.sources, drive_folder_id:'', context:manualCtx}).eq('id',cur.id);
+    cur.drive_folder_id=''; cur.context=manualCtx;
+  } else {
+    await sb.from('clients').update({sources:cur.sources}).eq('id',cur.id);
+  }
+  addSession(cur);
+  renderSources();
+}
+
+// ── Sous-modal Ajout source ──
+
+function showAddSourceForm(type){
+  // Masquer tous les formulaires
+  ['drive','file','notion'].forEach(t => {
+    const f = $('add-src-form-'+t);
+    if(f) f.classList.remove('open');
+  });
+  const form = $('add-src-form-'+type);
+  if(form) form.classList.add('open');
+}
+
+async function confirmAddSource(type){
+  if(type === 'drive'){
+    const folderId = $('add-src-drive-id').value.trim();
+    const name = $('add-src-drive-name').value.trim() || ('Google Drive — '+cur.name);
+    if(!folderId){ alert('Entre un Folder ID Drive.'); return; }
+    const srcs = getSources();
+    // Vérifier doublons
+    if(srcs.find(s=>s.type==='drive'&&s.folder_id===folderId)){
+      alert('Ce dossier Drive est déjà connecté.'); return;
+    }
+    const newSrc = {type:'drive', name, folder_id:folderId, status:'ok', last_synced_at:null, content_length:0};
+    srcs.push(newSrc);
+    setSources(srcs);
+    // Mettre à jour le champ Drive caché pour saveSettings()
+    $('drive-in').value = folderId;
+    // Persist sources
+    await sb.from('clients').update({sources:cur.sources, drive_folder_id:folderId}).eq('id',cur.id);
+    addSession(cur);
+    closeModal('modal-add-source');
+    $('add-src-drive-id').value=''; $('add-src-drive-name').value='';
+    showAddSourceForm('');
+    renderSources();
+    // Lancer la sync immédiatement
+    const newIdx = getSources().length - 1;
+    syncSource(newIdx);
+
+  } else if(type === 'file'){
+    const fileInput = $('add-src-file-input');
+    const file = fileInput.files[0];
+    if(!file){ alert('Sélectionne un fichier PDF.'); return; }
+    if(file.size > 20*1024*1024){ alert('Fichier trop volumineux (max 20 Mo).'); return; }
+
+    const btn = document.querySelector('#add-src-form-file .btn:not(.btn-sec)');
+    if(btn){ btn.disabled=true; btn.textContent='Analyse en cours…'; }
+
+    const reader = new FileReader();
+    reader.onload = async e => {
+      const b64 = e.target.result.split(',')[1];
+      try {
+        const sum = await callClaude(
+          "Extrais les infos clés de ce document en français, de façon factuelle et concise (max 300 mots). Retourne uniquement le résumé, sans titre.",
+          'Analyse ce PDF.',
+          {data:b64, mediaType:'application/pdf', name:file.name}
+        );
+        const block = '--- Fichier : '+file.name+' ('+new Date().toLocaleDateString('fr')+') ---\n'+sum;
+        const manualCtx = ($('ctx-ta').value||'').trim();
+        const newCtx = [manualCtx, block].filter(Boolean).join('\n\n');
+        $('ctx-ta').value = newCtx;
+
+        const srcs = getSources();
+        srcs.push({type:'file', name:file.name, status:'ok', last_synced_at:new Date().toISOString(), content_length:block.length});
+        setSources(srcs);
+
+        await sb.from('clients').update({context:newCtx, sources:cur.sources}).eq('id',cur.id);
+        cur.context = newCtx; addSession(cur);
+
+        closeModal('modal-add-source');
+        fileInput.value='';
+        if(btn){ btn.disabled=false; btn.textContent='Uploader et analyser'; }
+        renderSources();
+        addMsg('a','✓ Fichier "'+file.name+'" analysé et ajouté au contexte.');
+      } catch(err){
+        if(btn){ btn.disabled=false; btn.textContent='Uploader et analyser'; }
+        alert('Erreur lors de l\'analyse : '+err.message);
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+}
 let modalTaskId = null;
 
 function parseNotes(noteStr) {
@@ -1293,60 +1642,38 @@ async function saveSettings(){
   let manualCtx = $('ctx-ta').value.trim();
   // Nettoyer l'éventuel ancien bloc Drive du textarea
   manualCtx = manualCtx.replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
+  // CC-104 — Synchroniser drive-in depuis la source Drive si elle existe
+  const srcs = getSources();
+  const driveSrc = srcs.find(s=>s.type==='drive');
+  const du = driveSrc ? (driveSrc.folder_id||'') : $('drive-in').value.trim();
+  if(du) $('drive-in').value = du;
+
   let driveBlock = '';
-  const du=$('drive-in').value.trim();
-  if(du){
-    $('drive-status').textContent='Lecture du dossier Drive en cours…';
-    show('drive-status');
-    try{
-      const r=await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({action:'read_drive_folder',folder_id:du})});
-      const d=await r.json();
-      if(d.error){
-        $('drive-status').textContent='Erreur Drive : '+d.error;
-        driveBlock='--- Drive : '+d.error+' ---';
-      } else if(d.files&&d.files.length>0){
-        $('drive-status').textContent=d.files.length+' fichier(s) lu(s), résumé en cours…';
-        // Résumer chaque fichier individuellement pour ne perdre aucune info
-        const fileSummaries = [];
-        for(let i=0; i<d.files.length; i++){
-          const f = d.files[i];
-          $('drive-status').textContent='Résumé '+(i+1)+'/'+d.files.length+' — '+f.filename+'…';
-          try {
-            const sum = await callClaude(
-              "Extrais les infos clés de ce document en français, de façon factuelle et concise (max 200 mots). Retourne uniquement le résumé, sans titre.",
-              '['+f.filename+' — '+f.type.toUpperCase()+' — modifié le '+new Date(f.modifiedTime).toLocaleDateString('fr-FR')+']\n'+f.content.substring(0,6000)
-            );
-            fileSummaries.push('## '+f.filename+'\n'+sum);
-          } catch(e) {
-            fileSummaries.push('## '+f.filename+'\n(Erreur de lecture)');
-          }
-        }
-        driveBlock='--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') — '+d.files.length+' fichier(s) ---\n'+fileSummaries.join('\n\n---\n\n');
-        $('drive-status').textContent='✓ '+d.files.length+' fichier(s) résumés dans le contexte';
-      } else {
-        $('drive-status').textContent='Aucun fichier lisible trouvé. '+(d.message||'');
-        driveBlock='--- Drive : '+(d.message||'Dossier vide.')+' ---';
-      }
-    }catch(e){
-      $('drive-status').textContent='Erreur : '+e.message;
-      driveBlock='--- Drive : erreur ('+e.message+') ---';
-    }
-    setTimeout(()=>hide('drive-status'), 4000);
-  }
+  // Conserver le bloc Drive existant dans le contexte si on ne re-sync pas maintenant
+  const existingDriveBlock = (cur.context||'').match(/\n*---\s*Contenu Drive[\s\S]*$/);
+  if(existingDriveBlock) driveBlock = existingDriveBlock[0].trim();
+
   // Reconstruire le contexte proprement : manuel + Drive séparés
   const ctx = [manualCtx, driveBlock].filter(Boolean).join('\n\n');
-  await sb.from('clients').update({context:ctx,drive_folder_id:du,members:cur.members}).eq('id',cur.id);
-  cur.context=ctx;cur.drive_folder_id=du;addSession(cur);
-  closeModal('modal-settings');renderFilters();
-  if(du){
-    addMsg('a','✓ Contexte Drive mis à jour — je prends en compte les nouveaux documents pour la suite de notre conversation.');
-  }
+  await sb.from('clients').update({context:ctx, drive_folder_id:du, members:cur.members, sources:cur.sources}).eq('id',cur.id);
+  cur.context=ctx; cur.drive_folder_id=du; addSession(cur);
+  closeModal('modal-settings'); renderFilters();
 }
 
 async function openModal(id){
   $(id).classList.add('open');
   // Fermer en cliquant sur le backdrop
   $(id).onclick = (e) => { if(e.target === $(id)) closeModal(id); };
+  // CC-104 — Réinitialiser le sous-modal add-source
+  if(id === 'modal-add-source') {
+    ['drive','file','notion'].forEach(t => {
+      const f = $('add-src-form-'+t);
+      if(f) f.classList.remove('open');
+    });
+    const di = $('add-src-drive-id'); if(di) di.value='';
+    const dn = $('add-src-drive-name'); if(dn) dn.value='';
+    const fi = $('add-src-file-input'); if(fi) fi.value='';
+  }
   // Charger la liste des clients si c'est la modal join-existing
   if(id === 'modal-new') {
     // Réinitialiser la liste membres
