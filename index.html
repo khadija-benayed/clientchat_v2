@@ -1668,9 +1668,9 @@ async function deleteClient(){
 }
 
 async function saveSettings(){
-  // Contexte manuel = uniquement ce que l'utilisateur a tapé (sans le bloc Drive)
+  // Contexte manuel = uniquement ce que l'utilisateur a tapé (sans blocs auto)
   let manualCtx = $('ctx-ta').value.trim();
-  // Nettoyer l'éventuel ancien bloc Drive du textarea
+  // Nettoyer l'éventuel ancien bloc Drive du textarea (ne doit jamais y être, sécurité)
   manualCtx = manualCtx.replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
   // CC-104 — Synchroniser drive-in depuis la source Drive si elle existe
   const srcs = getSources();
@@ -1678,13 +1678,21 @@ async function saveSettings(){
   const du = driveSrc ? (driveSrc.folder_id||'') : $('drive-in').value.trim();
   if(du) $('drive-in').value = du;
 
+  // Conserver le bloc Drive existant si pas de re-sync maintenant
   let driveBlock = '';
-  // Conserver le bloc Drive existant dans le contexte si on ne re-sync pas maintenant
   const existingDriveBlock = (cur.context||'').match(/\n*---\s*Contenu Drive[\s\S]*$/);
   if(existingDriveBlock) driveBlock = existingDriveBlock[0].trim();
 
-  // Reconstruire le contexte proprement : manuel + Drive séparés
-  const ctx = [manualCtx, driveBlock].filter(Boolean).join('\n\n');
+  // CC-106 fix — Conserver les blocs fichier existants (sinon saveSettings les écrase)
+  const fileBlocks = [];
+  const fileBlockPattern = /---\s*Fichier\s*:[\s\S]*?(?=\n---|$)/g;
+  let fm;
+  while((fm = fileBlockPattern.exec(cur.context||'')) !== null){
+    fileBlocks.push(fm[0].trim());
+  }
+
+  // Reconstruire le contexte : manuel + blocs fichier + Drive
+  const ctx = [manualCtx, ...fileBlocks, driveBlock].filter(Boolean).join('\n\n');
   await sb.from('clients').update({context:ctx, drive_folder_id:du, members:cur.members, sources:cur.sources}).eq('id',cur.id);
   cur.context=ctx; cur.drive_folder_id=du; addSession(cur);
   closeModal('modal-settings'); renderFilters();
