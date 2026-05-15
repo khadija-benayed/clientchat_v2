@@ -243,15 +243,47 @@ serve(async (req) => {
       return new Response(JSON.stringify({ files, sa_email: sa.client_email }), { status: 200, headers });
     }
 
-    // ── Appel Claude normal ────────────────────────────────────────────────
+    // ── Appel Claude normal (avec ou sans fichier joint) ──────────────────
+    const { file } = body; // { data: base64, mediaType: string, name: string } | undefined
+
+    // Construire le contenu du message utilisateur
+    let userContent: unknown;
+    let systemWithFile = system;
+
+    if (file && file.data && file.mediaType && file.name) {
+      // Valider le type MIME accepté
+      const allowedTypes = ["application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp"];
+      if (!allowedTypes.includes(file.mediaType)) {
+        return new Response(JSON.stringify({ error: `Type de fichier non supporté : ${file.mediaType}` }), { status: 400, headers });
+      }
+
+      // Addendum système pour l'analyse du fichier
+      systemWithFile = system
+        + "\n\nL'utilisateur t'a partagé un fichier. Extrais les informations clés : type de document, points importants, données chiffrées, actions suggérées.";
+
+      // Construire le bloc fichier selon le type
+      const fileBlock = file.mediaType === "application/pdf"
+        ? { type: "document", source: { type: "base64", media_type: file.mediaType, data: file.data } }
+        : { type: "image", source: { type: "base64", media_type: file.mediaType, data: file.data } };
+
+      // Contenu multimodal : fichier + texte utilisateur
+      userContent = [
+        fileBlock,
+        { type: "text", text: message || "Analyse ce fichier." },
+      ];
+    } else {
+      // Comportement identique à avant
+      userContent = message;
+    }
+
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
         max_tokens: 1200,
-        system,
-        messages: [{ role: "user", content: message }],
+        system: systemWithFile,
+        messages: [{ role: "user", content: userContent }],
       }),
     });
 

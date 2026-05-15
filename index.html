@@ -146,6 +146,15 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
 .note-add textarea:focus{border-color:var(--acc)}
 .note-add-btn{padding:8px 14px;background:var(--acc);color:white;border:none;border-radius:var(--rs);font-family:'DM Sans',sans-serif;font-size:13px;cursor:pointer;white-space:nowrap}
 .note-add-btn:hover{opacity:.9}
+/* CC-103 — Pièce jointe */
+.attach-btn{width:32px;height:32px;flex-shrink:0;border-radius:var(--rs);border:1px solid var(--brd2);background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--tx2);transition:all .15s;padding:0;font-size:16px}
+.attach-btn:hover{border-color:var(--acc);color:var(--acc);background:var(--gbg)}
+.attach-btn:disabled{opacity:.35;cursor:not-allowed;pointer-events:none}
+.file-badge{display:flex;align-items:center;gap:5px;padding:4px 10px;background:var(--bbg);border:1px solid rgba(26,79,138,.2);border-radius:20px;font-size:11px;color:var(--blue);font-family:'DM Mono',monospace;max-width:220px;margin-bottom:8px;animation:sin .2s ease}
+.file-badge-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px}
+.file-badge-rem{cursor:pointer;color:var(--blue);opacity:.6;font-size:14px;line-height:1;flex-shrink:0;padding:0 2px;background:none;border:none}
+.file-badge-rem:hover{opacity:1;color:var(--red)}
+.msg-file-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;background:var(--bbg);border:1px solid rgba(26,79,138,.18);border-radius:12px;font-size:10px;color:var(--blue);font-family:'DM Mono',monospace;margin-bottom:6px}
 /* CC-102 — badge sauvegarde session */
 .session-saved-badge{position:fixed;bottom:70px;left:50%;transform:translateX(-50%);background:var(--gbg);color:var(--green);border:1px solid var(--green);border-radius:20px;padding:5px 14px;font-size:11px;font-family:'DM Mono',monospace;z-index:50;pointer-events:none;transition:opacity .4s}
 /* CC-102 — onglets modal paramètres */
@@ -225,13 +234,16 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
         <div class="chat-panel">
           <div class="msgs" id="msgs"></div>
           <div class="chat-foot">
+            <input type="file" id="file-input" accept=".pdf,.jpg,.jpeg,.png" hidden onchange="onFileSelected(this)"/>
+            <div id="file-badge-wrap"></div>
             <div class="chat-row">
+              <button class="attach-btn" id="attach-btn" onclick="$('file-input').click()" title="Joindre un fichier (PDF, image)">📎</button>
               <textarea class="chat-ta" id="inp" rows="1" placeholder="Pose une question, dis ce que tu avances ou sur quoi tu es bloqué…" onkeydown="handleKey(event)" oninput="resize(this)"></textarea>
               <button class="send" onclick="send()">
                 <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8h12M9 3l5 5-5 5"/></svg>
               </button>
             </div>
-            <div class="hint">Entrée pour envoyer · Shift+Entrée pour saut de ligne</div>
+            <div class="hint">Entrée pour envoyer · Shift+Entrée pour saut de ligne · 📎 PDF ou image</div>
           </div>
         </div>
         <div class="todo-panel">
@@ -381,6 +393,38 @@ const EDGE_HEADERS = {'Content-Type': 'application/json', 'Authorization': 'Bear
 let sb = null;
 let cur = null, tasks = [], activeF = 'all', rtChan = null;
 let session = JSON.parse(localStorage.getItem('cc-sess') || '[]');
+// CC-103 — Pièce jointe
+let selectedFile = null; // {data: base64, mediaType, name}
+
+// CC-103 — Sélection fichier
+function onFileSelected(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const allowed = ['application/pdf','image/jpeg','image/png'];
+  if (!allowed.includes(file.type)) { alert('Format non supporté. PDF, JPG ou PNG uniquement.'); input.value=''; return; }
+  if (file.size > 20 * 1024 * 1024) { alert('Fichier trop volumineux (max 20 Mo).'); input.value=''; return; }
+  const reader = new FileReader();
+  reader.onload = e => {
+    const b64 = e.target.result.split(',')[1];
+    selectedFile = { data: b64, mediaType: file.type, name: file.name };
+    renderFileBadge();
+    $('attach-btn').disabled = true;
+  };
+  reader.readAsDataURL(file);
+  input.value = '';
+}
+
+function renderFileBadge() {
+  const wrap = $('file-badge-wrap');
+  if (!selectedFile) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = `<div class="file-badge"><span>📎</span><span class="file-badge-name">${selectedFile.name}</span><button class="file-badge-rem" onclick="clearFile()" title="Retirer le fichier">×</button></div>`;
+}
+
+function clearFile() {
+  selectedFile = null;
+  $('attach-btn').disabled = false;
+  renderFileBadge();
+}
 // CC-102 — Persistance des sessions
 let inactivityTimer = null;
 let sessionExchangeCount = 0;   // nb d'échanges user↔assistant dans la session courante
@@ -710,8 +754,10 @@ function addThinking(){
 function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}
 function resize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,120)+'px';}
 
-async function callClaude(system,message){
-  const r=await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({system,message})});
+async function callClaude(system,message,file=null){
+  const payload={system,message};
+  if(file) payload.file=file;
+  const r=await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify(payload)});
   const data=await r.json();
   if(data.error) throw new Error(data.error);
   return data.text;
@@ -725,7 +771,17 @@ async function send(){
   const inp=$('inp'), txt=inp.value.trim();
   if(!txt||!cur) return;
   inp.value=''; inp.style.height='auto';
-  addMsg('u',txt);
+  // CC-103 — Capturer et vider le fichier avant envoi
+  const fileToSend = selectedFile ? {...selectedFile} : null;
+  if(fileToSend){ clearFile(); }
+  // Affichage message utilisateur + badge fichier éventuel
+  const userMsgEl = addMsg('u', txt);
+  if(fileToSend){
+    const badge = document.createElement('div');
+    badge.className = 'msg-file-badge';
+    badge.textContent = '📎 ' + fileToSend.name;
+    userMsgEl.insertBefore(badge, userMsgEl.querySelector('.bubble'));
+  }
   // CC-102 — Compteur échanges + reset timer inactivité
   sessionExchangeCount++;
   resetInactivityTimer();
@@ -941,7 +997,7 @@ async function send(){
     +'Ambiguïté : {"updates":[],"new_tasks":[],"delete_ids":[],"clarification":true}';
 
   try {
-    const raw=await callClaude(sys,txt);
+    const raw=await callClaude(sys,txt,fileToSend);
     th.remove();
 
     const parts=raw.split('---JSON---');
