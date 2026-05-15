@@ -1537,23 +1537,17 @@ async function syncSource(idx){
       if(d.error) throw new Error(d.error);
       if(!d.files||!d.files.length) throw new Error('Aucun fichier lisible');
 
-      // Résumer les fichiers + collecter le contenu brut pour generate_brief (CC-107)
-      const fileSummaries = [];
-      const docsForBrief = []; // CC-107
-      for(let i=0;i<d.files.length;i++){
-        const f = d.files[i];
-        try {
-          const sum = await callClaude(
-            "Extrais les infos clés de ce document en français, de façon factuelle et concise (max 200 mots). Retourne uniquement le résumé, sans titre.",
-            '['+f.filename+' — '+f.type.toUpperCase()+' — modifié le '+new Date(f.modifiedTime).toLocaleDateString('fr-FR')+']\n'+f.content.substring(0,6000)
-          );
-          fileSummaries.push('## '+f.filename+'\n'+sum);
-        } catch(e){ fileSummaries.push('## '+f.filename+'\n(Erreur de lecture)'); }
-        // CC-107 — Toujours collecter le contenu brut même si le résumé échoue
-        docsForBrief.push({ filename: f.filename, content: f.content.substring(0, 6000) });
-      }
+      // CC-107 — Collecter le contenu brut pour generate_brief (1 seul appel Claude)
+      // Suppression de la boucle de résumé fichier-par-fichier : elle consommait N appels
+      // Claude en séquence et épuisait le rate limit avant même d'appeler generate_brief.
+      const docsForBrief = d.files.map(f => ({
+        filename: f.filename,
+        content: (f.content||'').substring(0, 6000)
+      }));
 
-      const driveBlock = '--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') — '+d.files.length+' fichier(s) ---\n'+fileSummaries.join('\n\n---\n\n');
+      // driveBlock = fallback texte si generate_brief échoue (liste de noms uniquement)
+      const driveBlock = '--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') — '+d.files.length+' fichier(s) ---\n'
+        + d.files.map(f => '## '+f.filename).join('\n');
       s.content_length = driveBlock.length;
       s.status = 'ok';
       s.last_synced_at = new Date().toISOString();
@@ -1563,16 +1557,19 @@ async function syncSource(idx){
       // On stocke la fiche JSON dans clients.context (remplace l'ancien bloc Drive brut)
       let briefGenerated = false;
       try {
+        if (!docsForBrief.length) throw new Error('docsForBrief vide — aucun fichier exportable (Docs/Sheets uniquement)');
         addMsg('a', '⏳ Génération de la fiche client en cours…');
         const brief = await generateBrief(docsForBrief);
         if (brief) {
           briefGenerated = true;
-          // generateBrief a déjà mis à jour cur.context + Supabase
           s.content_length = cur.context ? cur.context.length : driveBlock.length;
           addMsg('a', '✓ Drive synchronisé — '+d.files.length+' fichier(s) · Fiche client générée.');
+        } else {
+          throw new Error('generateBrief a retourné undefined sans erreur explicite');
         }
       } catch(briefErr) {
-        console.warn('generate_brief failed, fallback to raw Drive block:', briefErr.message);
+        console.error('generate_brief failed:', briefErr.message);
+        addMsg('a', '⚠ Drive synchronisé mais génération de la fiche échouée : '+briefErr.message+'. Réessaie via "Régénérer la fiche".');
       }
 
       // Fallback : si la fiche n'a pas pu être générée, stocker le bloc Drive brut comme avant
