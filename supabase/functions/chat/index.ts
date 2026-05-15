@@ -243,6 +243,97 @@ serve(async (req) => {
       return new Response(JSON.stringify({ files, sa_email: sa.client_email }), { status: 200, headers });
     }
 
+    // ── generate_brief ─────────────────────────────────────────────────────
+    // Entrée : { action: 'generate_brief', client_id: string, docs_content: {filename, content}[] }
+    // Sortie : { brief: { secteur, enjeux_principaux, kpis, equipe, historique, notes } }
+    if (action === "generate_brief") {
+      if (!client_id || !Array.isArray(body.docs_content) || body.docs_content.length === 0)
+        return new Response(JSON.stringify({ error: "client_id et docs_content (array non vide) requis" }), { status: 400, headers });
+
+      // Concaténer le contenu des docs en respectant un budget de ~8000 tokens (≈ 32 000 chars)
+      const TOKEN_BUDGET = 32_000;
+      let totalChars = 0;
+      const docBlocks: string[] = [];
+      for (const doc of body.docs_content as { filename: string; content: string }[]) {
+        const block = `### ${doc.filename}\n${doc.content}`;
+        if (totalChars + block.length > TOKEN_BUDGET) break;
+        docBlocks.push(block);
+        totalChars += block.length;
+      }
+      const docsText = docBlocks.join("\n\n---\n\n");
+
+      const briefPrompt =
+        "À partir de ces documents, génère une fiche client JSON avec exactement ces champs :\n" +
+        "- secteur (string)\n" +
+        "- enjeux_principaux (array de strings, max 5)\n" +
+        "- kpis (array de strings, max 5)\n" +
+        "- equipe (array de strings)\n" +
+        "- historique (string, 2-3 phrases)\n" +
+        "- notes (string)\n\n" +
+        "Réponds UNIQUEMENT avec le JSON valide, sans texte autour, sans markdown.\n\n" +
+        "Documents :\n\n" + docsText;
+
+      const briefRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 1000,
+          // Pas de system prompt : on veut UNIQUEMENT du JSON en sortie
+          messages: [{ role: "user", content: briefPrompt }],
+        }),
+      });
+
+      const briefData = await briefRes.json();
+      if (briefData.error)
+        return new Response(JSON.stringify({ error: briefData.error.message }), { status: 400, headers });
+
+      const rawText = briefData.content
+        ?.filter((c: { type: string }) => c.type === "text")
+        .map((c: { text: string }) => c.text)
+        .join("") || "";
+
+      // Parser avec nettoyage défensif des éventuelles balises markdown
+      const cleaned = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+      let brief: unknown;
+      try {
+        brief = JSON.parse(cleaned);
+      } catch (_) {
+        console.error("generate_brief: JSON invalide reçu de Claude :", rawText.substring(0, 200));
+        return new Response(
+          JSON.stringify({ error: "Génération échouée — Claude n'a pas retourné un JSON valide. Réessaie." }),
+          { status: 422, headers }
+        );
+      }
+
+      // Valider les 6 champs attendus (présence, pas les valeurs)
+      const expectedKeys = ["secteur", "enjeux_principaux", "kpis", "equipe", "historique", "notes"];
+      const missingKeys = expectedKeys.filter(k => !(k in (brief as Record<string, unknown>)));
+      if (missingKeys.length > 0) {
+        console.error("generate_brief: champs manquants :", missingKeys);
+        return new Response(
+          JSON.stringify({ error: `Génération incomplète — champs manquants : ${missingKeys.join(", ")}. Réessaie.` }),
+          { status: 422, headers }
+        );
+      }
+
+      // Sauvegarder la fiche dans clients.context si Supabase dispo
+      if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+        const sbAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+        const { error: updateError } = await sbAdmin
+          .from("clients")
+          .update({ context: JSON.stringify(brief) })
+          .eq("id", client_id);
+        if (updateError) {
+          console.error("generate_brief: update clients.context error:", updateError.message);
+          // On retourne quand même la fiche — le front peut faire son propre update
+          return new Response(JSON.stringify({ brief, saved: false, error: updateError.message }), { status: 200, headers });
+        }
+      }
+
+      return new Response(JSON.stringify({ brief, saved: true }), { status: 200, headers });
+    }
+
     // ── Appel Claude normal (avec ou sans fichier joint) ──────────────────
     const { file } = body; // { data: base64, mediaType: string, name: string } | undefined
 

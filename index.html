@@ -197,6 +197,23 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
 .token-bar-lbl{font-size:11px;color:var(--tx3)}
 .token-bar-val{font-size:11px;font-weight:500;font-family:'DM Mono',monospace;color:var(--tx2)}
 .src-empty{font-size:12px;color:var(--tx3);font-style:italic;padding:8px 2px}
+/* CC-107 — Fiche client générée */
+.brief-section{margin-top:20px;padding-top:16px;border-top:1px solid var(--brd)}
+.brief-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.brief-label{font-size:10px;font-weight:500;letter-spacing:.07em;color:var(--tx3);text-transform:uppercase}
+.brief-regen-btn{font-size:11px;padding:4px 10px;border:1px solid var(--brd2);border-radius:var(--rs);background:transparent;cursor:pointer;color:var(--tx2);font-family:'DM Sans',sans-serif}
+.brief-regen-btn:hover{border-color:var(--acc);color:var(--acc);background:var(--gbg)}
+.brief-regen-btn:disabled{opacity:.45;cursor:not-allowed}
+.brief-empty{font-size:12px;color:var(--tx3);font-style:italic;padding:4px 2px}
+.brief-fields{display:flex;flex-direction:column;gap:10px}
+.brief-field{background:var(--sur2);border:1px solid var(--brd);border-radius:var(--rs);padding:10px 12px}
+.brief-field-label{font-size:10px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--tx3);margin-bottom:5px}
+.brief-field-value{font-size:12px;color:var(--tx);line-height:1.55}
+.brief-field-value.tags{display:flex;flex-wrap:wrap;gap:5px}
+.brief-tag{padding:2px 8px;border-radius:20px;font-size:11px;font-family:'DM Mono',monospace;background:var(--bbg);color:var(--blue)}
+.brief-tag.green{background:var(--gbg);color:var(--green)}
+.brief-err{font-size:12px;color:var(--red);padding:8px 10px;background:var(--rbg);border-radius:var(--rs);margin-top:8px}
+
 /* CC-104 — sous-modal ajout source */
 .add-src-opts{display:flex;flex-direction:column;gap:8px;margin-bottom:4px}
 .add-src-opt{display:flex;align-items:center;gap:12px;padding:14px 16px;border:1px solid var(--brd2);border-radius:var(--r);cursor:pointer;background:var(--sur2);transition:all .15s}
@@ -326,6 +343,17 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
     </div>
     <button class="btn-add-member" style="margin-top:8px" onclick="openModal('modal-add-source')">+ Ajouter une source</button>
   </div>
+  <!-- CC-107 — Fiche client générée -->
+  <div class="brief-section" id="brief-section">
+    <div class="brief-header">
+      <span class="brief-label">Fiche client générée</span>
+      <button class="brief-regen-btn" id="brief-regen-btn" onclick="regenerateBrief()">↻ Régénérer la fiche</button>
+    </div>
+    <div id="brief-content">
+      <div class="brief-empty">Aucune fiche générée — synchronise d'abord une source Drive.</div>
+    </div>
+  </div>
+
   <!-- champ Drive caché — conservé pour rétrocompatibilité saveSettings() -->
   <input type="text" id="drive-in" class="hide" style="display:none"/>
   <div id="drive-status" class="hide" style="font-size:12px;color:var(--tx3);font-style:italic;margin-bottom:10px">Lecture en cours…</div>
@@ -1070,8 +1098,23 @@ async function send(){
     matchContext = 'AUCUNE CORRESPONDANCE — clarification=true, demande de préciser.';
   }
 
+    // CC-107 — Injecter le contexte : si c'est une fiche JSON, la formater lisiblement
+  const ctxForPrompt = (() => {
+    const brief = getBrief();
+    if (!brief) return cur.context || 'Non renseigné.';
+    const lines = [
+      brief.secteur ? `Secteur : ${brief.secteur}` : null,
+      brief.enjeux_principaux?.length ? `Enjeux : ${brief.enjeux_principaux.join(' | ')}` : null,
+      brief.kpis?.length ? `KPIs : ${brief.kpis.join(' | ')}` : null,
+      brief.equipe?.length ? `Équipe client : ${brief.equipe.join(', ')}` : null,
+      brief.historique ? `Historique : ${brief.historique}` : null,
+      brief.notes ? `Notes : ${brief.notes}` : null,
+    ].filter(Boolean);
+    return lines.join('\n');
+  })();
+
     const sys='Tu es l\'assistant projet de l\'équipe sur le client '+cur.name+'.\n'
-    +'Contexte client : '+(cur.context||'Non renseigné.')+'.\n'
+    +'Contexte client : '+ctxForPrompt+'.\n'
     +'Équipe : '+(mStr||'Non renseignée')+'.\n'
     +'TO-DO ACTUELLE : '+snap()+'\n'
     +'Membres valides (initiales et noms complets) : '+mFull+'. Utilise les initiales dans le JSON.\n'
@@ -1237,6 +1280,8 @@ async function openSettings(){
   // CC-104 — Migration automatique : si drive_folder_id et pas encore de source Drive
   await migrateDriveLegacy();
   renderSources();
+  // CC-107 — Afficher la fiche client si elle existe
+  renderBrief();
   openModal('modal-settings');
 }
 
@@ -1323,6 +1368,149 @@ function renderSources(){
   $('token-count').textContent = estimateTokens();
 }
 
+// ── CC-107 : Fiche client générée ─────────────────────────────────────────
+
+// Lire la fiche depuis cur.context (JSON structuré) ou retourner null
+function getBrief() {
+  if (!cur?.context) return null;
+  try {
+    const parsed = JSON.parse(cur.context);
+    const expectedKeys = ['secteur','enjeux_principaux','kpis','equipe','historique','notes'];
+    if (expectedKeys.every(k => k in parsed)) return parsed;
+  } catch (_) {}
+  return null;
+}
+
+// Afficher la fiche dans le modal (lecture seule)
+function renderBrief() {
+  const el = $('brief-content');
+  const regenBtn = $('brief-regen-btn');
+  const brief = getBrief();
+
+  // Bouton "Régénérer" : actif seulement si une source Drive est connectée
+  const srcs = getSources();
+  const hasDrive = srcs.some(s => s.type === 'drive' && s.folder_id);
+  regenBtn.disabled = !hasDrive;
+  regenBtn.title = hasDrive ? 'Régénérer la fiche depuis les sources Drive' : 'Connecte d\'abord une source Drive';
+
+  if (!brief) {
+    const noSrc = !hasDrive;
+    el.innerHTML = `<div class="brief-empty">${noSrc
+      ? 'Connecte d\'abord une source Drive pour générer la fiche.'
+      : 'Aucune fiche générée — clique sur Sync ou Régénérer la fiche.'
+    }</div>`;
+    return;
+  }
+
+  const arrayField = (arr, cls='') => {
+    if (!Array.isArray(arr) || !arr.length) return '<span style="color:var(--tx3);font-style:italic">—</span>';
+    return `<div class="brief-field-value tags">${arr.map(v => `<span class="brief-tag ${cls}">${esc(String(v))}</span>`).join('')}</div>`;
+  };
+  const textField = (val) => `<div class="brief-field-value">${esc(String(val||'—'))}</div>`;
+
+  el.innerHTML = `
+    <div class="brief-fields">
+      <div class="brief-field">
+        <div class="brief-field-label">Secteur</div>
+        ${textField(brief.secteur)}
+      </div>
+      <div class="brief-field">
+        <div class="brief-field-label">Enjeux principaux</div>
+        ${arrayField(brief.enjeux_principaux)}
+      </div>
+      <div class="brief-field">
+        <div class="brief-field-label">KPIs</div>
+        ${arrayField(brief.kpis, 'green')}
+      </div>
+      <div class="brief-field">
+        <div class="brief-field-label">Équipe client</div>
+        ${arrayField(brief.equipe)}
+      </div>
+      <div class="brief-field">
+        <div class="brief-field-label">Historique</div>
+        ${textField(brief.historique)}
+      </div>
+      <div class="brief-field">
+        <div class="brief-field-label">Notes</div>
+        ${textField(brief.notes)}
+      </div>
+    </div>`;
+}
+
+// Appeler generate_brief avec le contenu de toutes les sources Drive actives
+async function generateBrief(docsContent) {
+  if (!cur || !docsContent || !docsContent.length) return;
+
+  const r = await fetch(EDGE_URL, {
+    method: 'POST',
+    headers: EDGE_HEADERS,
+    body: JSON.stringify({ action: 'generate_brief', client_id: cur.id, docs_content: docsContent })
+  });
+  const data = await r.json();
+
+  if (data.error) {
+    // Afficher l'erreur dans le modal
+    const el = $('brief-content');
+    el.innerHTML += `<div class="brief-err">⚠ ${esc(data.error)}</div>`;
+    throw new Error(data.error);
+  }
+
+  // Mettre à jour cur + localStorage avec la fiche
+  cur.context = JSON.stringify(data.brief);
+  addSession(cur);
+  // Si Supabase n'a pas pu sauvegarder côté serveur, on le fait côté client
+  if (!data.saved) {
+    await sb.from('clients').update({ context: cur.context }).eq('id', cur.id).catch(e => console.warn('generateBrief client-side update:', e.message));
+  }
+
+  return data.brief;
+}
+
+// Bouton "Régénérer la fiche" dans les Paramètres
+async function regenerateBrief() {
+  const srcs = getSources();
+  const driveSrcs = srcs.filter(s => s.type === 'drive' && s.folder_id);
+  if (!driveSrcs.length) {
+    alert('Connecte d\'abord une source Drive.');
+    return;
+  }
+
+  const btn = $('brief-regen-btn');
+  btn.disabled = true;
+  btn.textContent = '…génération';
+  $('brief-content').innerHTML = '<div class="brief-empty">Génération en cours…</div>';
+
+  try {
+    // Récupérer les docs depuis le contexte existant (déjà synchro)
+    // On extrait le bloc Drive du contexte si présent, sinon on force une re-sync
+    const docsContent = extractDocsFromContext();
+    if (!docsContent.length) {
+      // Pas de contenu en cache → lancer la sync Drive puis générer
+      await syncSource(srcs.indexOf(driveSrcs[0]));
+      // syncSource appelle generateBrief en interne, donc c'est bon
+    } else {
+      await generateBrief(docsContent);
+      renderBrief();
+    }
+  } catch (e) {
+    console.error('regenerateBrief:', e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '↻ Régénérer la fiche';
+  }
+}
+
+// Extraire les docs depuis le contexte actuel (fallback pour Régénérer sans re-sync)
+function extractDocsFromContext() {
+  const ctx = cur?.context || '';
+  // Si c'est une fiche JSON, il n'y a plus de blocs texte à extraire
+  try { JSON.parse(ctx); return []; } catch(_) {}
+  // Sinon, chercher les blocs Drive existants et les repackager
+  const driveMatch = ctx.match(/---\s*Contenu Drive[\s\S]*$/);
+  if (!driveMatch) return [];
+  return [{ filename: 'Contexte Drive', content: driveMatch[0].substring(0, 32000) }];
+}
+
 async function syncSource(idx){
   const srcs = getSources();
   const s = srcs[idx];
@@ -1346,8 +1534,9 @@ async function syncSource(idx){
       if(d.error) throw new Error(d.error);
       if(!d.files||!d.files.length) throw new Error('Aucun fichier lisible');
 
-      // Résumer les fichiers
+      // Résumer les fichiers + collecter le contenu brut pour generate_brief (CC-107)
       const fileSummaries = [];
+      const docsForBrief = []; // CC-107
       for(let i=0;i<d.files.length;i++){
         const f = d.files[i];
         try {
@@ -1357,6 +1546,8 @@ async function syncSource(idx){
           );
           fileSummaries.push('## '+f.filename+'\n'+sum);
         } catch(e){ fileSummaries.push('## '+f.filename+'\n(Erreur de lecture)'); }
+        // CC-107 — Toujours collecter le contenu brut même si le résumé échoue
+        docsForBrief.push({ filename: f.filename, content: f.content.substring(0, 6000) });
       }
 
       const driveBlock = '--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') — '+d.files.length+' fichier(s) ---\n'+fileSummaries.join('\n\n---\n\n');
@@ -1365,16 +1556,41 @@ async function syncSource(idx){
       s.last_synced_at = new Date().toISOString();
       s.folder_id = folderId;
 
-      // Mettre à jour le contexte : remplacer l'ancien bloc Drive
-      const manualCtx = ($('ctx-ta').value||'').replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
-      const newCtx = [manualCtx, driveBlock].filter(Boolean).join('\n\n');
+      // CC-107 — Générer la fiche client structurée à partir des docs
+      // On stocke la fiche JSON dans clients.context (remplace l'ancien bloc Drive brut)
+      let briefGenerated = false;
+      try {
+        addMsg('a', '⏳ Génération de la fiche client en cours…');
+        const brief = await generateBrief(docsForBrief);
+        if (brief) {
+          briefGenerated = true;
+          // generateBrief a déjà mis à jour cur.context + Supabase
+          s.content_length = cur.context ? cur.context.length : driveBlock.length;
+          addMsg('a', '✓ Drive synchronisé — '+d.files.length+' fichier(s) · Fiche client générée.');
+        }
+      } catch(briefErr) {
+        console.warn('generate_brief failed, fallback to raw Drive block:', briefErr.message);
+      }
 
-      // Sync Supabase
+      // Fallback : si la fiche n'a pas pu être générée, stocker le bloc Drive brut comme avant
+      if (!briefGenerated) {
+        const manualCtx = ($('ctx-ta').value||'').replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
+        const newCtx = [manualCtx, driveBlock].filter(Boolean).join('\n\n');
+        srcs[idx] = s;
+        setSources(srcs);
+        await sb.from('clients').update({context:newCtx, drive_folder_id:folderId, sources:cur.sources, members:cur.members}).eq('id',cur.id);
+        cur.context = newCtx; cur.drive_folder_id = folderId; addSession(cur);
+        addMsg('a','✓ Drive synchronisé — '+d.files.length+' fichier(s) mis à jour dans le contexte.');
+      }
+
+      // Mettre à jour les métadonnées de la source
       srcs[idx] = s;
       setSources(srcs);
-      await sb.from('clients').update({context:newCtx, drive_folder_id:folderId, sources:cur.sources, members:cur.members}).eq('id',cur.id);
-      cur.context = newCtx; cur.drive_folder_id = folderId; addSession(cur);
-      addMsg('a','✓ Drive synchronisé — '+d.files.length+' fichier(s) mis à jour dans le contexte.');
+      await sb.from('clients').update({drive_folder_id:folderId, sources:cur.sources, members:cur.members}).eq('id',cur.id);
+      cur.drive_folder_id = folderId; addSession(cur);
+
+      // CC-107 — Rafraîchir la fiche dans le modal si ouvert
+      if ($('modal-settings').classList.contains('open')) renderBrief();
 
     } else if(s.type === 'file'){
       // Fichier PDF déjà analysé à l'ajout, la re-sync n'a pas de sens sans nouveau fichier
