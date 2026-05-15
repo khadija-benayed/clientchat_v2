@@ -213,6 +213,8 @@ serve(async (req) => {
         url.searchParams.set("q", `'${fId}' in parents and trashed = false`);
         url.searchParams.set("fields", "files(id,name,mimeType,modifiedTime)");
         url.searchParams.set("pageSize", "50");
+        url.searchParams.set("supportsAllDrives", "true");
+        url.searchParams.set("includeItemsFromAllDrives", "true");
         const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
         if (!res.ok) return [];
         const data = await res.json();
