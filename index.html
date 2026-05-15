@@ -513,7 +513,7 @@ function onFileSelected(input) {
 function renderFileBadge() {
   const wrap = $('file-badge-wrap');
   if (!selectedFile) { wrap.innerHTML = ''; return; }
-  wrap.innerHTML = `<div class="file-badge"><span>📎</span><span class="file-badge-name">${selectedFile.name}</span><button class="file-badge-rem" onclick="clearFile()" title="Retirer le fichier">×</button></div>`;
+  wrap.innerHTML = `<div class="file-badge"><span>📎</span><span class="file-badge-name">${esc(selectedFile.name)}</span><button class="file-badge-rem" onclick="clearFile()" title="Retirer le fichier">×</button></div>`;
 }
 
 function clearFile() {
@@ -532,6 +532,8 @@ function show(id){ $(id).classList.remove('hide'); }
 function hide(id){ $(id).classList.add('hide'); }
 function closeModal(id){ $(id).classList.remove('open'); }
 function setSyncDot(color, txt){ $('sdot').style.background=color; $('slbl').textContent=txt; }
+// CC-106 — Échappement HTML anti-XSS stockée
+function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function mStyle(ini){ const i=((ini||'?').charCodeAt(0)+((ini||'?').charCodeAt(1)||0))%MC.length; return MC[i]; }
 function getMembers(){ try{ return JSON.parse(cur?.members||'[]'); }catch{ return []; } }
 
@@ -1201,10 +1203,10 @@ function renderTodo(hi=[]){
       const assigneeList=(t.assignee||'').split(/[,+\s]+/).map(a=>a.trim()).filter(Boolean);
       const avatars=assigneeList.length>0?assigneeList.map(a=>{const ms=mStyle(a);return '<div class="av" style="background:'+ms.bg+';color:'+ms.c+'">'+a.substring(0,2)+'</div>';}).join(''):'<div class="av" style="background:var(--sur2);color:var(--tx3)">?</div>';
       const assigneeLabel=assigneeList.join(' + ')||'—';
-      html+='<div class="task'+(hi.includes(t.id)?' new':'')+' task-clickable" onclick="openTaskModal('+t.id+')" style="cursor:pointer"><div class="t1"><span class="prio '+(t.prio||'P2').toLowerCase()+'">'+(t.prio||'P2')+'</span><span class="ttl">'+t.title+'</span></div>';
-      if(t.blocker)html+='<div class="textra blk">Blocage : '+t.blocker+'</div>';
-      if(t.note)html+='<div class="textra note" style="white-space:pre-wrap">'+t.note+'</div>';
-      html+='<div class="t2"><div class="tperson">'+avatars+'<span>'+assigneeLabel+'</span></div><span class="spill '+sc+'">'+sl+'</span></div></div>';
+      html+='<div class="task'+(hi.includes(t.id)?' new':'')+' task-clickable" onclick="openTaskModal('+t.id+')" style="cursor:pointer"><div class="t1"><span class="prio '+(t.prio||'P2').toLowerCase()+'">'+(t.prio||'P2')+'</span><span class="ttl">'+esc(t.title)+'</span></div>';
+      if(t.blocker)html+='<div class="textra blk">Blocage : '+esc(t.blocker)+'</div>';
+      if(t.note)html+='<div class="textra note" style="white-space:pre-wrap">'+esc(t.note)+'</div>';
+      html+='<div class="t2"><div class="tperson">'+avatars+'<span>'+esc(assigneeLabel)+'</span></div><span class="spill '+sc+'">'+sl+'</span></div></div>';
     });
     html+='</div>';
   });
@@ -1583,8 +1585,8 @@ function renderNotesInModal(noteStr) {
   el.innerHTML = notes.map((n, i) =>
     '<div class="note-entry">'
     + '<button class="note-del" onclick="deleteNoteFromModal('+i+')" title="Supprimer cette note">×</button>'
-    + (n.date ? '<div class="note-entry-date">'+n.date+'</div>' : '')
-    + '<div class="note-entry-text">'+n.text+'</div>'
+    + (n.date ? '<div class="note-entry-date">'+esc(n.date)+'</div>' : '')
+    + '<div class="note-entry-text">'+esc(n.text)+'</div>'
     + '</div>'
   ).join('');
   el.scrollTop = el.scrollHeight;
