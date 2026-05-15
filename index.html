@@ -1323,7 +1323,7 @@ async function migrateDriveLegacy(){
     folder_id: cur.drive_folder_id,
     status: 'ok',
     last_synced_at: cur.context ? new Date().toISOString() : null,
-    content_length: cur.context ? (cur.context.match(/---\s*Contenu Drive[\s\S]*$/) || [''])[0].length : 0
+    content_length: cur.context ? cur.context.length : 0  // CC-107 : fonctionne que context soit JSON ou texte
   });
   setSources(srcs);
   // Persister en Supabase pour ne plus repasser par la migration au prochain openSettings
@@ -1333,7 +1333,9 @@ async function migrateDriveLegacy(){
 function estimateTokens(){
   const srcs = getSources();
   const manualCtx = ($('ctx-ta')||{value:''}).value||'';
-  let total = Math.round(manualCtx.length / 4);
+  // CC-107 — si une fiche JSON est active, compter sa taille réelle
+  const briefLen = getBrief() ? (cur?.context||'').length : 0;
+  let total = Math.round((manualCtx.length + briefLen) / 4);
   srcs.forEach(s => { total += Math.round((s.content_length||0) / 4); });
   if(total > 999) return '~' + (total/1000).toFixed(1) + 'k tokens';
   return '~' + total + ' tokens';

@@ -251,7 +251,7 @@ serve(async (req) => {
         return new Response(JSON.stringify({ error: "client_id et docs_content (array non vide) requis" }), { status: 400, headers });
 
       // Concaténer le contenu des docs en respectant un budget de ~8000 tokens (≈ 32 000 chars)
-      const TOKEN_BUDGET = 32_000;
+      const TOKEN_BUDGET = 96_000; // ~24k tokens — suffisant pour 15-20 docs, dans la fenêtre Sonnet 4.6 (200k)
       let totalChars = 0;
       const docBlocks: string[] = [];
       for (const doc of body.docs_content as { filename: string; content: string }[]) {
