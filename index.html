@@ -1053,7 +1053,9 @@ function renderTodo(hi=[]){
 function openSettings(){
   if(!cur)return;
   $('stitle').textContent='Paramètres — '+cur.name;
-  $('ctx-ta').value=cur.context||'';
+  // Afficher uniquement le contexte manuel (sans le bloc Drive auto-généré)
+  const manualCtxOnly = (cur.context||'').replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
+  $('ctx-ta').value=manualCtxOnly;
   $('drive-in').value=cur.drive_folder_id||'';
   // CC-102 — Toujours ouvrir sur l'onglet Paramètres
   switchSettingsTab('params');
@@ -1231,10 +1233,12 @@ async function deleteClient(){
 }
 
 async function saveSettings(){
-  let ctx=$('ctx-ta').value.trim();
+  // Contexte manuel = uniquement ce que l'utilisateur a tapé (sans le bloc Drive)
+  let manualCtx = $('ctx-ta').value.trim();
+  // Nettoyer l'éventuel ancien bloc Drive du textarea
+  manualCtx = manualCtx.replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
+  let driveBlock = '';
   const du=$('drive-in').value.trim();
-  // CC-103 — Toujours relire le Drive si un folder_id est renseigné
-  // (pas seulement quand il change — les docs peuvent avoir été mis à jour)
   if(du){
     $('drive-status').textContent='Lecture du dossier Drive en cours…';
     show('drive-status');
@@ -1243,7 +1247,7 @@ async function saveSettings(){
       const d=await r.json();
       if(d.error){
         $('drive-status').textContent='Erreur Drive : '+d.error;
-        ctx=(ctx?ctx+'\n\n':'')+'--- Drive : '+d.error+' ---';
+        driveBlock='--- Drive : '+d.error+' ---';
       } else if(d.files&&d.files.length>0){
         $('drive-status').textContent=d.files.length+' fichier(s) lu(s), résumé en cours…';
         const driveContent = d.files.map((f) =>
@@ -1253,24 +1257,23 @@ async function saveSettings(){
           "Extrais les infos clés de ces documents et résume-les de façon structurée en français (max 800 mots). Retourne uniquement le résumé.",
           'Contenu du dossier Drive :\n\n'+driveContent.substring(0,8000)
         );
-        // Remplacer l'ancien contenu Drive plutôt qu'accumuler
-        ctx = ctx.replace(/\n*--- Contenu Drive \(.*?\n[\s\S]*?(?=\n---|$)/g, '').trim();
-        ctx=(ctx?ctx+'\n\n':'')+('--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') — '+d.files.length+' fichier(s) ---\n')+summary;
+        driveBlock='--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') — '+d.files.length+' fichier(s) ---\n'+summary;
         $('drive-status').textContent='✓ '+d.files.length+' fichier(s) intégré(s) dans le contexte';
       } else {
-        $('drive-status').textContent='Aucun fichier lisible trouvé. '+( d.message||'');
-        ctx=(ctx?ctx+'\n\n':'')+'--- Drive : '+(d.message||'Dossier vide.')+' ---';
+        $('drive-status').textContent='Aucun fichier lisible trouvé. '+(d.message||'');
+        driveBlock='--- Drive : '+(d.message||'Dossier vide.')+' ---';
       }
     }catch(e){
       $('drive-status').textContent='Erreur : '+e.message;
-      ctx=(ctx?ctx+'\n\n':'')+'--- Drive : erreur ('+e.message+') ---';
+      driveBlock='--- Drive : erreur ('+e.message+') ---';
     }
     setTimeout(()=>hide('drive-status'), 4000);
   }
+  // Reconstruire le contexte proprement : manuel + Drive séparés
+  const ctx = [manualCtx, driveBlock].filter(Boolean).join('\n\n');
   await sb.from('clients').update({context:ctx,drive_folder_id:du,members:cur.members}).eq('id',cur.id);
   cur.context=ctx;cur.drive_folder_id=du;addSession(cur);
   closeModal('modal-settings');renderFilters();
-  // CC-103 — Informer dans le chat que le contexte Drive a été mis à jour
   if(du){
     addMsg('a','✓ Contexte Drive mis à jour — je prends en compte les nouveaux documents pour la suite de notre conversation.');
   }
