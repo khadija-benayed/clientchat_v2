@@ -1202,7 +1202,7 @@ function renderTodo(hi=[]){
   el.innerHTML=html||'<div style="padding:20px;text-align:center;color:var(--tx3);font-size:13px">Aucune tâche</div>';
 }
 
-function openSettings(){
+async function openSettings(){
   if(!cur)return;
   $('stitle').textContent='Paramètres — '+cur.name;
   // Afficher uniquement le contexte manuel (sans le bloc Drive auto-généré)
@@ -1216,7 +1216,7 @@ function openSettings(){
   switchSettingsTab('params');
   renderMList();
   // CC-104 — Migration automatique : si drive_folder_id et pas encore de source Drive
-  migrateDriveLegacy();
+  await migrateDriveLegacy();
   renderSources();
   openModal('modal-settings');
 }
@@ -1246,7 +1246,7 @@ function setSources(arr){
 }
 
 // Migration automatique : drive_folder_id legacy → sources
-function migrateDriveLegacy(){
+async function migrateDriveLegacy(){
   if(!cur.drive_folder_id) return;
   const srcs = getSources();
   if(srcs.find(s=>s.type==='drive')) return; // déjà migré
@@ -1259,6 +1259,8 @@ function migrateDriveLegacy(){
     content_length: cur.context ? (cur.context.match(/---\s*Contenu Drive[\s\S]*$/) || [''])[0].length : 0
   });
   setSources(srcs);
+  // Persister en Supabase pour ne plus repasser par la migration au prochain openSettings
+  await sb.from('clients').update({sources:cur.sources}).eq('id',cur.id).catch(e=>console.warn('migrateDriveLegacy persist:', e.message));
 }
 
 function estimateTokens(){
@@ -1309,7 +1311,6 @@ async function syncSource(idx){
 
   // UI : passer en état syncing
   const syncBtn = $('src-sync-'+idx);
-  const item = $('src-item-'+idx);
   if(syncBtn){ syncBtn.disabled = true; syncBtn.textContent = '…'; }
   s.status = 'syncing';
   srcs[idx] = s;
@@ -1383,20 +1384,34 @@ async function syncSource(idx){
 async function removeSource(idx){
   const srcs = getSources();
   const s = srcs[idx];
+  if(!s) return; // guard: idx stale (ex. double-clic)
   if(!window.confirm('Supprimer la source "'+s.name+'" ?')) return;
   srcs.splice(idx,1);
   setSources(srcs);
-  // Si c'était la source Drive, vider le champ legacy
+
   if(s.type==='drive'){
+    // Vider le champ Drive legacy + retirer le bloc Drive du contexte
     $('drive-in').value='';
-    // Retirer le bloc Drive du contexte
-    const manualCtx = ($('ctx-ta').value||'').replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
+    const manualCtx = (cur.context||'').replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
     $('ctx-ta').value = manualCtx;
     await sb.from('clients').update({sources:cur.sources, drive_folder_id:'', context:manualCtx}).eq('id',cur.id);
     cur.drive_folder_id=''; cur.context=manualCtx;
+
+  } else if(s.type==='file'){
+    // Retirer le bloc fichier du contexte
+    const escapedName = s.name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    const filePattern = new RegExp('\\n*---\\s*Fichier\\s*:\\s*' + escapedName + '[\\s\\S]*?(?=\\n---\\s*(?:Fichier|Contenu Drive)|$)');
+    const newCtx = (cur.context||'').replace(filePattern,'').trim();
+    // Dans le textarea n afficher que le contexte manuel (sans blocs auto)
+    const manualOnly = newCtx.replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
+    $('ctx-ta').value = manualOnly;
+    await sb.from('clients').update({sources:cur.sources, context:newCtx}).eq('id',cur.id);
+    cur.context = newCtx;
+
   } else {
     await sb.from('clients').update({sources:cur.sources}).eq('id',cur.id);
   }
+
   addSession(cur);
   renderSources();
 }
@@ -1425,6 +1440,8 @@ async function confirmAddSource(type){
     }
     const newSrc = {type:'drive', name, folder_id:folderId, status:'ok', last_synced_at:null, content_length:0};
     srcs.push(newSrc);
+    // Capturer l'index AVANT tout await ou setSources pour éviter les décalages
+    const newIdx = srcs.length - 1;
     setSources(srcs);
     // Mettre à jour le champ Drive caché pour saveSettings()
     $('drive-in').value = folderId;
@@ -1435,8 +1452,7 @@ async function confirmAddSource(type){
     $('add-src-drive-id').value=''; $('add-src-drive-name').value='';
     showAddSourceForm('');
     renderSources();
-    // Lancer la sync immédiatement
-    const newIdx = getSources().length - 1;
+    // Lancer la sync immédiatement avec l'index capturé
     syncSource(newIdx);
 
   } else if(type === 'file'){
@@ -1458,9 +1474,12 @@ async function confirmAddSource(type){
           {data:b64, mediaType:'application/pdf', name:file.name}
         );
         const block = '--- Fichier : '+file.name+' ('+new Date().toLocaleDateString('fr')+') ---\n'+sum;
-        const manualCtx = ($('ctx-ta').value||'').trim();
-        const newCtx = [manualCtx, block].filter(Boolean).join('\n\n');
-        $('ctx-ta').value = newCtx;
+        // Construire newCtx depuis cur.context (source de vérité), pas depuis ctx-ta
+        // pour éviter les doublons si on ajoute plusieurs PDFs dans la même session
+        const manualCtxOnly = ($('ctx-ta').value||'').trim(); // contexte manuel tapé par l'user
+        const existingAutoBlocks = (cur.context||'').replace(/^[\s\S]*?(?=\n*---|$)/,''); // blocs auto existants
+        const newCtx = [manualCtxOnly, existingAutoBlocks, block].filter(Boolean).join('\n\n');
+        // NE PAS écrire dans ctx-ta : c'est un bloc auto, pas du contexte manuel
 
         const srcs = getSources();
         srcs.push({type:'file', name:file.name, status:'ok', last_synced_at:new Date().toISOString(), content_length:block.length});
