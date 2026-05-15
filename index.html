@@ -547,9 +547,17 @@ function addMemberRow(containerId, ini='', name='') {
   const container = document.getElementById(containerId);
   const row = document.createElement('div');
   row.className = 'member-row';
-  row.innerHTML = '<input type="text" placeholder="KB" maxlength="5" value="'+ini+'" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()"/>'
-    + '<input type="text" placeholder="Prénom Nom (ex: Khadija Ben Ayed)" value="'+name+'"/>'
-    + '<button class="btn-rem-member" type="button" onclick="this.parentElement.remove()" title="Supprimer">×</button>';
+  // CC-XSS — createElement + .value pour éviter l'injection via attribut value=""
+  const inpIni = document.createElement('input');
+  inpIni.type='text'; inpIni.placeholder='KB'; inpIni.maxLength=5;
+  inpIni.style.textTransform='uppercase'; inpIni.value=ini;
+  inpIni.addEventListener('input', function(){ this.value=this.value.toUpperCase(); });
+  const inpName = document.createElement('input');
+  inpName.type='text'; inpName.placeholder='Prénom Nom (ex: Khadija Ben Ayed)'; inpName.value=name;
+  const btn = document.createElement('button');
+  btn.className='btn-rem-member'; btn.type='button'; btn.title='Supprimer'; btn.textContent='×';
+  btn.addEventListener('click', function(){ this.parentElement.remove(); });
+  row.appendChild(inpIni); row.appendChild(inpName); row.appendChild(btn);
   container.appendChild(row);
   // Focus sur le premier champ vide
   const firstInput = row.querySelector('input');
@@ -826,7 +834,7 @@ async function loadHistoryPanel(){
   }
   $('hist-list').innerHTML = [...summaries].reverse().map(s => {
     const d = new Date(s.created_at).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
-    return `<div class="hist-entry"><div class="hist-date">${d}</div><div class="hist-text">${s.summary_text}</div></div>`;
+    return `<div class="hist-entry"><div class="hist-date">${d}</div><div class="hist-text">${esc(s.summary_text)}</div></div>`;
   }).join('');
 }
 
