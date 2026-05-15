@@ -1231,30 +1231,41 @@ async function deleteClient(){
 }
 
 async function saveSettings(){
-  let ctx=$('ctx-ta').value;
+  let ctx=$('ctx-ta').value.trim();
   const du=$('drive-in').value.trim();
-  if(du&&du!==cur.drive_folder_id){
+  // CC-103 — Toujours relire le Drive si un folder_id est renseigné
+  // (pas seulement quand il change — les docs peuvent avoir été mis à jour)
+  if(du){
+    $('drive-status').textContent='Lecture du dossier Drive en cours…';
     show('drive-status');
     try{
       const r=await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({action:'read_drive_folder',folder_id:du})});
       const d=await r.json();
       if(d.error){
+        $('drive-status').textContent='Erreur Drive : '+d.error;
         ctx=(ctx?ctx+'\n\n':'')+'--- Drive : '+d.error+' ---';
       } else if(d.files&&d.files.length>0){
-        // Résumer chaque fichier et l'injecter dans le contexte
+        $('drive-status').textContent=d.files.length+' fichier(s) lu(s), résumé en cours…';
         const driveContent = d.files.map((f) =>
           `[${f.filename} — ${f.type.toUpperCase()} — modifié le ${new Date(f.modifiedTime).toLocaleDateString('fr-FR')}]\n${f.content}`
         ).join('\n\n---\n\n');
         const summary=await callClaude(
           "Extrais les infos clés de ces documents et résume-les de façon structurée en français (max 800 mots). Retourne uniquement le résumé.",
-          'Contenu du dossier Drive :\n\n'+driveContent.substring(0,6000)
+          'Contenu du dossier Drive :\n\n'+driveContent.substring(0,8000)
         );
+        // Remplacer l'ancien contenu Drive plutôt qu'accumuler
+        ctx = ctx.replace(/\n*--- Contenu Drive \(.*?\n[\s\S]*?(?=\n---|$)/g, '').trim();
         ctx=(ctx?ctx+'\n\n':'')+('--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') — '+d.files.length+' fichier(s) ---\n')+summary;
+        $('drive-status').textContent='✓ '+d.files.length+' fichier(s) intégré(s) dans le contexte';
       } else {
-        ctx=(ctx?ctx+'\n\n':'')+'--- Drive : '+(d.message||'Dossier vide ou inaccessible.')+' ---';
+        $('drive-status').textContent='Aucun fichier lisible trouvé. '+( d.message||'');
+        ctx=(ctx?ctx+'\n\n':'')+'--- Drive : '+(d.message||'Dossier vide.')+' ---';
       }
-    }catch(e){ctx=(ctx?ctx+'\n\n':'')+'--- Drive : erreur ('+e.message+') ---';}
-    hide('drive-status');
+    }catch(e){
+      $('drive-status').textContent='Erreur : '+e.message;
+      ctx=(ctx?ctx+'\n\n':'')+'--- Drive : erreur ('+e.message+') ---';
+    }
+    setTimeout(()=>hide('drive-status'), 4000);
   }
   await sb.from('clients').update({context:ctx,drive_folder_id:du,members:cur.members}).eq('id',cur.id);
   cur.context=ctx;cur.drive_folder_id=du;addSession(cur);

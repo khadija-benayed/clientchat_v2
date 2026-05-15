@@ -203,34 +203,39 @@ serve(async (req) => {
         return new Response(JSON.stringify({ error: `Auth Google échouée : ${(e as Error).message}` }), { status: 500, headers });
       }
 
-      // Lister les fichiers du dossier
-      const listUrl = new URL("https://www.googleapis.com/drive/v3/files");
-      listUrl.searchParams.set("q", `'${folderId}' in parents and trashed = false`);
-      listUrl.searchParams.set("fields", "files(id,name,mimeType,modifiedTime)");
-      listUrl.searchParams.set("pageSize", "20");
-      listUrl.searchParams.set("orderBy", "modifiedTime desc");
-
-      const listRes = await fetch(listUrl.toString(), { headers: { Authorization: `Bearer ${token}` } });
-      const listData = await listRes.json();
-
-      if (!listRes.ok) {
-        const msg = (listRes.status === 403 || listRes.status === 404)
-          ? `Dossier inaccessible. Partage ce dossier Drive avec : ${sa.client_email} (accès Lecteur).`
-          : `Drive API error ${listRes.status}: ${JSON.stringify(listData)}`;
-        return new Response(JSON.stringify({ error: msg, files: [] }), { status: 200, headers });
+      // Lister récursivement TOUS les fichiers sans limite de profondeur
+      // Protection anti-boucle infinie : visiter chaque dossier une seule fois
+      const visitedFolders = new Set<string>();
+      async function listFilesInFolder(fId: string): Promise<DriveFile[]> {
+        if (visitedFolders.has(fId)) return [];
+        visitedFolders.add(fId);
+        const url = new URL("https://www.googleapis.com/drive/v3/files");
+        url.searchParams.set("q", `'${fId}' in parents and trashed = false`);
+        url.searchParams.set("fields", "files(id,name,mimeType,modifiedTime)");
+        url.searchParams.set("pageSize", "50");
+        const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
+        if (!res.ok) return [];
+        const data = await res.json();
+        const items: DriveFile[] = data.files || [];
+        const files = items.filter(f => f.mimeType !== "application/vnd.google-apps.folder");
+        const subFolders = items.filter(f => f.mimeType === "application/vnd.google-apps.folder");
+        const subFiles = await Promise.all(subFolders.map(sf => listFilesInFolder(sf.id)));
+        return [...files, ...subFiles.flat()];
       }
 
-      const driveFiles: DriveFile[] = listData.files || [];
+      const allFiles = await listFilesInFolder(folderId);
 
-      if (driveFiles.length === 0) {
+      if (!allFiles.length) {
         return new Response(
-          JSON.stringify({ files: [], message: `Dossier vide ou non partagé avec ${sa.client_email}.` }),
+          JSON.stringify({ files: [], message: `Aucun fichier trouvé. Vérifie que le dossier est partagé avec ${sa.client_email}.` }),
           { status: 200, headers }
         );
       }
 
-      // Exporter le contenu de chaque fichier en parallèle
-      const results = await Promise.all(driveFiles.slice(0, 20).map((f) => exportDriveFile(f, token)));
+      // Trier par date de modification décroissante, prendre les 20 plus récents
+      allFiles.sort((a, b) => new Date(b.modifiedTime).getTime() - new Date(a.modifiedTime).getTime());
+
+      const results = await Promise.all(allFiles.slice(0, 20).map((f) => exportDriveFile(f, token)));
       const files: DriveFileResult[] = results.filter((r): r is DriveFileResult => r !== null);
 
       return new Response(JSON.stringify({ files, sa_email: sa.client_email }), { status: 200, headers });
