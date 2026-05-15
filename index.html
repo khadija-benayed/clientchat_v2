@@ -1242,7 +1242,7 @@ async function saveSettings(){
         ctx=(ctx?ctx+'\n\n':'')+'--- Drive : '+d.error+' ---';
       } else if(d.files&&d.files.length>0){
         // Résumer chaque fichier et l'injecter dans le contexte
-        const driveContent = d.files.map((f: {filename:string,type:string,content:string,modifiedTime:string}) =>
+        const driveContent = d.files.map((f) =>
           `[${f.filename} — ${f.type.toUpperCase()} — modifié le ${new Date(f.modifiedTime).toLocaleDateString('fr-FR')}]\n${f.content}`
         ).join('\n\n---\n\n');
         const summary=await callClaude(
