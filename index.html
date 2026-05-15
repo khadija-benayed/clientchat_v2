@@ -1267,8 +1267,11 @@ function renderTodo(hi=[]){
 async function openSettings(){
   if(!cur)return;
   $('stitle').textContent='Paramètres — '+cur.name;
-  // Afficher uniquement le contexte manuel (sans le bloc Drive auto-généré)
-  const manualCtxOnly = (cur.context||'').replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
+  // CC-107 — Si context est une fiche JSON, ctx-ta reste vide (la fiche est gérée séparément)
+  // Sinon, afficher uniquement le contexte manuel (sans le bloc Drive auto-généré)
+  const manualCtxOnly = getBrief()
+    ? ''  // fiche JSON → rien dans le textarea
+    : (cur.context||'').replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
   $('ctx-ta').value=manualCtxOnly;
   // CC-104 — Synchroniser le champ Drive caché avec la source Drive si elle existe
   const srcs = getSources();
@@ -1625,12 +1628,21 @@ async function removeSource(idx){
   setSources(srcs);
 
   if(s.type==='drive'){
-    // Vider le champ Drive legacy + retirer le bloc Drive du contexte
+    // CC-107 — Supprimer la source Drive invalide la fiche (générée depuis Drive)
+    // On remet context à vide (ou on conserve uniquement le contexte manuel du textarea)
     $('drive-in').value='';
-    const manualCtx = (cur.context||'').replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
+    let manualCtx;
+    if (getBrief()) {
+      // La fiche venait du Drive → la vider, récupérer ce qu'il y avait dans ctx-ta
+      manualCtx = $('ctx-ta').value.trim();
+    } else {
+      manualCtx = (cur.context||'').replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
+    }
     $('ctx-ta').value = manualCtx;
     await sb.from('clients').update({sources:cur.sources, drive_folder_id:'', context:manualCtx}).eq('id',cur.id);
     cur.drive_folder_id=''; cur.context=manualCtx;
+    // Rafraîchir la fiche (sera vide maintenant)
+    renderBrief();
 
   } else if(s.type==='file'){
     // Retirer le bloc fichier du contexte
@@ -1892,6 +1904,10 @@ async function deleteClient(){
 }
 
 async function saveSettings(){
+  // CC-107 — Si une fiche JSON est active, saveSettings ne touche pas à context
+  // (la fiche est gérée exclusivement par generate_brief / syncSource)
+  const hasBrief = !!getBrief();
+
   // Contexte manuel = uniquement ce que l'utilisateur a tapé (sans blocs auto)
   let manualCtx = $('ctx-ta').value.trim();
   // Nettoyer l'éventuel ancien bloc Drive du textarea (ne doit jamais y être, sécurité)
@@ -1902,6 +1918,16 @@ async function saveSettings(){
   const du = driveSrc ? (driveSrc.folder_id||'') : $('drive-in').value.trim();
   if(du) $('drive-in').value = du;
 
+  if (hasBrief) {
+    // Fiche active : sauvegarder uniquement membres + sources + drive_folder_id
+    // Ne pas toucher à context (contiendrait sinon le textarea vide ou du JSON brut)
+    await sb.from('clients').update({drive_folder_id:du, members:cur.members, sources:cur.sources}).eq('id',cur.id);
+    cur.drive_folder_id=du; addSession(cur);
+    closeModal('modal-settings'); renderFilters();
+    return;
+  }
+
+  // Pas de fiche : comportement original — reconstruire context depuis les blocs texte
   // Conserver le bloc Drive existant si pas de re-sync maintenant
   let driveBlock = '';
   const existingDriveBlock = (cur.context||'').match(/\n*---\s*Contenu Drive[\s\S]*$/);
