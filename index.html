@@ -1270,6 +1270,10 @@ async function saveSettings(){
   await sb.from('clients').update({context:ctx,drive_folder_id:du,members:cur.members}).eq('id',cur.id);
   cur.context=ctx;cur.drive_folder_id=du;addSession(cur);
   closeModal('modal-settings');renderFilters();
+  // CC-103 — Informer dans le chat que le contexte Drive a été mis à jour
+  if(du){
+    addMsg('a','✓ Contexte Drive mis à jour — je prends en compte les nouveaux documents pour la suite de notre conversation.');
+  }
 }
 
 async function openModal(id){
