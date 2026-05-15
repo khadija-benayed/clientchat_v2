@@ -866,6 +866,10 @@ function snap(){
 async function send(){
   const inp=$('inp'), txt=inp.value.trim();
   if(!txt||!cur) return;
+  // CC-105 — Verrou anti double-envoi
+  const sendBtn = document.querySelector('.send');
+  sendBtn.disabled = true;
+  inp.disabled = true;
   inp.value=''; inp.style.height='auto';
   // CC-103 — Capturer et vider le fichier avant envoi
   const fileToSend = selectedFile ? {...selectedFile} : null;
@@ -1155,6 +1159,11 @@ async function send(){
   }catch(e){
     if($('msgs').querySelector('.thinking')) th.remove();
     addMsg('a','Erreur : '+e.message);
+  } finally {
+    // CC-105 — Réactiver le bouton et la textarea dans tous les cas
+    sendBtn.disabled = false;
+    inp.disabled = false;
+    inp.focus();
   }
   // CC-102 — Sauvegarde intelligente : au 5e échange, puis tous les 10
   // On lance en arrière-plan sans bloquer l'UI
