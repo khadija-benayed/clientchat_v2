@@ -267,9 +267,9 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
   </div>
   <label>Contexte client</label>
   <textarea id="ctx-ta" style="min-height:110px;font-family:'DM Mono',monospace;font-size:12px;margin-bottom:4px" placeholder="Infos clés : secteur, stack, interlocuteurs, enjeux…"></textarea>
-  <label>Lien Google Drive (Sheet ou Doc partagé publiquement)</label>
-  <input type="text" id="drive-in" placeholder="https://docs.google.com/…"/>
-  <div class="note-txt">Le fichier doit être partagé en "Tout le monde avec le lien peut voir".</div>
+  <label>Google Drive — Dossier client</label>
+  <input type="text" id="drive-in" placeholder="Ex : 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"/>
+  <div class="note-txt">L'ID se trouve dans l'URL du dossier Drive : drive.google.com/drive/folders/<strong>[ID ICI]</strong>. Partage ce dossier avec l'email de la Service Account.</div>
   <div id="drive-status" class="hide" style="font-size:12px;color:var(--tx3);font-style:italic;margin-bottom:10px">Lecture en cours…</div>
   <div style="margin-top:24px;padding-top:16px;border-top:1px solid var(--brd)">
     <button class="btn" style="width:auto;background:var(--rbg);color:var(--red);border:1px solid var(--red)" onclick="deleteClient()">Supprimer ce client</button>
@@ -1054,7 +1054,7 @@ function openSettings(){
   if(!cur)return;
   $('stitle').textContent='Paramètres — '+cur.name;
   $('ctx-ta').value=cur.context||'';
-  $('drive-in').value=cur.drive_url||'';
+  $('drive-in').value=cur.drive_folder_id||'';
   // CC-102 — Toujours ouvrir sur l'onglet Paramètres
   switchSettingsTab('params');
   renderMList(); openModal('modal-settings');
@@ -1233,22 +1233,31 @@ async function deleteClient(){
 async function saveSettings(){
   let ctx=$('ctx-ta').value;
   const du=$('drive-in').value.trim();
-  if(du&&du!==cur.drive_url){
+  if(du&&du!==cur.drive_folder_id){
     show('drive-status');
     try{
-      const r=await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({action:'read_drive',message:du,system:''})});
+      const r=await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({action:'read_drive_folder',folder_id:du})});
       const d=await r.json();
-      if(d.text&&d.text.length>50){
-        const summary=await callClaude("Extrais les infos clés de ce document et résume-les de façon structurée en français (max 600 mots). Retourne uniquement le résumé.",'Contenu :\n\n'+d.text.substring(0,3000));
-        ctx=(ctx?ctx+'\n\n':'')+('--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') ---\n')+summary;
+      if(d.error){
+        ctx=(ctx?ctx+'\n\n':'')+'--- Drive : '+d.error+' ---';
+      } else if(d.files&&d.files.length>0){
+        // Résumer chaque fichier et l'injecter dans le contexte
+        const driveContent = d.files.map((f: {filename:string,type:string,content:string,modifiedTime:string}) =>
+          `[${f.filename} — ${f.type.toUpperCase()} — modifié le ${new Date(f.modifiedTime).toLocaleDateString('fr-FR')}]\n${f.content}`
+        ).join('\n\n---\n\n');
+        const summary=await callClaude(
+          "Extrais les infos clés de ces documents et résume-les de façon structurée en français (max 800 mots). Retourne uniquement le résumé.",
+          'Contenu du dossier Drive :\n\n'+driveContent.substring(0,6000)
+        );
+        ctx=(ctx?ctx+'\n\n':'')+('--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') — '+d.files.length+' fichier(s) ---\n')+summary;
       } else {
-        ctx=(ctx?ctx+'\n\n':'')+'--- Drive : fichier illisible. Assure-toi que le partage est "Tout le monde avec le lien peut voir" et utilise Fichier > Partager > Publier sur le web > CSV pour les Sheets. ---';
+        ctx=(ctx?ctx+'\n\n':'')+'--- Drive : '+(d.message||'Dossier vide ou inaccessible.')+' ---';
       }
     }catch(e){ctx=(ctx?ctx+'\n\n':'')+'--- Drive : erreur ('+e.message+') ---';}
     hide('drive-status');
   }
-  await sb.from('clients').update({context:ctx,drive_url:du,members:cur.members}).eq('id',cur.id);
-  cur.context=ctx;cur.drive_url=du;addSession(cur);
+  await sb.from('clients').update({context:ctx,drive_folder_id:du,members:cur.members}).eq('id',cur.id);
+  cur.context=ctx;cur.drive_folder_id=du;addSession(cur);
   closeModal('modal-settings');renderFilters();
 }
 
