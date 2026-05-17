@@ -124,6 +124,92 @@ async function exportDriveFile(file: DriveFile, token: string): Promise<DriveFil
   }
 }
 
+// ── Chunking ───────────────────────────────────────────────────────────────
+
+/**
+ * Découpe un texte brut en chunks avec overlap.
+ * maxChars = 2000 chars ≈ 500 tokens — bon compromis précision / coût pour voyage-3.
+ * overlap = 200 chars pour éviter de perdre le contexte aux jonctions.
+ */
+function chunkText(text: string, maxChars = 2000, overlap = 200): string[] {
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    const end = Math.min(start + maxChars, text.length);
+    chunks.push(text.slice(start, end));
+    if (end === text.length) break;
+    start += maxChars - overlap;
+  }
+  return chunks;
+}
+
+/**
+ * Découpe un CSV/Sheet par blocs de lignes entières.
+ * Le header est répété dans chaque chunk pour préserver le contexte colonnes.
+ * Évite de couper une ligne de tableau en plein milieu (problème du chunkText naïf sur CSV).
+ */
+function chunkCSV(text: string, linesPerChunk = 50): string[] {
+  const lines = text.split("\n");
+  if (lines.length <= 1) return lines[0] ? [lines[0]] : [];
+  const header = lines[0];
+  const chunks: string[] = [];
+  for (let i = 1; i < lines.length; i += linesPerChunk) {
+    const block = lines.slice(i, i + linesPerChunk).filter(l => l.trim() !== "");
+    if (block.length === 0) continue;
+    chunks.push(header + "\n" + block.join("\n"));
+  }
+  return chunks;
+}
+
+// ── Embeddings Voyage AI ───────────────────────────────────────────────────
+
+/**
+ * Vectorise un tableau de chunks via Voyage AI (voyage-3, 1024 dims).
+ * Batchée par 128 inputs max (limite API Voyage AI).
+ * Retourne les embeddings dans le même ordre que les chunks en entrée.
+ */
+async function embedChunks(chunks: string[], voyageKey: string): Promise<number[][]> {
+  const BATCH_SIZE = 128;
+  const batches: string[][] = [];
+  for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+    batches.push(chunks.slice(i, i + BATCH_SIZE));
+  }
+
+  const allEmbeddings: number[][] = [];
+  for (const batch of batches) {
+    const res = await fetch("https://api.voyageai.com/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${voyageKey}`,
+      },
+      body: JSON.stringify({
+        model: "voyage-3", // 1024 dims — validé CC-202b
+        input: batch,
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Voyage AI HTTP ${res.status}: ${errText}`);
+    }
+
+    const data = await res.json();
+    if (!data.data || !Array.isArray(data.data)) {
+      throw new Error(`Voyage AI réponse invalide: ${JSON.stringify(data)}`);
+    }
+
+    // L'API Voyage retourne les embeddings avec un champ `index` — trier pour garantir l'ordre
+    const sorted = (data.data as { index: number; embedding: number[] }[])
+      .sort((a, b) => a.index - b.index)
+      .map(d => d.embedding);
+
+    allEmbeddings.push(...sorted);
+  }
+
+  return allEmbeddings;
+}
+
 // ── Serve ──────────────────────────────────────────────────────────────────
 
 serve(async (req) => {
@@ -332,6 +418,119 @@ serve(async (req) => {
       }
 
       return new Response(JSON.stringify({ brief, saved: true }), { status: 200, headers });
+    }
+
+    // ── index_source ───────────────────────────────────────────────────────
+    // Entrée : { action: 'index_source', client_id, source_type, source_name, content }
+    // Sortie : { chunks_created: number }
+    if (action === "index_source") {
+      // ── 0. Valider les secrets et les paramètres requis ──────────────────
+      const VOYAGE_KEY = Deno.env.get("VOYAGE_API_KEY");
+      if (!VOYAGE_KEY) {
+        return new Response(
+          JSON.stringify({ error: "VOYAGE_API_KEY non configurée dans les secrets Supabase." }),
+          { status: 500, headers }
+        );
+      }
+      if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+        return new Response(
+          JSON.stringify({ error: "Variables Supabase manquantes (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)." }),
+          { status: 500, headers }
+        );
+      }
+
+      const { source_type, source_name, content } = body;
+      if (!source_name || !source_type || !content) {
+        return new Response(
+          JSON.stringify({ error: "Paramètres requis : source_type, source_name, content." }),
+          { status: 400, headers }
+        );
+      }
+      if (typeof content !== "string" || content.trim().length === 0) {
+        return new Response(
+          JSON.stringify({ error: "content est vide ou invalide." }),
+          { status: 400, headers }
+        );
+      }
+
+      const sbAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+      // ── 1. Découper selon le type de source ─────────────────────────────
+      const isCSV = source_type === "sheet" || (source_name as string).endsWith(".csv");
+      const chunks = isCSV ? chunkCSV(content) : chunkText(content);
+
+      if (chunks.length === 0) {
+        return new Response(
+          JSON.stringify({ error: "Aucun chunk généré — contenu trop court ou vide." }),
+          { status: 400, headers }
+        );
+      }
+
+      // ── 2. Supprimer les anciens chunks de cette source ──────────────────
+      const { error: deleteError } = await sbAdmin
+        .from("document_chunks")
+        .delete()
+        .match({ client_id: client_id || null, source_name });
+
+      if (deleteError) {
+        console.error("index_source: delete anciens chunks error:", deleteError.message);
+        // Non bloquant — on continue : l'insert va créer les nouveaux chunks
+      }
+
+      // ── 3. Vectoriser avec Voyage AI ─────────────────────────────────────
+      let embeddings: number[][];
+      try {
+        embeddings = await embedChunks(chunks, VOYAGE_KEY);
+      } catch (e) {
+        console.error("index_source: embedChunks error:", (e as Error).message);
+        return new Response(
+          JSON.stringify({ error: `Voyage AI: ${(e as Error).message}` }),
+          { status: 502, headers }
+        );
+      }
+
+      if (embeddings.length !== chunks.length) {
+        return new Response(
+          JSON.stringify({ error: `Incohérence : ${chunks.length} chunks mais ${embeddings.length} embeddings reçus.` }),
+          { status: 500, headers }
+        );
+      }
+
+      // ── 4. Insérer dans document_chunks ──────────────────────────────────
+      const rows = chunks.map((chunk, i) => ({
+        client_id: client_id || null, // null possible pour fiches entreprise Phase 3
+        source_type,
+        source_name,
+        chunk_text: chunk,
+        embedding: embeddings[i],
+      }));
+
+      const { error: insertError } = await sbAdmin.from("document_chunks").insert(rows);
+      if (insertError) {
+        console.error("index_source: insert document_chunks error:", insertError.message);
+        return new Response(
+          JSON.stringify({ error: `Erreur insertion chunks : ${insertError.message}` }),
+          { status: 500, headers }
+        );
+      }
+
+      // ── 5. Logger dans embedding_logs (CC-207) ───────────────────────────
+      const tokensEstimated = chunks.reduce((acc, c) => acc + Math.ceil(c.length / 4), 0);
+      const { error: logError } = await sbAdmin.from("embedding_logs").insert({
+        client_id: client_id || null,
+        source_name,
+        chunks_count: chunks.length,
+        tokens_estimated: tokensEstimated,
+      });
+      if (logError) {
+        // Non bloquant — le log est informatif, l'indexation est déjà faite
+        console.error("index_source: insert embedding_logs error:", logError.message);
+      }
+
+      return new Response(
+        JSON.stringify({ chunks_created: chunks.length }),
+        { status: 200, headers }
+      );
     }
 
     // ── Appel Claude normal (avec ou sans fichier joint) ──────────────────
