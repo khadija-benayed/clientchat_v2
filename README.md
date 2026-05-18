@@ -23,11 +23,11 @@ Supabase (Postgres + Realtime + pgvector)
 | Frontend     | HTML/CSS/JS vanilla                 | Netlify (gratuit)  |
 | Backend      | Supabase Edge Function (Deno)       | Supabase (gratuit) |
 | Base données | Supabase Postgres + Realtime        | Supabase (gratuit) |
-| Vectoriel    | pgvector (embeddings OpenAI)        | Supabase (gratuit) |
+| Vectoriel    | pgvector (embeddings VoyageIA)        | Supabase (gratuit) |
 | IA chat      | Claude claude-sonnet-4-6 (Anthropic)| API externe        |
-| Embeddings   | text-embedding-3-small (OpenAI)     | API externe        |
+| Embeddings   | text-embedding-3-small (VoyageAI)     | API externe        |
 
-**100 % gratuit** sur les tiers actuels (hors coûts API Anthropic/OpenAI).
+**100 % gratuit** sur les tiers actuels (hors coûts API Anthropic).
 
 ---
 
