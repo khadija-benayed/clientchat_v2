@@ -722,7 +722,16 @@ const EDGE_URL = SB_URL + '/functions/v1/chat';
 const EDGE_HEADERS = {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SB_KEY};
 let sb = null;
 let cur = null, tasks = [], activeF = 'all', rtChan = null;
+
+// CC-212 — Helper Edge Function
 let session = JSON.parse(localStorage.getItem('cc-sess') || '[]');
+
+// CC-212 — Helper Edge Function
+async function callEdge(payload){
+  const r = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify(payload)});
+  if(!r.ok) throw new Error('Edge HTTP '+r.status);
+  return r.json();
+}
 // CC-103 — Pièce jointe
 let selectedFile = null; // {data: base64, mediaType, name}
 
@@ -1083,6 +1092,39 @@ async function checkDriveUpdates(clientObj) {
   }
 }
 
+// CC-212 — Doc cache : 10 fichiers Drive récents en mémoire
+async function loadDocCache(clientObj){
+  try {
+    const raw = clientObj.sources; const srcs = Array.isArray(raw) ? raw : JSON.parse(raw||'[]');
+    const driveSrc = srcs.filter(s => s.type==='drive' && s.folder_id);
+    if(!driveSrc.length){ clientObj._docCache = []; return; }
+
+    const meta = await callEdge({action:'list_drive_metadata', folder_id:driveSrc[0].folder_id});
+    const top10 = (meta.files||[])
+      .sort((a,b) => new Date(b.modifiedTime) - new Date(a.modifiedTime))
+      .slice(0,10);
+    if(!top10.length){ clientObj._docCache = []; return; }
+
+    // Promise.allSettled : si un export échoue, les autres continuent
+    const results = await Promise.allSettled(
+      top10.map(f => callEdge({action:'export_single_file', file_id:f.id, file_name:f.name, mime_type:f.mimeType}))
+    );
+
+    clientObj._docCache = top10
+      .map((f,i) => ({
+        filename: f.name,
+        modifiedTime: f.modifiedTime,
+        content: results[i].status==='fulfilled' ? (results[i].value?.content||'') : ''
+      }))
+      .filter(d => d.content.trim());
+
+    console.log('[CC-212] Doc cache : '+clientObj._docCache.length+'/'+top10.length+' fichiers chargés');
+  } catch(e){
+    console.warn('[CC-212] loadDocCache error (non bloquant):', e.message);
+    clientObj._docCache = [];
+  }
+}
+
 async function selectClient(c){
   // CC-102 — Sauvegarder la session courante avant de switcher
   if(cur && cur.id !== c.id && !sessionSaved && sessionExchangeCount >= 3) {
@@ -1111,6 +1153,8 @@ async function selectClient(c){
   addMsg('a','Bonjour ! Je suis au courant du projet '+cur.name+(mStr?' — équipe : '+mStr:'')+'. Pose tes questions ou dis-moi ce que tu avances.');
   // CC-209 — Vérifier les mises à jour Drive en arrière-plan (non bloquant)
   checkDriveUpdates(cur);
+  // CC-212 — Charger le doc cache en arrière-plan (non bloquant)
+  loadDocCache(cur);
 }
 
 async function loadTasks(){
@@ -1234,7 +1278,7 @@ function buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr }) {
     +'Ambiguïté : {"updates":[],"new_tasks":[],"delete_ids":[],"clarification":true}';
 }
 
-// buildL2 : fiche client + 3 résumés récents.
+// buildL2 : fiche client + 3 résumés récents + doc cache CC-212.
 // Appelé quand la question porte sur le contexte client ou qu'on ne sait pas.
 function buildL2(ctxForPrompt) {
   const summaries = cur?._summaries || [];
@@ -1246,6 +1290,24 @@ function buildL2(ctxForPrompt) {
       return '— Session du '+d+' :\n'+s.summary_text;
     });
     block += '\n\n[Sessions récentes — 3 dernières]\n' + lines.join('\n\n');
+  }
+  // CC-212 — Injecter le doc cache (10 fichiers Drive récents, full text)
+  // ~80k chars max (~20k tokens) pour ne pas saturer la fenêtre de contexte
+  if(cur?._docCache?.length){
+    const MAX_CHARS = 80000;
+    let cacheBlock = '\n\n[Documents Drive récents]\n';
+    let total = 0;
+    for(const doc of cur._docCache){
+      const chunk = doc.content.slice(0,8000); // max 8k chars par doc
+      if(total + chunk.length > MAX_CHARS) break;
+      const d = new Date(doc.modifiedTime).toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'2-digit'});
+      cacheBlock += '\n--- '+doc.filename+' (modifié le '+d+') ---\n'+chunk+'\n';
+      total += chunk.length;
+    }
+    if(total > 0){
+      block += cacheBlock;
+      console.debug('[CC-212] Doc cache injecté : '+total+' chars (~'+Math.round(total/4)+' tokens)');
+    }
   }
   return block;
 }
