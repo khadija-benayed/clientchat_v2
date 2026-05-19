@@ -1814,12 +1814,12 @@ async function confirmAddSource(type){
     reader.onload = async e => {
       const b64 = e.target.result.split(',')[1];
       try {
-        const sum = await callClaude(
+        const result = await callClaude(
           "Extrais les infos clés de ce document en français, de façon factuelle et concise (max 300 mots). Retourne uniquement le résumé, sans titre.",
           'Analyse ce PDF.',
           {data:b64, mediaType:'application/pdf', name:file.name}
         );
-        const block = '--- Fichier : '+file.name+' ('+new Date().toLocaleDateString('fr')+') ---\n'+sum;
+        const block = '--- Fichier : '+file.name+' ('+new Date().toLocaleDateString('fr')+') ---\n'+result.text;
         // Construire newCtx depuis cur.context (source de vérité), pas depuis ctx-ta
         // pour éviter les doublons si on ajoute plusieurs PDFs dans la même session
         const manualCtxOnly = ($('ctx-ta').value||'').trim(); // contexte manuel tapé par l'user
