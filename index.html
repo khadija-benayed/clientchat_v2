@@ -7,9 +7,49 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#F4F2EE;--sur:#FFF;--sur2:#F9F8F5;--brd:rgba(0,0,0,.08);--brd2:rgba(0,0,0,.14);--tx:#1C1B18;--tx2:#6B6860;--tx3:#A09E97;--green:#2D6A4F;--gbg:#EAF4EE;--blue:#1A4F8A;--bbg:#EAF0FA;--amb:#7A4B0F;--abg:#FDF0DC;--red:#8B2020;--rbg:#FAEAEA;--pur:#5B21B6;--pbg:#EDE9FE;--acc:#2D6A4F;--r:10px;--rs:6px}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--tx);font-size:14px;min-height:100vh}
+:root {
+  /* La palette Smart Bees extraite de ton site */
+  --sb-navy: #193644;
+  --sb-orange: #F89B1C;
+  --sb-coral: #FF6772;
+  --sb-blue-lt: #C2E2F5;
+  --sb-blue-md: #00779B;
+
+  /* Application à l'interface */
+  --bg: #F8F9FA;
+  --sur: #FFFFFF;
+  --sur2: #F0F4F7;
+  --brd: rgba(25, 54, 68, 0.08);
+  --brd2: rgba(25, 54, 68, 0.15);
+  --tx: var(--sb-navy);
+  --tx2: #526B77;
+  --tx3: #8B9FA8;
+  
+  /* Couleurs sémantiques adaptées */
+  --acc: var(--sb-orange);
+  --green: #219653;
+  --gbg: #E3F5E9;
+  --blue: var(--sb-blue-md);
+  --bbg: var(--sb-blue-lt);
+  --amb: var(--sb-orange);
+  --abg: #FFF3E0;
+  --red: var(--sb-coral);
+  --rbg: #FFEBEB;
+  
+  --r: 12px;
+  --rs: 8px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'DM Sans', sans-serif;
+  background: var(--bg);
+  color: var(--tx);
+  font-size: 14px;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
 .hide{display:none!important}
 #login{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
 .card{background:var(--sur);border:1px solid var(--brd);border-radius:16px;padding:40px;width:100%;max-width:420px}
@@ -223,6 +263,24 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
 .add-src-opt-sub{font-size:11px;color:var(--tx3);margin-top:2px}
 .add-src-form{display:none;margin-top:16px;padding-top:16px;border-top:1px solid var(--brd)}
 .add-src-form.open{display:block}
+/* --- OVERRIDES SMART BEES --- */
+.sidebar { background: var(--sb-navy); border-right: none; color: #FFFFFF; }
+.sb-brand, .sb-section, .btn-logout, .btn-ghost { color: rgba(255,255,255,0.7); border-color: rgba(255,255,255,0.2); }
+.btn-ghost:hover { border-color: var(--sb-orange); color: var(--sb-orange); }
+.sb-top { border-bottom: 1px solid rgba(255,255,255,0.1); }
+.sb-bot { border-top: 1px solid rgba(255,255,255,0.1); }
+
+.cli-item:hover { background: rgba(255,255,255,0.05); }
+.cli-item.on { background: var(--sb-orange); color: white; }
+.cli-av { background: rgba(255,255,255,0.1); border: none; color: white; }
+.cli-item.on .cli-av { background: white; color: var(--sb-orange); }
+
+.btn { background: var(--sb-coral); color: #fff; transition: transform 0.1s ease, box-shadow 0.2s ease; box-shadow: 0 2px 4px rgba(255, 103, 114, 0.2); }
+.btn:hover { opacity: 1; transform: translateY(-1px); box-shadow: 0 4px 8px rgba(255, 103, 114, 0.3); }
+
+.msg.a .bubble { background: var(--sb-blue-lt); color: var(--sb-navy); border: none; }
+.msg.u .bubble { background: var(--sb-orange); color: #fff; }
+.msg-who { color: var(--tx2); }
 </style>
 </head>
 <body>
