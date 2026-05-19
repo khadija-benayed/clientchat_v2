@@ -463,6 +463,44 @@ serve(async (req) => {
     // Utilisé par checkDriveUpdates() pour la vérification légère initiale (~100ms).
     // Entrée : { action: 'list_drive_metadata', folder_id: string }
     // Sortie : { files: [{id, name, mimeType, modifiedTime}], sa_email: string }
+    // ── export_single_file ────────────────────────────────────────────────
+    // Exporte le contenu d'UN seul fichier Drive par son ID.
+    // Utilisé par checkDriveUpdates pour éviter le timeout de read_drive_folder
+    // qui exporte tout le dossier en parallèle.
+    // Entrée : { action: 'export_single_file', file_id, file_name, mime_type }
+    // Sortie : { file: { filename, type, content, driveId } } | { error }
+    if (action === "export_single_file") {
+      const { file_id, file_name, mime_type } = body;
+      if (!file_id || !mime_type)
+        return new Response(JSON.stringify({ error: "file_id et mime_type requis" }), { status: 400, headers });
+
+      if (!GOOGLE_SA_KEY_RAW)
+        return new Response(JSON.stringify({ error: "GOOGLE_SA_KEY non configurée" }), { status: 500, headers });
+
+      let sa: ServiceAccountKey;
+      try {
+        sa = JSON.parse(GOOGLE_SA_KEY_RAW);
+        if (!sa.client_email || !sa.private_key) throw new Error("Champs manquants");
+      } catch (e) {
+        return new Response(JSON.stringify({ error: `GOOGLE_SA_KEY invalide : ${(e as Error).message}` }), { status: 500, headers });
+      }
+
+      let token: string;
+      try {
+        token = await getGoogleAccessToken(sa, "https://www.googleapis.com/auth/drive.readonly");
+      } catch (e) {
+        return new Response(JSON.stringify({ error: `Auth Google échouée : ${(e as Error).message}` }), { status: 500, headers });
+      }
+
+      const driveFile: DriveFile = { id: file_id, name: file_name || file_id, mimeType: mime_type, modifiedTime: "" };
+      const result = await exportDriveFile(driveFile, token);
+
+      if (!result)
+        return new Response(JSON.stringify({ error: `Type de fichier non supporté ou export échoué : ${mime_type}` }), { status: 400, headers });
+
+      return new Response(JSON.stringify({ file: { ...result, driveId: file_id } }), { status: 200, headers });
+    }
+
     if (action === "list_drive_metadata") {
       const folderId = body.folder_id;
       if (!folderId)

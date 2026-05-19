@@ -999,7 +999,7 @@ async function checkDriveUpdates(clientObj) {
         .delete()
         .eq('client_id', clientObj.id)
         .in('source_id', zombieIds)
-        .catch(e => console.warn('checkDriveUpdates: purge zombies error:', e.message));
+        .then(() => {}).catch(e => console.warn('checkDriveUpdates: purge zombies error:', e.message));
       console.log(`checkDriveUpdates: ${zombieIds.length} zombie(s) purgé(s).`);
     }
 
@@ -1010,46 +1010,43 @@ async function checkDriveUpdates(clientObj) {
 
     console.log(`checkDriveUpdates: ${toIndex.length} fichier(s) à indexer (${toIndex.filter(f=>f.reason==='new').length} nouveaux, ${toIndex.filter(f=>f.reason==='modified').length} modifiés).`);
 
-    // ── Étape 5 : télécharger le contenu (un seul appel read_drive_folder) ──
-    // Limite à 10 par run pour rester sous le timeout Edge Function (150s).
-    // Convergence garantie : le reste sera traité au prochain selectClient().
-    const MAX_PER_RUN = 10;
+    // ── Étape 5 : exporter + indexer fichier par fichier (anti-timeout) ──
+    // On n'utilise plus read_drive_folder (exporte tout en parallèle → timeout sur 98 fichiers).
+    // À la place : export_single_file par ID → 1 appel Edge Function par fichier, séquentiel.
+    // Limite à 8 par run pour rester bien sous les 150s de timeout Supabase.
+    // Convergence garantie : le reste est traité au prochain selectClient().
+    const MAX_PER_RUN = 8;
     const batch = toIndex.slice(0, MAX_PER_RUN);
-
-    let exportedFiles = [];
-    try {
-      const exportRes = await fetch(EDGE_URL, {
-        method: 'POST',
-        headers: EDGE_HEADERS,
-        body: JSON.stringify({ action: 'read_drive_folder', folder_id: clientObj.drive_folder_id })
-      });
-      const exportData = await exportRes.json();
-      exportedFiles = exportData.files || [];
-    } catch (exportErr) {
-      console.warn('checkDriveUpdates: read_drive_folder failed (non bloquant):', exportErr.message);
-      return;
-    }
-
-    // ── Étape 6 : indexer chaque fichier du batch ──
     const updatedNames = [];
+
     for (const fileMeta of batch) {
       try {
-        // Chercher par driveId en priorité (stable), fallback sur le nom
-        const fileContent = exportedFiles.find(f => f.driveId === fileMeta.id)
-                         || exportedFiles.find(f => f.filename === fileMeta.name);
-        if (!fileContent) {
-          console.warn(`checkDriveUpdates: "${fileMeta.name}" (${fileMeta.id}) absent du contenu exporté — ignoré.`);
+        // 1. Exporter le contenu du fichier via son ID Drive
+        const exportRes = await fetch(EDGE_URL, {
+          method: 'POST',
+          headers: EDGE_HEADERS,
+          body: JSON.stringify({
+            action: 'export_single_file',
+            file_id: fileMeta.id,
+            file_name: fileMeta.name,
+            mime_type: fileMeta.mimeType,
+          })
+        });
+        const exportData = await exportRes.json();
+
+        if (exportData.error) {
+          console.warn(`checkDriveUpdates: export échoué pour "${fileMeta.name}":`, exportData.error);
           continue;
         }
 
-        const sourceType = fileMeta.mimeType === 'application/vnd.google-apps.spreadsheet' ? 'sheet' : 'doc';
-
-        // Skip si le contenu est vide (fichier vide, export échoué silencieusement côté Drive)
-        if (!fileContent.content || fileContent.content.trim().length < 10) {
+        const fileContent = exportData.file;
+        if (!fileContent?.content || fileContent.content.trim().length < 10) {
           console.warn(`checkDriveUpdates: "${fileMeta.name}" contenu vide — ignoré.`);
           continue;
         }
 
+        // 2. Indexer
+        const sourceType = fileMeta.mimeType === 'application/vnd.google-apps.spreadsheet' ? 'sheet' : 'doc';
         const indexRes = await fetch(EDGE_URL, {
           method: 'POST',
           headers: EDGE_HEADERS,
@@ -1057,14 +1054,14 @@ async function checkDriveUpdates(clientObj) {
             action: 'index_source',
             client_id: clientObj.id,
             source_type: sourceType,
-            source_id: fileMeta.id,       // clé stable Drive
-            source_name: fileMeta.name,   // affiché dans l'UI, mis à jour si renommé
+            source_id: fileMeta.id,
+            source_name: fileMeta.name,
             content: fileContent.content,
           })
         });
         const indexData = await indexRes.json();
         if (indexData.error) {
-          console.warn(`checkDriveUpdates: index_source error for "${fileMeta.name}":`, indexData.error);
+          console.warn(`checkDriveUpdates: index_source error pour "${fileMeta.name}":`, indexData.error);
           continue;
         }
 
@@ -1956,60 +1953,60 @@ async function syncSource(idx){
     if(s.type === 'drive'){
       const folderId = s.folder_id || $('drive-in').value.trim();
       if(!folderId) throw new Error('Folder ID manquant');
-      // Appel Edge Function
-      const r = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({action:'read_drive_folder',folder_id:folderId})});
-      const d = await r.json();
-      if(d.error) throw new Error(d.error);
-      if(!d.files||!d.files.length) throw new Error('Aucun fichier lisible');
+      // ── Étape 1 : métadonnées de tous les fichiers (rapide, sans contenu) ──
+      const metaR = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({action:'list_drive_metadata',folder_id:folderId})});
+      const metaD = await metaR.json();
+      if(metaD.error) throw new Error(metaD.error);
+      if(!metaD.files||!metaD.files.length) throw new Error('Aucun fichier lisible');
 
-      // CC-107 — Collecter le contenu brut pour generate_brief (1 seul appel Claude)
-      // Suppression de la boucle de résumé fichier-par-fichier : elle consommait N appels
-      // Claude en séquence et épuisait le rate limit avant même d'appeler generate_brief.
-      const docsForBrief = d.files.map(f => ({
-        filename: f.filename,
-        content: (f.content||'').substring(0, 6000)
-      }));
+      const EXPORTABLE = [
+        'application/vnd.google-apps.document',
+        'application/vnd.google-apps.spreadsheet',
+        'application/vnd.google-apps.presentation',
+        'application/pdf',
+      ];
+      const exportableFiles = metaD.files.filter(f => EXPORTABLE.includes(f.mimeType));
 
-      // --- Indexation par batches de 3 fichiers (anti rate-limit Voyage AI) ---
-      // Batch réduit à 3 : les gros fichiers (PDFs, Docs longs) peuvent dépasser le timeout
-      // Edge Function à 5 simultanés. 3 est un meilleur compromis vitesse/fiabilité.
+      // ── Étape 2 : generate_brief — exporter les 15 fichiers les plus récents ──
+      // On exporte fichier par fichier (export_single_file) pour éviter le timeout.
       addMsg('a', '⏳ Indexation des documents en cours...');
-      const BATCH_SIZE = 3;
-      let indexedCount = 0;
+      const briefFiles = exportableFiles.slice(0, 15);
+      const docsForBrief = [];
+      for (const f of briefFiles) {
+        try {
+          const expR = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({action:'export_single_file',file_id:f.id,file_name:f.name,mime_type:f.mimeType})});
+          const expD = await expR.json();
+          if(!expD.error && expD.file?.content) {
+            docsForBrief.push({ filename: expD.file.filename, content: expD.file.content.substring(0, 6000) });
+          }
+        } catch(_) {}
+      }
+      // d.files simulé pour compatibilité avec le code generate_brief plus bas
+      const d = { files: docsForBrief.map(f => ({ filename: f.filename, content: f.content, driveId: null })) };
 
-      for (let i = 0; i < d.files.length; i += BATCH_SIZE) {
-        const batch = d.files.slice(i, i + BATCH_SIZE);
-        const batchResults = await Promise.all(
-          batch.map(async (file) => {
-            try {
-              const sourceType = file.type === 'csv' ? 'sheet' : 'doc';
-              const indexRes = await fetch(EDGE_URL, {
-                method: 'POST',
-                headers: EDGE_HEADERS,
-                body: JSON.stringify({
-                  action: 'index_source',
-                  client_id: cur.id,
-                  source_type: sourceType,
-                  source_id: file.driveId,    // ID Drive stable — null pour sources non-Drive
-                  source_name: file.filename,
-                  content: file.content,
-                })
-              });
-              const indexData = await indexRes.json();
-              return !indexData.error;
-            } catch (idxErr) {
-              console.warn(`Erreur d'indexation pour ${file.filename}:`, idxErr);
-              return false;
-            }
-          })
-        );
-        indexedCount += batchResults.filter(Boolean).length;
+      // ── Étape 3 : indexation de TOUS les fichiers exportables via export_single_file ──
+      // Séquentiel fichier par fichier — élimine le timeout du Promise.all massif.
+      // checkDriveUpdates prend le relais au prochain chargement pour les fichiers restants.
+      let indexedCount = 0;
+      for (const fileMeta of exportableFiles) {
+        try {
+          const expR = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({action:'export_single_file',file_id:fileMeta.id,file_name:fileMeta.name,mime_type:fileMeta.mimeType})});
+          const expD = await expR.json();
+          if(expD.error || !expD.file?.content || expD.file.content.trim().length < 10) continue;
+          const sourceType = fileMeta.mimeType === 'application/vnd.google-apps.spreadsheet' ? 'sheet' : 'doc';
+          const idxR = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({
+            action:'index_source', client_id:cur.id,
+            source_type:sourceType, source_id:fileMeta.id,
+            source_name:fileMeta.name, content:expD.file.content,
+          })});
+          const idxD = await idxR.json();
+          if(!idxD.error) indexedCount++;
+        } catch(_) {}
       }
 
       if(indexedCount > 0) {
         addMsg('a', `✓ ${indexedCount} document(s) indexé(s) pour la recherche profonde.`);
       }
-      // --------------------------------------------------------
 
       // driveBlock = fallback texte si generate_brief échoue (liste de noms uniquement)
       const driveBlock = '--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') — '+d.files.length+' fichier(s) ---\n'
