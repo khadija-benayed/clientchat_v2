@@ -102,6 +102,7 @@ async function exportDriveFile(file: DriveFile, token: string): Promise<DriveFil
   const authHeader = { Authorization: `Bearer ${token}` };
   let exportUrl: string;
   let type: string;
+  let isPdf = false;
 
   if (file.mimeType === "application/vnd.google-apps.spreadsheet") {
     exportUrl = `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=text/csv`;
@@ -109,17 +110,39 @@ async function exportDriveFile(file: DriveFile, token: string): Promise<DriveFil
   } else if (file.mimeType === "application/vnd.google-apps.document") {
     exportUrl = `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=text/plain`;
     type = "txt";
+  } else if (file.mimeType === "application/pdf") {
+    // PDF natif Drive (pas un Google Doc) → téléchargement direct binaire
+    exportUrl = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`;
+    type = "pdf";
+    isPdf = true;
   } else {
-    return null; // PDF et autres → ticket suivant
+    return null; // images, vidéos, etc. → ignoré
   }
 
   try {
     const res = await fetch(exportUrl, { headers: authHeader });
     if (!res.ok) { console.error(`Export failed for ${file.name}: ${res.status}`); return null; }
+
+    if (isPdf) {
+      // PDF → retourner le contenu base64 pour que index_source puisse le traiter
+      const arrayBuf = await res.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuf);
+      // Encoder en base64 (btoa sur Deno avec Uint8Array)
+      let binary = "";
+      bytes.forEach(b => { binary += String.fromCharCode(b); });
+      const b64 = btoa(binary);
+      // On retourne le base64 dans content avec un marqueur spécial
+      // index_source détectera ce marqueur et appellera Claude pour extraire le texte
+      return {
+        filename: file.name,
+        type: "pdf",
+        content: `__PDF_BASE64__${b64}`,
+        modifiedTime: file.modifiedTime,
+      };
+    }
+
     const content = await res.text();
     // Budget : 50 000 chars ≈ 12 500 tokens par fichier.
-    // Permet 25 chunks de 2 000 chars — couvre la quasi-totalité des docs métier.
-    // Un Google Doc de 50k chars représente ~35 pages A4, ce qui est déjà très long.
     return { filename: file.name, type, content: content.substring(0, 50_000), modifiedTime: file.modifiedTime };
   } catch (e) {
     console.error(`Export error for ${file.name}:`, e);
@@ -622,8 +645,56 @@ serve(async (req) => {
       const sbAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
       // ── 1. Découper selon le type de source ─────────────────────────────
+      // Si le contenu est un PDF base64 (marqueur __PDF_BASE64__), extraire le texte
+      // via Claude avant de chunker — Claude supporte nativement les PDFs en base64.
+      let textContent = content as string;
+
+      if (textContent.startsWith("__PDF_BASE64__")) {
+        const pdfB64 = textContent.slice("__PDF_BASE64__".length);
+        try {
+          const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": ANTHROPIC_KEY!,
+              "anthropic-version": "2023-06-01",
+            },
+            body: JSON.stringify({
+              model: "claude-sonnet-4-6",
+              max_tokens: 4000,
+              messages: [{
+                role: "user",
+                content: [
+                  {
+                    type: "document",
+                    source: { type: "base64", media_type: "application/pdf", data: pdfB64 },
+                  },
+                  {
+                    type: "text",
+                    text: "Extrais tout le texte de ce document de manière fidèle et complète. Inclus les titres, sous-titres, tableaux (format texte), listes et corps de texte. Ne résume pas — retranscris le contenu intégral.",
+                  },
+                ],
+              }],
+            }),
+          });
+          const claudeData = await claudeRes.json();
+          if (claudeData.error) throw new Error(claudeData.error.message);
+          textContent = claudeData.content
+            ?.filter((c: { type: string }) => c.type === "text")
+            .map((c: { text: string }) => c.text)
+            .join("") || "";
+          if (!textContent.trim()) throw new Error("Extraction PDF vide");
+        } catch (pdfErr) {
+          console.error("index_source: PDF extraction error:", (pdfErr as Error).message);
+          return new Response(
+            JSON.stringify({ error: `Extraction PDF échouée : ${(pdfErr as Error).message}` }),
+            { status: 502, headers }
+          );
+        }
+      }
+
       const isCSV = source_type === "sheet" || (source_name as string).endsWith(".csv");
-      const chunks = isCSV ? chunkCSV(content) : chunkText(content);
+      const chunks = isCSV ? chunkCSV(textContent) : chunkText(textContent);
 
       if (chunks.length === 0) {
         return new Response(
@@ -869,7 +940,9 @@ serve(async (req) => {
           console.error("RAG match_chunks error:", matchError.message);
         } else {
           // 3. Filtrer par seuil de pertinence
-          const relevant = (chunks || []).filter((c: { similarity: number }) => c.similarity > 0.75);
+          // 0.65 au lieu de 0.75 : les docs analytiques (plans de marquage, specs techniques)
+          // ont une sémantique plus distante des questions métier mais restent pertinents.
+          const relevant = (chunks || []).filter((c: { similarity: number }) => c.similarity > 0.65);
 
           if (relevant.length > 0) {
             // Injecter les chunks sous la fiche client

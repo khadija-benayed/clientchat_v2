@@ -1943,35 +1943,41 @@ async function syncSource(idx){
         content: (f.content||'').substring(0, 6000)
       }));
 
-      // --- Indexation parallèle des fichiers pour le RAG ---
-      // Promise.all plutôt que boucle séquentielle :
-      // 25 fichiers × ~2s Voyage AI en séquentiel = ~50s → risque timeout 150s
-      // En parallèle : ~2-4s total (limité par la concurrence Voyage AI)
+      // --- Indexation par batches de 5 fichiers (anti rate-limit Voyage AI) ---
+      // Promise.all sur 44 fichiers → 44 appels Voyage AI simultanés → rate limit 429.
+      // On traite par batches de 5 : ~2-4s par batch, ~20s pour 44 fichiers. OK sous 150s.
       addMsg('a', '⏳ Indexation des documents en cours...');
-      const indexResults = await Promise.all(
-        d.files.map(async (file) => {
-          try {
-            const sourceType = file.type === 'csv' ? 'sheet' : 'doc';
-            const indexRes = await fetch(EDGE_URL, {
-              method: 'POST',
-              headers: EDGE_HEADERS,
-              body: JSON.stringify({
-                action: 'index_source',
-                client_id: cur.id,
-                source_type: sourceType,
-                source_name: file.filename,
-                content: file.content,
-              })
-            });
-            const indexData = await indexRes.json();
-            return !indexData.error;
-          } catch (idxErr) {
-            console.warn(`Erreur d'indexation pour ${file.filename}:`, idxErr);
-            return false;
-          }
-        })
-      );
-      const indexedCount = indexResults.filter(Boolean).length;
+      const BATCH_SIZE = 5;
+      let indexedCount = 0;
+
+      for (let i = 0; i < d.files.length; i += BATCH_SIZE) {
+        const batch = d.files.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.all(
+          batch.map(async (file) => {
+            try {
+              const sourceType = file.type === 'csv' ? 'sheet' : 'doc';
+              const indexRes = await fetch(EDGE_URL, {
+                method: 'POST',
+                headers: EDGE_HEADERS,
+                body: JSON.stringify({
+                  action: 'index_source',
+                  client_id: cur.id,
+                  source_type: sourceType,
+                  source_name: file.filename,
+                  content: file.content,
+                })
+              });
+              const indexData = await indexRes.json();
+              return !indexData.error;
+            } catch (idxErr) {
+              console.warn(`Erreur d'indexation pour ${file.filename}:`, idxErr);
+              return false;
+            }
+          })
+        );
+        indexedCount += batchResults.filter(Boolean).length;
+      }
+
       if(indexedCount > 0) {
         addMsg('a', `✓ ${indexedCount} document(s) indexé(s) pour la recherche profonde.`);
       }
