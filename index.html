@@ -888,13 +888,56 @@ function addThinking(){
 function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}
 function resize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,120)+'px';}
 
-async function callClaude(system,message,file=null){
+async function callClaude(system,message,file=null,clientId=null){
   const payload={system,message};
   if(file) payload.file=file;
+  // CC-203 — client_id requis pour que match_chunks filtre les chunks du bon client
+  if(clientId) payload.client_id=clientId;
   const r=await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify(payload)});
   const data=await r.json();
   if(data.error) throw new Error(data.error);
-  return data.text;
+  return { text: data.text, sources: data.sources_used || [] };
+}
+
+// CC-203 — Icônes par source_type
+function sourceIcon(type){
+  if(type==='drive'||type==='doc'||type==='sheet') return '📁';
+  if(type==='session') return '🕐';
+  if(type==='notion') return '🔷';
+  return '⭐';
+}
+
+// CC-203 — Ajouter le badge sources sous un message Claude
+function addSourcesBadge(msgEl, sources){
+  if(!sources||sources.length===0) return;
+  const badge=document.createElement('div');
+  badge.className='msg-badge msg-sources-badge';
+  badge.style.cssText='cursor:pointer;user-select:none;position:relative;';
+  badge.textContent='📚 '+sources.length+' source'+(sources.length>1?'s':'');
+
+  // Tooltip
+  const tip=document.createElement('div');
+  tip.className='sources-tooltip';
+  tip.style.cssText='display:none;position:absolute;bottom:calc(100% + 6px);left:0;background:var(--bg2,#1e1e2e);border:1px solid var(--brd,#333);border-radius:8px;padding:10px 12px;min-width:260px;max-width:340px;z-index:999;box-shadow:0 4px 16px rgba(0,0,0,.3);';
+
+  sources.forEach(s=>{
+    const row=document.createElement('div');
+    row.style.cssText='margin-bottom:8px;font-size:12px;line-height:1.4;';
+    row.innerHTML='<span style="font-weight:600;">'+sourceIcon(s.source_type)+' '+s.source_name+'</span>'
+      +'<div style="color:var(--tx3,#888);margin-top:2px;">'+s.preview+'…</div>';
+    tip.appendChild(row);
+  });
+
+  badge.appendChild(tip);
+
+  // Toggle tooltip au clic
+  badge.addEventListener('click',e=>{
+    e.stopPropagation();
+    tip.style.display=tip.style.display==='none'?'block':'none';
+  });
+  document.addEventListener('click',()=>{ tip.style.display='none'; }, {once:true});
+
+  msgEl.appendChild(badge);
 }
 
 function snap(){
@@ -1150,14 +1193,16 @@ async function send(){
     +'Ambiguïté : {"updates":[],"new_tasks":[],"delete_ids":[],"clarification":true}';
 
   try {
-    const raw=await callClaude(sys,txt,fileToSend);
+    const {text: raw, sources: ragSources}=await callClaude(sys,txt,fileToSend,cur?.id||null);
     th.remove();
 
     const parts=raw.split('---JSON---');
     const replyText=parts[0].trim();
     const jsonStr=(parts[1]||'').trim();
 
-    addMsg('a',replyText);
+    const assistantMsgEl = addMsg('a',replyText);
+    // CC-203 — Badge sources RAG
+    addSourcesBadge(assistantMsgEl, ragSources);
 
     if(jsonStr){
       try{
@@ -1192,7 +1237,7 @@ async function send(){
             await Promise.all(ops);
             setSyncDot('#52b788','synchronisé');
             renderTodo(changed.filter(x=>typeof x==='number'));
-            const lastA=[...$('msgs').querySelectorAll('.msg.a')].pop();
+            const lastA=assistantMsgEl;
             if(lastA){
               const bg=document.createElement('div');bg.className='msg-badge';
               const nu=changed.filter(x=>typeof x==='number').length;

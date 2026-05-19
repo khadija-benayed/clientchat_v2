@@ -210,6 +210,38 @@ async function embedChunks(chunks: string[], voyageKey: string): Promise<number[
   return allEmbeddings;
 }
 
+// ── Recherche sémantique — CC-203 ─────────────────────────────────────────
+
+/**
+ * Vectorise un message utilisateur via Voyage AI.
+ * Utilise voyage-3 (1024 dims) — MÊME modèle que l'indexation CC-202.
+ * Important : mélanger les modèles (voyage-3 vs voyage-3-lite) invalide la similarité cosinus.
+ */
+async function embedQuery(text: string, voyageKey: string): Promise<number[]> {
+  const res = await fetch("https://api.voyageai.com/v1/embeddings", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${voyageKey}`,
+    },
+    body: JSON.stringify({
+      model: "voyage-3", // même modèle que CC-202 — ne pas changer
+      input: [text],
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Voyage AI embedQuery HTTP ${res.status}: ${errText}`);
+  }
+
+  const data = await res.json();
+  if (!data.data?.[0]?.embedding) {
+    throw new Error(`Voyage AI embedQuery réponse invalide: ${JSON.stringify(data)}`);
+  }
+  return data.data[0].embedding;
+}
+
 // ── Serve ──────────────────────────────────────────────────────────────────
 
 serve(async (req) => {
@@ -533,12 +565,68 @@ serve(async (req) => {
       );
     }
 
+    // ── RAG — CC-203 : recherche sémantique avant appel Claude ───────────
+    // Vectorise le message utilisateur et injecte les chunks pertinents dans le system prompt.
+    // Fiche client (CC-107) reste en haut — chunks RAG ajoutés en dessous.
+    const VOYAGE_KEY = Deno.env.get("VOYAGE_API_KEY");
+    let systemWithRAG = system || "";
+    let sourcesUsed: { source_name: string; source_type: string; preview: string }[] = [];
+
+    if (message && VOYAGE_KEY && SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+      try {
+        const sbAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+        // 1. Vectoriser la question
+        const queryEmbedding = await embedQuery(message, VOYAGE_KEY);
+
+        // 2. Chercher les 5 chunks les plus proches via match_chunks()
+        const { data: chunks, error: matchError } = await sbAdmin.rpc("match_chunks", {
+          query_embedding: queryEmbedding,
+          p_client_id: client_id || null,
+          match_count: 5,
+        });
+
+        if (matchError) {
+          console.error("RAG match_chunks error:", matchError.message);
+        } else {
+          // 3. Filtrer par seuil de pertinence
+          const relevant = (chunks || []).filter((c: { similarity: number }) => c.similarity > 0.75);
+
+          if (relevant.length > 0) {
+            // Injecter les chunks sous la fiche client
+            const ragBlock = relevant
+              .map((c: { chunk_text: string; source_name: string }) =>
+                `— ${c.source_name}\n${c.chunk_text}`
+              )
+              .join("\n\n");
+
+            systemWithRAG = systemWithRAG
+              + "\n\n[Extraits de documents pertinents]\n" + ragBlock;
+
+            // Construire sources_used pour le front
+            sourcesUsed = relevant.map((c: { source_name: string; source_type: string; chunk_text: string }) => ({
+              source_name: c.source_name,
+              source_type: c.source_type,
+              preview: c.chunk_text.slice(0, 120),
+            }));
+          } else {
+            // Fallback CC-206 : aucun chunk pertinent
+            systemWithRAG = systemWithRAG
+              + "\n\n[Extraits de documents pertinents]\nAucun document pertinent trouvé pour cette question. Réponds en te basant uniquement sur la fiche client et le contexte de la conversation.";
+          }
+        }
+      } catch (ragErr) {
+        // RAG non bloquant — si Voyage AI est down, Claude répond quand même sans RAG
+        console.error("RAG pipeline error (non bloquant):", (ragErr as Error).message);
+      }
+    }
+
     // ── Appel Claude normal (avec ou sans fichier joint) ──────────────────
     const { file } = body; // { data: base64, mediaType: string, name: string } | undefined
 
     // Construire le contenu du message utilisateur
     let userContent: unknown;
-    let systemWithFile = system;
+    let systemWithFile = systemWithRAG; // Utiliser le system enrichi par le RAG
 
     if (file && file.data && file.mediaType && file.name) {
       // Valider le type MIME accepté
@@ -548,7 +636,8 @@ serve(async (req) => {
       }
 
       // Addendum système pour l'analyse du fichier
-      systemWithFile = system
+      // Partir de systemWithRAG (pas de `system` brut) pour conserver les chunks RAG injectés
+      systemWithFile = systemWithRAG
         + "\n\nL'utilisateur t'a partagé un fichier. Extrais les informations clés : type de document, points importants, données chiffrées, actions suggérées.";
 
       // Construire le bloc fichier selon le type
@@ -581,7 +670,7 @@ serve(async (req) => {
     if (data.error) return new Response(JSON.stringify({ error: data.error.message }), { status: 400, headers });
 
     const text = data.content?.filter((c: { type: string }) => c.type === "text").map((c: { text: string }) => c.text).join("") || "";
-    return new Response(JSON.stringify({ text }), { status: 200, headers });
+    return new Response(JSON.stringify({ text, sources_used: sourcesUsed }), { status: 200, headers });
 
   } catch (e) {
     return new Response(JSON.stringify({ error: (e as Error).message }), { status: 500, headers });
