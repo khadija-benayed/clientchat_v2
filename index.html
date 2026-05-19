@@ -939,7 +939,7 @@ function showUpdateNotif(count) {
 async function checkDriveUpdates(clientObj) {
   if (!clientObj?.drive_folder_id) return;
   try {
-    // ── Étape 1 : récupérer uniquement les métadonnées (aucun contenu téléchargé) ──
+    // ── Étape 1 : métadonnées uniquement (id, name, mimeType, modifiedTime) ──
     const metaRes = await fetch(EDGE_URL, {
       method: 'POST',
       headers: EDGE_HEADERS,
@@ -948,43 +948,74 @@ async function checkDriveUpdates(clientObj) {
     const metaData = await metaRes.json();
     if (!metaData.files || metaData.files.length === 0) return;
 
-    // ── Étape 2 : comparer modifiedTime vs last_indexed_at stocké par fichier ──
-    // files_indexed = map { [name]: ISO string } persisté dans la source Drive de cur.sources
-    const srcs = getSources();
-    const driveSrc = srcs.find(s => s.type === 'drive');
-    const filesIndexed = driveSrc?.files_indexed || {}; // { "nom_fichier": "2024-01-15T..." }
+    // ── Étape 2 : récupérer les source_id déjà indexés en base pour ce client ──
+    // On fait UNE seule requête pour avoir tous les (source_id, last_indexed_at) connus.
+    // Clé stable = source_id (Google Drive file ID), résistant aux renommages.
+    const { data: indexedRows } = await sb
+      .from('document_chunks')
+      .select('source_id, source_name, last_indexed_at')
+      .eq('client_id', clientObj.id)
+      .not('source_id', 'is', null)
+      .order('last_indexed_at', { ascending: false });
 
-    // Filtrer uniquement les fichiers exportables (Docs + Sheets) et modifiés depuis la dernière indexation
+    // Map { source_id → { last_indexed_at, source_name } } — on garde la ligne la plus récente
+    const indexedMap = {};
+    for (const row of (indexedRows || [])) {
+      if (!indexedMap[row.source_id]) {
+        indexedMap[row.source_id] = { last_indexed_at: row.last_indexed_at, source_name: row.source_name };
+      }
+    }
+
     const EXPORTABLE_MIMETYPES = [
       'application/vnd.google-apps.document',
       'application/vnd.google-apps.spreadsheet',
+      'application/vnd.google-apps.presentation',
+      'application/pdf',
     ];
-    const toUpdate = metaData.files.filter(f => {
-      if (!EXPORTABLE_MIMETYPES.includes(f.mimeType)) return false; // ignorer PDFs, images, etc.
-      const lastIndexed = filesIndexed[f.name];
-      if (!lastIndexed) return true; // jamais indexé
-      return new Date(f.modifiedTime) > new Date(lastIndexed);
-    });
 
-    if (toUpdate.length === 0) {
-      console.log(`checkDriveUpdates: ${metaData.files.length} fichiers vérifiés, aucun changement.`);
-      return; // 0 export Drive — AC1 validé
+    // ── Étape 3 : classifier chaque fichier Drive ──
+    // • jamais indexé → à indexer
+    // • modifié depuis last_indexed_at → à ré-indexer
+    // • à jour → skip
+    const toIndex = [];
+    const driveIds = new Set();
+
+    for (const f of metaData.files) {
+      if (!EXPORTABLE_MIMETYPES.includes(f.mimeType)) continue;
+      driveIds.add(f.id);
+      const known = indexedMap[f.id];
+      if (!known) {
+        toIndex.push({ ...f, reason: 'new' });
+      } else if (new Date(f.modifiedTime) > new Date(known.last_indexed_at)) {
+        toIndex.push({ ...f, reason: 'modified' });
+      }
+      // Si renommé mais pas modifié : source_name en base sera mis à jour au prochain index
     }
 
-    console.log(`checkDriveUpdates: ${toUpdate.length} fichier(s) modifié(s) sur ${metaData.files.length} → re-indexation.`);
+    // ── Étape 4 : purger les zombies (source_id en base mais plus dans Drive) ──
+    const zombieIds = Object.keys(indexedMap).filter(id => !driveIds.has(id));
+    if (zombieIds.length > 0) {
+      await sb.from('document_chunks')
+        .delete()
+        .eq('client_id', clientObj.id)
+        .in('source_id', zombieIds)
+        .catch(e => console.warn('checkDriveUpdates: purge zombies error:', e.message));
+      console.log(`checkDriveUpdates: ${zombieIds.length} zombie(s) purgé(s).`);
+    }
 
-    // ── Étape 3 : télécharger + index_source les fichiers modifiés (max 5 par chargement) ──
-    // Limite à 5 pour rester sous le timeout 150s de la Edge Function.
-    // Si > 5 fichiers modifiés : les 5 premiers sont traités maintenant,
-    // les suivants seront traités au prochain selectClient() (convergence garantie).
-    const MAX_PER_RUN = 5;
-    const batch = toUpdate.slice(0, MAX_PER_RUN);
-    const updatedNames = [];
+    if (toIndex.length === 0) {
+      console.log(`checkDriveUpdates: ${metaData.files.length} fichiers vérifiés — tout est à jour.`);
+      return;
+    }
 
-    // Un seul appel read_drive_folder pour récupérer le contenu de tous les fichiers du batch.
-    // read_drive_folder retourne les 50 fichiers les plus récents — couvre la quasi-totalité
-    // des cas. Si un fichier du batch est absent (dossier > 50 fichiers), il sera retentifié
-    // au prochain chargement.
+    console.log(`checkDriveUpdates: ${toIndex.length} fichier(s) à indexer (${toIndex.filter(f=>f.reason==='new').length} nouveaux, ${toIndex.filter(f=>f.reason==='modified').length} modifiés).`);
+
+    // ── Étape 5 : télécharger le contenu (un seul appel read_drive_folder) ──
+    // Limite à 10 par run pour rester sous le timeout Edge Function (150s).
+    // Convergence garantie : le reste sera traité au prochain selectClient().
+    const MAX_PER_RUN = 10;
+    const batch = toIndex.slice(0, MAX_PER_RUN);
+
     let exportedFiles = [];
     try {
       const exportRes = await fetch(EDGE_URL, {
@@ -999,18 +1030,18 @@ async function checkDriveUpdates(clientObj) {
       return;
     }
 
+    // ── Étape 6 : indexer chaque fichier du batch ──
+    const updatedNames = [];
     for (const fileMeta of batch) {
       try {
         const fileContent = exportedFiles.find(f => f.filename === fileMeta.name);
         if (!fileContent) {
-          console.warn(`checkDriveUpdates: "${fileMeta.name}" absent de read_drive_folder — ignoré.`);
+          console.warn(`checkDriveUpdates: "${fileMeta.name}" absent du contenu exporté — ignoré.`);
           continue;
         }
 
-        // Déterminer source_type depuis mimeType
         const sourceType = fileMeta.mimeType === 'application/vnd.google-apps.spreadsheet' ? 'sheet' : 'doc';
 
-        // Indexer le fichier mis à jour
         const indexRes = await fetch(EDGE_URL, {
           method: 'POST',
           headers: EDGE_HEADERS,
@@ -1018,7 +1049,8 @@ async function checkDriveUpdates(clientObj) {
             action: 'index_source',
             client_id: clientObj.id,
             source_type: sourceType,
-            source_name: fileMeta.name,
+            source_id: fileMeta.id,       // clé stable Drive
+            source_name: fileMeta.name,   // affiché dans l'UI, mis à jour si renommé
             content: fileContent.content,
           })
         });
@@ -1028,33 +1060,20 @@ async function checkDriveUpdates(clientObj) {
           continue;
         }
 
-        // Mettre à jour files_indexed pour ce fichier
-        filesIndexed[fileMeta.name] = new Date().toISOString();
         updatedNames.push(fileMeta.name);
-        console.log(`checkDriveUpdates: "${fileMeta.name}" ré-indexé (${indexData.chunks_created} chunks).`);
+        console.log(`checkDriveUpdates: "${fileMeta.name}" indexé [${fileMeta.reason}] — ${indexData.chunks_created} chunks.`);
       } catch (fileErr) {
         console.warn(`checkDriveUpdates: erreur pour "${fileMeta.name}" (non bloquant):`, fileErr.message);
       }
     }
 
-    // ── Persister files_indexed dans cur.sources → Supabase ──
     if (updatedNames.length > 0) {
-      const srcsUpdated = getSources();
-      const driveSrcIdx = srcsUpdated.findIndex(s => s.type === 'drive');
-      if (driveSrcIdx !== -1) {
-        srcsUpdated[driveSrcIdx].files_indexed = filesIndexed;
-        setSources(srcsUpdated);
-        await sb.from('clients').update({ sources: cur.sources }).eq('id', clientObj.id)
-          .catch(e => console.warn('checkDriveUpdates: persist sources error:', e.message));
-      }
-      // Notifier l'utilisateur des re-indexations
       showUpdateNotif(updatedNames.length);
-      if (toUpdate.length > MAX_PER_RUN) {
-        console.log(`checkDriveUpdates: ${toUpdate.length - MAX_PER_RUN} fichier(s) restant(s) — traités au prochain chargement.`);
+      if (toIndex.length > MAX_PER_RUN) {
+        console.log(`checkDriveUpdates: ${toIndex.length - MAX_PER_RUN} fichier(s) restant(s) — traités au prochain chargement.`);
       }
     }
   } catch (e) {
-    // Non bloquant — erreur silencieuse en arrière-plan
     console.warn('checkDriveUpdates error (non bloquant):', e.message);
   }
 }
@@ -1963,6 +1982,7 @@ async function syncSource(idx){
                   action: 'index_source',
                   client_id: cur.id,
                   source_type: sourceType,
+                  source_id: file.driveId,    // ID Drive stable — null pour sources non-Drive
                   source_name: file.filename,
                   content: file.content,
                 })

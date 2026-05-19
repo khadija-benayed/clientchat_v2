@@ -449,7 +449,10 @@ serve(async (req) => {
       });
 
       const results = await Promise.all(allFiles.slice(0, 200).map((f) => exportDriveFile(f, token)));
-      const files: DriveFileResult[] = results.filter((r): r is DriveFileResult => r !== null);
+      // Enrichir chaque résultat avec l'ID Drive stable (pour source_id côté front)
+      const files: (DriveFileResult & { driveId: string })[] = results
+        .map((r, i) => r ? { ...r, driveId: allFiles[i].id } : null)
+        .filter((r): r is DriveFileResult & { driveId: string } => r !== null);
 
       return new Response(JSON.stringify({ files, sa_email: sa.client_email }), { status: 200, headers });
     }
@@ -642,7 +645,9 @@ serve(async (req) => {
         );
       }
 
-      const { source_type, source_name, content } = body;
+      const { source_type, source_name, source_id, content } = body;
+      // source_id = Google Drive file ID (stable même si renommé).
+      // Si absent (source manuelle, session), fallback sur source_name pour la déduplication.
       if (!source_name || !source_type || !content) {
         return new Response(
           JSON.stringify({ error: "Paramètres requis : source_type, source_name, content." }),
@@ -718,10 +723,12 @@ serve(async (req) => {
       }
 
       // ── 2. Supprimer les anciens chunks de cette source ──────────────────
-      const { error: deleteError } = await sbAdmin
-        .from("document_chunks")
-        .delete()
-        .match({ client_id: client_id || null, source_name });
+      // Si source_id fourni (fichier Drive) : déduplication sur l'ID stable → gère les renommages.
+      // Sinon : fallback sur source_name (sources manuelles, sessions).
+      const deleteQuery = sbAdmin.from("document_chunks").delete();
+      const { error: deleteError } = source_id
+        ? await deleteQuery.match({ client_id: client_id || null, source_id })
+        : await deleteQuery.match({ client_id: client_id || null, source_name });
 
       if (deleteError) {
         console.error("index_source: delete anciens chunks error:", deleteError.message);
@@ -750,12 +757,13 @@ serve(async (req) => {
       // ── 4. Insérer dans document_chunks ──────────────────────────────────
       const now = new Date().toISOString();
       const rows = chunks.map((chunk, i) => ({
-        client_id: client_id || null, // null possible pour fiches entreprise Phase 3
+        client_id: client_id || null,
         source_type,
-        source_name,
+        source_name,                          // affiché dans l'UI, mis à jour même si renommé
+        ...(source_id ? { source_id } : {}),  // clé stable Drive — absent pour sources manuelles
         chunk_text: chunk,
         embedding: embeddings[i],
-        last_indexed_at: now, // CC-209 — horodatage pour détection de stale
+        last_indexed_at: now,
       }));
 
       const { error: insertError } = await sbAdmin.from("document_chunks").insert(rows);
@@ -801,7 +809,7 @@ serve(async (req) => {
       }
 
       const { files } = body as {
-        files: { source_name: string; source_type: string; content: string; modifiedTime: string }[];
+        files: { source_name: string; source_id?: string; source_type: string; content: string; modifiedTime: string }[];
       };
       if (!files || !Array.isArray(files) || files.length === 0) {
         return new Response(JSON.stringify({ updated: [], checked: 0 }), { status: 200, headers });
@@ -811,11 +819,14 @@ serve(async (req) => {
       const updated: string[] = [];
 
       for (const file of files) {
-        // Récupérer le last_indexed_at le plus récent pour ce fichier/client
+        // Récupérer le last_indexed_at — cherche par source_id si dispo, sinon source_name
+        const lookupMatch = file.source_id
+          ? { client_id: client_id || null, source_id: file.source_id }
+          : { client_id: client_id || null, source_name: file.source_name };
         const { data: existing } = await sbAdmin
           .from("document_chunks")
           .select("last_indexed_at")
-          .match({ client_id: client_id || null, source_name: file.source_name })
+          .match(lookupMatch)
           .order("last_indexed_at", { ascending: false })
           .limit(1)
           .single();
@@ -836,15 +847,18 @@ serve(async (req) => {
           const embeddings = await embedChunks(chunks, VOYAGE_KEY_CU);
           if (embeddings.length !== chunks.length) continue;
 
-          // Supprimer anciens chunks + insérer nouveaux
-          await sbAdmin.from("document_chunks").delete()
-            .match({ client_id: client_id || null, source_name: file.source_name });
+          // Supprimer anciens chunks — par source_id si dispo (stable), sinon source_name
+          const delMatch = file.source_id
+            ? { client_id: client_id || null, source_id: file.source_id }
+            : { client_id: client_id || null, source_name: file.source_name };
+          await sbAdmin.from("document_chunks").delete().match(delMatch);
 
           const indexedAt = new Date().toISOString();
           const rows = chunks.map((chunk, i) => ({
             client_id: client_id || null,
             source_type: file.source_type,
             source_name: file.source_name,
+            ...(file.source_id ? { source_id: file.source_id } : {}),
             chunk_text: chunk,
             embedding: embeddings[i],
             last_indexed_at: indexedAt,
