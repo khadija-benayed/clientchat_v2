@@ -1967,28 +1967,29 @@ async function syncSource(idx){
       ];
       const exportableFiles = metaD.files.filter(f => EXPORTABLE.includes(f.mimeType));
 
-      // ── Étape 2 : exporter + indexer TOUS les fichiers, en réutilisant le contenu pour le brief ──
-      // Export unique par fichier : pas de double téléchargement.
-      // Les 15 premiers alimentent generate_brief. Tous sont indexés pour la recherche RAG.
-      // Un délai de 1s entre chaque appel d'indexation évite de saturer Voyage AI (3 RPM free tier).
+      // ── Étape 2 : exporter + indexer tous les fichiers en parallèle (concurrence = 3) ──
+      // CONCURRENCE 3 = on traite 3 fichiers simultanément.
+      // - Plus rapide qu'un loop séquentiel (98 fichiers × 2 HTTP calls → ~3-4 min → ~1 min)
+      // - Plus sage qu'un Promise.all massif (évite timeout + rate limit Voyage AI)
+      // - Le backoff 429 dans l'edge function gère les pics sans artificiel delay côté front
       addMsg('a', '⏳ Indexation des documents en cours...');
       const docsForBrief = [];
       const BRIEF_LIMIT = 15;
       let indexedCount = 0;
 
-      for (const fileMeta of exportableFiles) {
+      // Pool de concurrence : traite max CONCURRENCY fichiers simultanément
+      const CONCURRENCY = 3;
+      async function processFile(fileMeta) {
         try {
-          // 1 seul export par fichier — réutilisé pour le brief ET l'indexation
           const expR = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({action:'export_single_file',file_id:fileMeta.id,file_name:fileMeta.name,mime_type:fileMeta.mimeType})});
           const expD = await expR.json();
-          if(expD.error || !expD.file?.content || expD.file.content.trim().length < 10) continue;
+          if(expD.error || !expD.file?.content || expD.file.content.trim().length < 10) return;
 
-          // Collecter pour le brief (les 15 premiers fichiers valides uniquement)
+          // Collecter pour le brief (thread-safe car JS est single-threaded)
           if(docsForBrief.length < BRIEF_LIMIT) {
             docsForBrief.push({ filename: expD.file.filename, content: expD.file.content.substring(0, 6000) });
           }
 
-          // Indexer pour la recherche RAG (tous les fichiers)
           const sourceType = fileMeta.mimeType === 'application/vnd.google-apps.spreadsheet' ? 'sheet' : 'doc';
           const idxR = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({
             action:'index_source', client_id:cur.id,
@@ -1997,11 +1998,12 @@ async function syncSource(idx){
           })});
           const idxD = await idxR.json();
           if(!idxD.error) indexedCount++;
+        } catch(e) { console.warn('syncSource: processFile error for', fileMeta.name, e.message); }
+      }
 
-          // Pause de 1.2s entre chaque fichier pour respecter le rate limit Voyage AI (3 RPM free tier)
-          // Supprimable si tu passes sur un plan payant Voyage AI
-          await new Promise(r => setTimeout(r, 1200));
-        } catch(idxErr) { console.warn('syncSource: index error for', fileMeta.name, idxErr.message); }
+      // Exécuter en vagues de CONCURRENCY fichiers
+      for(let i = 0; i < exportableFiles.length; i += CONCURRENCY) {
+        await Promise.all(exportableFiles.slice(i, i + CONCURRENCY).map(f => processFile(f)));
       }
 
       addMsg('a', `✓ ${indexedCount} document(s) indexé(s) sur ${exportableFiles.length} pour la recherche profonde.`);
@@ -2011,16 +2013,16 @@ async function syncSource(idx){
       s.folder_id = folderId;
       s.content_length = indexedCount;
 
-      // Sauvegarder l'état Drive immédiatement — la fiche sera générée en différé
+      // Sauvegarder l'état Drive immédiatement
       srcs[idx] = s;
       setSources(srcs);
       await sb.from('clients').update({drive_folder_id:folderId, sources:cur.sources, members:cur.members}).eq('id',cur.id);
       cur.drive_folder_id = folderId; addSession(cur);
-      addMsg('a', '✓ Drive synchronisé — génération de la fiche dans 60s (Voyage AI se stabilise)…');
+      addMsg('a', '✓ Drive synchronisé — génération de la fiche dans 15s…');
 
       // ── Génération différée de la fiche client ──
-      // Attendre 60s après la fin de l'indexation pour laisser Voyage AI récupérer
-      // et éviter le 422 Unprocessable Content d'Anthropic dû à la saturation.
+      // 15s suffisent maintenant que l'indexation est parallèle et non-bloquante.
+      // Le backoff 429 dans embedChunks absorbe les pics Voyage AI sans saturer Anthropic.
       setTimeout(async () => {
         if (!docsForBrief.length) return;
         try {
@@ -2034,7 +2036,7 @@ async function syncSource(idx){
           console.error('generate_brief delayed failed:', briefErr.message);
           addMsg('a', '⚠ Génération de la fiche échouée : '+briefErr.message+'. Réessaie via "Régénérer la fiche".');
         }
-      }, 60_000);
+      }, 15_000);
 
       // CC-107 — Rafraîchir la fiche dans le modal si ouvert
       if ($('modal-settings').classList.contains('open')) renderBrief();
