@@ -192,9 +192,12 @@ function chunkCSV(text: string, linesPerChunk = 15): string[] {
 
 // ── Embeddings Voyage AI ───────────────────────────────────────────────────
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 /**
  * Vectorise un tableau de chunks via Voyage AI (voyage-3, 1024 dims).
  * Batchée par 128 inputs max (limite API Voyage AI).
+ * Retry automatique sur 429 avec backoff exponentiel (max 4 tentatives).
  * Retourne les embeddings dans le même ordre que les chunks en entrée.
  */
 async function embedChunks(chunks: string[], voyageKey: string): Promise<number[][]> {
@@ -206,34 +209,49 @@ async function embedChunks(chunks: string[], voyageKey: string): Promise<number[
 
   const allEmbeddings: number[][] = [];
   for (const batch of batches) {
-    const res = await fetch("https://api.voyageai.com/v1/embeddings", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${voyageKey}`,
-      },
-      body: JSON.stringify({
-        model: "voyage-3", // 1024 dims — validé CC-202b
-        input: batch,
-      }),
-    });
+    let lastErr: Error | null = null;
+    // Retry avec backoff : 5s, 15s, 30s — couvre le reset de la fenêtre 1-min Voyage AI
+    for (const waitMs of [0, 5_000, 15_000, 30_000]) {
+      if (waitMs > 0) await sleep(waitMs);
+      const res = await fetch("https://api.voyageai.com/v1/embeddings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${voyageKey}`,
+        },
+        body: JSON.stringify({
+          model: "voyage-3", // 1024 dims — validé CC-202b
+          input: batch,
+        }),
+      });
 
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Voyage AI HTTP ${res.status}: ${errText}`);
+      if (res.status === 429) {
+        const errText = await res.text();
+        lastErr = new Error(`Voyage AI 429 rate limit: ${errText.substring(0, 200)}`);
+        console.warn(`embedChunks: 429 rate limit — retry après ${waitMs}ms`);
+        continue;
+      }
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Voyage AI HTTP ${res.status}: ${errText}`);
+      }
+
+      const data = await res.json();
+      if (!data.data || !Array.isArray(data.data)) {
+        throw new Error(`Voyage AI réponse invalide: ${JSON.stringify(data)}`);
+      }
+
+      // L'API Voyage retourne les embeddings avec un champ `index` — trier pour garantir l'ordre
+      const sorted = (data.data as { index: number; embedding: number[] }[])
+        .sort((a, b) => a.index - b.index)
+        .map(d => d.embedding);
+
+      allEmbeddings.push(...sorted);
+      lastErr = null;
+      break;
     }
-
-    const data = await res.json();
-    if (!data.data || !Array.isArray(data.data)) {
-      throw new Error(`Voyage AI réponse invalide: ${JSON.stringify(data)}`);
-    }
-
-    // L'API Voyage retourne les embeddings avec un champ `index` — trier pour garantir l'ordre
-    const sorted = (data.data as { index: number; embedding: number[] }[])
-      .sort((a, b) => a.index - b.index)
-      .map(d => d.embedding);
-
-    allEmbeddings.push(...sorted);
+    if (lastErr) throw lastErr; // Toutes les tentatives épuisées
   }
 
   return allEmbeddings;

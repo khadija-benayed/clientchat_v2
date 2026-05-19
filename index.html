@@ -1967,32 +1967,28 @@ async function syncSource(idx){
       ];
       const exportableFiles = metaD.files.filter(f => EXPORTABLE.includes(f.mimeType));
 
-      // ── Étape 2 : generate_brief — exporter les 15 fichiers les plus récents ──
-      // On exporte fichier par fichier (export_single_file) pour éviter le timeout.
+      // ── Étape 2 : exporter + indexer TOUS les fichiers, en réutilisant le contenu pour le brief ──
+      // Export unique par fichier : pas de double téléchargement.
+      // Les 15 premiers alimentent generate_brief. Tous sont indexés pour la recherche RAG.
+      // Un délai de 1s entre chaque appel d'indexation évite de saturer Voyage AI (3 RPM free tier).
       addMsg('a', '⏳ Indexation des documents en cours...');
-      const briefFiles = exportableFiles.slice(0, 15);
       const docsForBrief = [];
-      for (const f of briefFiles) {
-        try {
-          const expR = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({action:'export_single_file',file_id:f.id,file_name:f.name,mime_type:f.mimeType})});
-          const expD = await expR.json();
-          if(!expD.error && expD.file?.content) {
-            docsForBrief.push({ filename: expD.file.filename, content: expD.file.content.substring(0, 6000) });
-          }
-        } catch(expErr) { console.warn('syncSource: export brief error for', f.name, expErr.message); }
-      }
-      // d.files simulé pour compatibilité avec le code generate_brief plus bas
-      const d = { files: docsForBrief.map(f => ({ filename: f.filename, content: f.content, driveId: null })) };
-
-      // ── Étape 3 : indexation de TOUS les fichiers exportables via export_single_file ──
-      // Séquentiel fichier par fichier — élimine le timeout du Promise.all massif.
-      // checkDriveUpdates prend le relais au prochain chargement pour les fichiers restants.
+      const BRIEF_LIMIT = 15;
       let indexedCount = 0;
+
       for (const fileMeta of exportableFiles) {
         try {
+          // 1 seul export par fichier — réutilisé pour le brief ET l'indexation
           const expR = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({action:'export_single_file',file_id:fileMeta.id,file_name:fileMeta.name,mime_type:fileMeta.mimeType})});
           const expD = await expR.json();
           if(expD.error || !expD.file?.content || expD.file.content.trim().length < 10) continue;
+
+          // Collecter pour le brief (les 15 premiers fichiers valides uniquement)
+          if(docsForBrief.length < BRIEF_LIMIT) {
+            docsForBrief.push({ filename: expD.file.filename, content: expD.file.content.substring(0, 6000) });
+          }
+
+          // Indexer pour la recherche RAG (tous les fichiers)
           const sourceType = fileMeta.mimeType === 'application/vnd.google-apps.spreadsheet' ? 'sheet' : 'doc';
           const idxR = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({
             action:'index_source', client_id:cur.id,
@@ -2001,56 +1997,44 @@ async function syncSource(idx){
           })});
           const idxD = await idxR.json();
           if(!idxD.error) indexedCount++;
+
+          // Pause de 1.2s entre chaque fichier pour respecter le rate limit Voyage AI (3 RPM free tier)
+          // Supprimable si tu passes sur un plan payant Voyage AI
+          await new Promise(r => setTimeout(r, 1200));
         } catch(idxErr) { console.warn('syncSource: index error for', fileMeta.name, idxErr.message); }
       }
 
-      if(indexedCount > 0) {
-        addMsg('a', `✓ ${indexedCount} document(s) indexé(s) pour la recherche profonde.`);
-      }
+      addMsg('a', `✓ ${indexedCount} document(s) indexé(s) sur ${exportableFiles.length} pour la recherche profonde.`);
 
-      // driveBlock = fallback texte si generate_brief échoue (liste de noms uniquement)
-      const driveBlock = '--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') — '+d.files.length+' fichier(s) ---\n'
-        + d.files.map(f => '## '+f.filename).join('\n');
-      s.content_length = driveBlock.length;
       s.status = 'ok';
       s.last_synced_at = new Date().toISOString();
       s.folder_id = folderId;
+      s.content_length = indexedCount;
 
-      // CC-107 — Générer la fiche client structurée à partir des docs
-      // On stocke la fiche JSON dans clients.context (remplace l'ancien bloc Drive brut)
-      let briefGenerated = false;
-      try {
-        if (!docsForBrief.length) throw new Error('docsForBrief vide — aucun fichier exportable (Docs/Sheets uniquement)');
-        addMsg('a', '⏳ Génération de la fiche client en cours…');
-        const brief = await generateBrief(docsForBrief);
-        if (brief) {
-          briefGenerated = true;
-          s.content_length = cur.context ? cur.context.length : driveBlock.length;
-          addMsg('a', '✓ Drive synchronisé — '+d.files.length+' fichier(s) · Fiche client générée.');
-        } else {
-          throw new Error('generateBrief a retourné undefined sans erreur explicite');
-        }
-      } catch(briefErr) {
-        console.error('generate_brief failed:', briefErr.message);
-        addMsg('a', '⚠ Drive synchronisé mais génération de la fiche échouée : '+briefErr.message+'. Réessaie via "Régénérer la fiche".');
-      }
-
-      // Fallback : si la fiche n'a pas pu être générée, stocker le bloc Drive brut comme avant
-      if (!briefGenerated) {
-        const manualCtx = ($('ctx-ta').value||'').replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
-        const newCtx = [manualCtx, driveBlock].filter(Boolean).join('\n\n');
-        srcs[idx] = s;
-        setSources(srcs);
-        await sb.from('clients').update({context:newCtx, drive_folder_id:folderId, sources:cur.sources, members:cur.members}).eq('id',cur.id);
-        cur.context = newCtx; cur.drive_folder_id = folderId; addSession(cur);
-        addMsg('a','✓ Drive synchronisé — '+d.files.length+' fichier(s) mis à jour dans le contexte.');
-      }
-
-      // Mettre à jour les métadonnées de la source
+      // Sauvegarder l'état Drive immédiatement — la fiche sera générée en différé
       srcs[idx] = s;
       setSources(srcs);
       await sb.from('clients').update({drive_folder_id:folderId, sources:cur.sources, members:cur.members}).eq('id',cur.id);
       cur.drive_folder_id = folderId; addSession(cur);
+      addMsg('a', '✓ Drive synchronisé — génération de la fiche dans 60s (Voyage AI se stabilise)…');
+
+      // ── Génération différée de la fiche client ──
+      // Attendre 60s après la fin de l'indexation pour laisser Voyage AI récupérer
+      // et éviter le 422 Unprocessable Content d'Anthropic dû à la saturation.
+      setTimeout(async () => {
+        if (!docsForBrief.length) return;
+        try {
+          addMsg('a', '⏳ Génération de la fiche client en cours…');
+          const brief = await generateBrief(docsForBrief);
+          if (brief) {
+            addMsg('a', '✓ Fiche client générée avec succès.');
+            if ($('modal-settings').classList.contains('open')) renderBrief();
+          }
+        } catch(briefErr) {
+          console.error('generate_brief delayed failed:', briefErr.message);
+          addMsg('a', '⚠ Génération de la fiche échouée : '+briefErr.message+'. Réessaie via "Régénérer la fiche".');
+        }
+      }, 60_000);
 
       // CC-107 — Rafraîchir la fiche dans le modal si ouvert
       if ($('modal-settings').classList.contains('open')) renderBrief();
