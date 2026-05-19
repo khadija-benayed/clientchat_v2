@@ -1943,6 +1943,41 @@ async function syncSource(idx){
         content: (f.content||'').substring(0, 6000)
       }));
 
+      // --- CORRECTION : Indexation des fichiers pour le RAG ---
+      addMsg('a', '⏳ Indexation des documents en cours...');
+      let indexedCount = 0;
+      
+      for (const file of d.files) {
+        try {
+          const sourceType = file.type === 'csv' ? 'sheet' : 'doc';
+          const indexRes = await fetch(EDGE_URL, {
+            method: 'POST',
+            headers: EDGE_HEADERS,
+            body: JSON.stringify({
+              action: 'index_source',
+              client_id: cur.id,
+              source_type: sourceType,
+              source_name: file.filename,
+              content: file.content,
+            })
+          });
+          const indexData = await indexRes.json();
+          if (!indexData.error) {
+            indexedCount++;
+          }
+        } catch (idxErr) {
+          console.warn(`Erreur d'indexation pour ${file.filename}:`, idxErr);
+        }
+      }
+      if(indexedCount > 0) {
+          addMsg('a', `✓ ${indexedCount} document(s) indexé(s) pour la recherche profonde.`);
+      }
+      // --------------------------------------------------------
+
+      // driveBlock = fallback texte si generate_brief échoue (liste de noms uniquement)
+      const driveBlock = '--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') — '+d.files.length+' fichier(s) ---\n'
+        + d.files.map(f => '## '+f.filename).join('\n');
+
       // driveBlock = fallback texte si generate_brief échoue (liste de noms uniquement)
       const driveBlock = '--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') — '+d.files.length+' fichier(s) ---\n'
         + d.files.map(f => '## '+f.filename).join('\n');
