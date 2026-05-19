@@ -610,9 +610,9 @@ serve(async (req) => {
               preview: c.chunk_text.slice(0, 120),
             }));
           } else {
-            // Fallback CC-206 : aucun chunk pertinent
+            // Fallback CC-206 : aucun chunk pertinent — instruction explicite anti-invention
             systemWithRAG = systemWithRAG
-              + "\n\n[Extraits de documents pertinents]\nAucun document pertinent trouvé pour cette question. Réponds en te basant uniquement sur la fiche client et le contexte de la conversation.";
+              + "\n\n[Disponibilité des documents]\nAucun extrait pertinent trouvé dans les documents indexés pour cette question. Si tu ne trouves pas l information dans la fiche client ou le contexte disponible, dis-le explicitement à l utilisateur plutôt que d estimer ou d inventer.";
           }
         }
       } catch (ragErr) {
