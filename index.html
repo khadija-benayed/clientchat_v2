@@ -1170,6 +1170,7 @@ function buildSummariesBlock(){
 // Court-circuit : longueur < 200 chars pour éviter les faux positifs sur
 // des messages longs qui citent une tâche en passant.
 function isTaskAction(msg) {
+  if (isClientQuestion(msg)) return false; // question client prioritaire
   const verbs = [
     'marque','assigne','change','mets','met ','passe',
     'déplace','supprime','ajoute une tâche','crée','renomme',
