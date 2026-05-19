@@ -25,7 +25,7 @@ Supabase (Postgres + Realtime + pgvector)
 | Base données | Supabase Postgres + Realtime        | Supabase (gratuit) |
 | Vectoriel    | pgvector (embeddings VoyageIA)        | Supabase (gratuit) |
 | IA chat      | Claude claude-sonnet-4-6 (Anthropic)| API externe        |
-| Embeddings   | text-embedding-3-small (VoyageAI)     | API externe        |
+| Embeddings   | voyage-3 — 1024 dims (Voyage AI)      | API externe        |
 
 **100 % gratuit** sur les tiers actuels (hors coûts API Anthropic).
 
@@ -137,7 +137,7 @@ CREATE TABLE document_chunks (
   source_type text NOT NULL,
   source_name text NOT NULL,
   chunk_text  text NOT NULL,
-  embedding   vector(1536),
+  embedding   vector(1024),  -- Voyage AI voyage-3 (1024 dims)
   created_at  timestamptz DEFAULT now()
 );
 
@@ -187,18 +187,20 @@ GROUP BY 1
 ORDER BY 1 DESC;
 ```
 
-> `text-embedding-3-small` = **0.02 $ / 1M tokens**
+> `voyage-3` = **gratuit jusqu'à 200M tokens/mois** (Voyage AI free tier)
 
 ---
 
-## Alertes de coûts OpenAI
+## Surveillance des coûts embeddings (Voyage AI)
 
-Configurées sur **platform.openai.com → Settings → Billing → Usage limits** :
+Alertes configurées sur **dash.voyageai.com → Usage** :
 
-| Limite     | Valeur   |
-|------------|----------|
-| Hard limit | 5 $/mois |
-| Soft limit | 2 $/mois |
+| Limite     | Valeur          |
+|------------|-----------------|
+| Free tier  | 200M tokens/mois|
+| Au-delà    | 0.06 $ / 1M tokens |
+
+> Tant que le volume mensuel reste sous 200M tokens, le coût est **0 €**.
 
 ---
 
