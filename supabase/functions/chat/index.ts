@@ -294,6 +294,37 @@ serve(async (req) => {
         return new Response(JSON.stringify({ saved: false, summary: summaryText, error: "Supabase vars manquantes" }), { status: 200, headers });
       }
 
+      // CC-208 — Indexer le résumé dans document_chunks pour la recherche sémantique
+      // source_type = 'session' → badge 🕐 dans le front (CC-203 sourceIcon)
+      // Le delete-before-insert dans index_source gère la déduplication automatiquement
+      const VOYAGE_KEY_SUM = Deno.env.get("VOYAGE_API_KEY");
+      if (VOYAGE_KEY_SUM) {
+        try {
+          const sbAdmin2 = createClient(SUPABASE_URL!, SUPABASE_SERVICE_KEY!);
+          const sessionDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+          const sessionSourceName = `Session du ${sessionDate}`;
+
+          // Supprimer un éventuel chunk existant pour cette date (idempotent)
+          await sbAdmin2
+            .from("document_chunks")
+            .delete()
+            .match({ client_id, source_name: sessionSourceName });
+
+          // Vectoriser et insérer
+          const embedding = await embedQuery(summaryText, VOYAGE_KEY_SUM);
+          await sbAdmin2.from("document_chunks").insert({
+            client_id,
+            source_type: "session",
+            source_name: sessionSourceName,
+            chunk_text: summaryText,
+            embedding,
+          });
+        } catch (idxErr) {
+          // Non bloquant — le résumé est déjà sauvegardé dans session_summaries
+          console.error("CC-208 index session error (non bloquant):", (idxErr as Error).message);
+        }
+      }
+
       return new Response(JSON.stringify({ saved: true, summary: summaryText }), { status: 200, headers });
     }
 
