@@ -1943,40 +1943,39 @@ async function syncSource(idx){
         content: (f.content||'').substring(0, 6000)
       }));
 
-      // --- CORRECTION : Indexation des fichiers pour le RAG ---
+      // --- Indexation parallèle des fichiers pour le RAG ---
+      // Promise.all plutôt que boucle séquentielle :
+      // 25 fichiers × ~2s Voyage AI en séquentiel = ~50s → risque timeout 150s
+      // En parallèle : ~2-4s total (limité par la concurrence Voyage AI)
       addMsg('a', '⏳ Indexation des documents en cours...');
-      let indexedCount = 0;
-      
-      for (const file of d.files) {
-        try {
-          const sourceType = file.type === 'csv' ? 'sheet' : 'doc';
-          const indexRes = await fetch(EDGE_URL, {
-            method: 'POST',
-            headers: EDGE_HEADERS,
-            body: JSON.stringify({
-              action: 'index_source',
-              client_id: cur.id,
-              source_type: sourceType,
-              source_name: file.filename,
-              content: file.content,
-            })
-          });
-          const indexData = await indexRes.json();
-          if (!indexData.error) {
-            indexedCount++;
+      const indexResults = await Promise.all(
+        d.files.map(async (file) => {
+          try {
+            const sourceType = file.type === 'csv' ? 'sheet' : 'doc';
+            const indexRes = await fetch(EDGE_URL, {
+              method: 'POST',
+              headers: EDGE_HEADERS,
+              body: JSON.stringify({
+                action: 'index_source',
+                client_id: cur.id,
+                source_type: sourceType,
+                source_name: file.filename,
+                content: file.content,
+              })
+            });
+            const indexData = await indexRes.json();
+            return !indexData.error;
+          } catch (idxErr) {
+            console.warn(`Erreur d'indexation pour ${file.filename}:`, idxErr);
+            return false;
           }
-        } catch (idxErr) {
-          console.warn(`Erreur d'indexation pour ${file.filename}:`, idxErr);
-        }
-      }
+        })
+      );
+      const indexedCount = indexResults.filter(Boolean).length;
       if(indexedCount > 0) {
-          addMsg('a', `✓ ${indexedCount} document(s) indexé(s) pour la recherche profonde.`);
+        addMsg('a', `✓ ${indexedCount} document(s) indexé(s) pour la recherche profonde.`);
       }
       // --------------------------------------------------------
-
-      // driveBlock = fallback texte si generate_brief échoue (liste de noms uniquement)
-      const driveBlock = '--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') — '+d.files.length+' fichier(s) ---\n'
-        + d.files.map(f => '## '+f.filename).join('\n');
 
       // driveBlock = fallback texte si generate_brief échoue (liste de noms uniquement)
       const driveBlock = '--- Contenu Drive ('+new Date().toLocaleDateString('fr')+') — '+d.files.length+' fichier(s) ---\n'
@@ -2056,6 +2055,39 @@ async function removeSource(idx){
   if(!window.confirm('Supprimer la source "'+s.name+'" ?')) return;
   srcs.splice(idx,1);
   setSources(srcs);
+
+  // ── Purger les embeddings de cette source dans document_chunks ──────────
+  // IMPORTANT : les chunks sont indexés par NOM DE FICHIER individuel (file.filename),
+  // pas par le nom de la source Drive (s.name = "Google Drive — Décathlon").
+  // Pour une source Drive : on supprime tous les chunks du client dont source_type = 'doc' ou 'sheet'.
+  // Pour un fichier PDF : source_name = file.name → correspond exactement.
+  try {
+    if (s.type === 'drive') {
+      // Supprimer TOUS les chunks doc/sheet de ce client (ils viennent tous du Drive)
+      await fetch(EDGE_URL, {
+        method: 'POST',
+        headers: EDGE_HEADERS,
+        body: JSON.stringify({
+          action: 'delete_source_chunks',
+          client_id: cur.id,
+          source_type_filter: ['doc', 'sheet'], // supprime par type, pas par nom
+        })
+      });
+    } else {
+      // Pour un fichier PDF : source_name = file.name → match direct
+      await fetch(EDGE_URL, {
+        method: 'POST',
+        headers: EDGE_HEADERS,
+        body: JSON.stringify({
+          action: 'delete_source_chunks',
+          client_id: cur.id,
+          source_name: s.name,
+        })
+      });
+    }
+  } catch(e) {
+    console.warn('removeSource: purge document_chunks error (non bloquant):', e.message);
+  }
 
   if(s.type==='drive'){
     // CC-107 — Supprimer la source Drive invalide la fiche (générée depuis Drive)
@@ -2164,6 +2196,24 @@ async function confirmAddSource(type){
 
         await sb.from('clients').update({context:newCtx, sources:cur.sources}).eq('id',cur.id);
         cur.context = newCtx; addSession(cur);
+
+        // ── Indexer le PDF dans document_chunks pour le RAG ──────────────
+        try {
+          await fetch(EDGE_URL, {
+            method: 'POST',
+            headers: EDGE_HEADERS,
+            body: JSON.stringify({
+              action: 'index_source',
+              client_id: cur.id,
+              source_type: 'file',
+              source_name: file.name,
+              content: result.text, // résumé extracté — suffisant pour la recherche sémantique
+            })
+          });
+        } catch(idxErr) {
+          console.warn('confirmAddSource file: index_source error (non bloquant):', idxErr.message);
+        }
+        // ─────────────────────────────────────────────────────────────────
 
         closeModal('modal-add-source');
         fileInput.value='';

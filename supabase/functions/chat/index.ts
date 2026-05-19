@@ -117,7 +117,10 @@ async function exportDriveFile(file: DriveFile, token: string): Promise<DriveFil
     const res = await fetch(exportUrl, { headers: authHeader });
     if (!res.ok) { console.error(`Export failed for ${file.name}: ${res.status}`); return null; }
     const content = await res.text();
-    return { filename: file.name, type, content: content.substring(0, 4000), modifiedTime: file.modifiedTime };
+    // Budget : 50 000 chars ≈ 12 500 tokens par fichier.
+    // Permet 25 chunks de 2 000 chars — couvre la quasi-totalité des docs métier.
+    // Un Google Doc de 50k chars représente ~35 pages A4, ce qui est déjà très long.
+    return { filename: file.name, type, content: content.substring(0, 50_000), modifiedTime: file.modifiedTime };
   } catch (e) {
     console.error(`Export error for ${file.name}:`, e);
     return null;
@@ -352,24 +355,46 @@ serve(async (req) => {
         return new Response(JSON.stringify({ error: `Auth Google échouée : ${(e as Error).message}` }), { status: 500, headers });
       }
 
-      // Lister récursivement TOUS les fichiers sans limite de profondeur
-      // Protection anti-boucle infinie : visiter chaque dossier une seule fois
+      // Lister récursivement TOUS les fichiers avec pagination complète (nextPageToken).
+      // Protection anti-boucle infinie : visiter chaque dossier une seule fois.
+      // Limite globale : MAX_FILES pour éviter les dossiers géants (mémoire + timeout).
       const visitedFolders = new Set<string>();
+      const MAX_FILES = 500; // au-delà de 500 fichiers, on tronque volontairement
+      let totalFilesFound = 0;
+
       async function listFilesInFolder(fId: string): Promise<DriveFile[]> {
         if (visitedFolders.has(fId)) return [];
+        if (totalFilesFound >= MAX_FILES) return [];
         visitedFolders.add(fId);
-        const url = new URL("https://www.googleapis.com/drive/v3/files");
-        url.searchParams.set("q", `'${fId}' in parents and trashed = false`);
-        url.searchParams.set("fields", "files(id,name,mimeType,modifiedTime)");
-        url.searchParams.set("pageSize", "100");
-        url.searchParams.set("supportsAllDrives", "true");
-        url.searchParams.set("includeItemsFromAllDrives", "true");
-        const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
-        if (!res.ok) return [];
-        const data = await res.json();
-        const items: DriveFile[] = data.files || [];
-        const files = items.filter(f => f.mimeType !== "application/vnd.google-apps.folder");
-        const subFolders = items.filter(f => f.mimeType === "application/vnd.google-apps.folder");
+
+        const allItems: DriveFile[] = [];
+        let pageToken: string | undefined = undefined;
+
+        // Pagination : boucler jusqu'à ce qu'il n'y ait plus de nextPageToken
+        do {
+          const url = new URL("https://www.googleapis.com/drive/v3/files");
+          url.searchParams.set("q", `'${fId}' in parents and trashed = false`);
+          // nextPageToken inclus dans fields pour pouvoir paginer
+          url.searchParams.set("fields", "nextPageToken,files(id,name,mimeType,modifiedTime)");
+          url.searchParams.set("pageSize", "100"); // max autorisé par l'API Drive
+          url.searchParams.set("supportsAllDrives", "true");
+          url.searchParams.set("includeItemsFromAllDrives", "true");
+          if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+          const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
+          if (!res.ok) break;
+          const data = await res.json();
+
+          allItems.push(...(data.files || []));
+          pageToken = data.nextPageToken; // undefined si dernière page
+        } while (pageToken);
+
+        const files = allItems.filter(f => f.mimeType !== "application/vnd.google-apps.folder");
+        const subFolders = allItems.filter(f => f.mimeType === "application/vnd.google-apps.folder");
+
+        totalFilesFound += files.length;
+
+        // Récursion sur les sous-dossiers (limit globale MAX_FILES respectée)
         const subFiles = await Promise.all(subFolders.map(sf => listFilesInFolder(sf.id)));
         return [...files, ...subFiles.flat()];
       }
@@ -421,23 +446,39 @@ serve(async (req) => {
         return new Response(JSON.stringify({ error: `Auth Google échouée : ${(e as Error).message}` }), { status: 500, headers });
       }
 
-      // Même récursion que read_drive_folder — sans exportDriveFile
+      // Même récursion que read_drive_folder — sans exportDriveFile — avec pagination complète
       const visited = new Set<string>();
+      let metaTotalFound = 0;
+      const META_MAX = 500;
+
       async function listMetaInFolder(fId: string): Promise<DriveFile[]> {
         if (visited.has(fId)) return [];
+        if (metaTotalFound >= META_MAX) return [];
         visited.add(fId);
-        const url = new URL("https://www.googleapis.com/drive/v3/files");
-        url.searchParams.set("q", `'${fId}' in parents and trashed = false`);
-        url.searchParams.set("fields", "files(id,name,mimeType,modifiedTime)");
-        url.searchParams.set("pageSize", "100");
-        url.searchParams.set("supportsAllDrives", "true");
-        url.searchParams.set("includeItemsFromAllDrives", "true");
-        const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
-        if (!res.ok) return [];
-        const data = await res.json();
-        const items: DriveFile[] = data.files || [];
-        const files = items.filter(f => f.mimeType !== "application/vnd.google-apps.folder");
-        const subFolders = items.filter(f => f.mimeType === "application/vnd.google-apps.folder");
+
+        const allItems: DriveFile[] = [];
+        let pageToken: string | undefined = undefined;
+
+        do {
+          const url = new URL("https://www.googleapis.com/drive/v3/files");
+          url.searchParams.set("q", `'${fId}' in parents and trashed = false`);
+          url.searchParams.set("fields", "nextPageToken,files(id,name,mimeType,modifiedTime)");
+          url.searchParams.set("pageSize", "100");
+          url.searchParams.set("supportsAllDrives", "true");
+          url.searchParams.set("includeItemsFromAllDrives", "true");
+          if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+          const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
+          if (!res.ok) break;
+          const data = await res.json();
+
+          allItems.push(...(data.files || []));
+          pageToken = data.nextPageToken;
+        } while (pageToken);
+
+        const files = allItems.filter(f => f.mimeType !== "application/vnd.google-apps.folder");
+        const subFolders = allItems.filter(f => f.mimeType === "application/vnd.google-apps.folder");
+        metaTotalFound += files.length;
         const subFiles = await Promise.all(subFolders.map(sf => listMetaInFolder(sf.id)));
         return [...files, ...subFiles.flat()];
       }
@@ -744,6 +785,63 @@ serve(async (req) => {
         JSON.stringify({ updated, checked: files.length }),
         { status: 200, headers }
       );
+    }
+
+    // ── delete_source_chunks — purge complète des embeddings d'une source ─
+    // Entrée A (PDF) : { action: 'delete_source_chunks', client_id, source_name }
+    // Entrée B (Drive) : { action: 'delete_source_chunks', client_id, source_type_filter: ['doc','sheet'] }
+    // Sortie : { deleted: true }
+    if (action === "delete_source_chunks") {
+      if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+        return new Response(JSON.stringify({ error: "Variables Supabase manquantes." }), { status: 500, headers });
+      }
+
+      const sbAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+      const { source_name: srcName, source_type_filter } = body;
+
+      let delResult;
+
+      if (source_type_filter && Array.isArray(source_type_filter)) {
+        // Mode Drive : supprimer TOUS les chunks doc/sheet de ce client
+        // Les fichiers Drive sont indexés par leur nom individuel (file.filename),
+        // pas par le nom de la source Drive — on filtre donc par type.
+        if (client_id) {
+          delResult = await sbAdmin
+            .from("document_chunks")
+            .delete()
+            .eq("client_id", client_id)
+            .in("source_type", source_type_filter);
+        } else {
+          delResult = await sbAdmin
+            .from("document_chunks")
+            .delete()
+            .in("source_type", source_type_filter);
+        }
+      } else if (srcName) {
+        // Mode PDF : supprimer par source_name exact
+        if (client_id) {
+          delResult = await sbAdmin
+            .from("document_chunks")
+            .delete()
+            .eq("source_name", srcName)
+            .eq("client_id", client_id);
+        } else {
+          delResult = await sbAdmin
+            .from("document_chunks")
+            .delete()
+            .eq("source_name", srcName);
+        }
+      } else {
+        return new Response(JSON.stringify({ error: "source_name ou source_type_filter requis." }), { status: 400, headers });
+      }
+
+      if (delResult.error) {
+        console.error("delete_source_chunks error:", delResult.error.message);
+        return new Response(JSON.stringify({ error: delResult.error.message }), { status: 500, headers });
+      }
+
+      console.log(`delete_source_chunks: purge client ${client_id || "global"} — mode ${source_type_filter ? "type:" + source_type_filter.join(",") : "name:" + srcName}.`);
+      return new Response(JSON.stringify({ deleted: true }), { status: 200, headers });
     }
 
     // ── RAG — CC-203 : recherche sémantique avant appel Claude ───────────
