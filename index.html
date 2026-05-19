@@ -1979,7 +1979,7 @@ async function syncSource(idx){
           if(!expD.error && expD.file?.content) {
             docsForBrief.push({ filename: expD.file.filename, content: expD.file.content.substring(0, 6000) });
           }
-        } catch(_) {}
+        } catch(expErr) { console.warn('syncSource: export brief error for', f.name, expErr.message); }
       }
       // d.files simulé pour compatibilité avec le code generate_brief plus bas
       const d = { files: docsForBrief.map(f => ({ filename: f.filename, content: f.content, driveId: null })) };
@@ -2001,7 +2001,7 @@ async function syncSource(idx){
           })});
           const idxD = await idxR.json();
           if(!idxD.error) indexedCount++;
-        } catch(_) {}
+        } catch(idxErr) { console.warn('syncSource: index error for', fileMeta.name, idxErr.message); }
       }
 
       if(indexedCount > 0) {

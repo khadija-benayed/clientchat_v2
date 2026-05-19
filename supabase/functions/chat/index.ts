@@ -300,7 +300,7 @@ serve(async (req) => {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-5",
+          model: "claude-sonnet-4-6",
           max_tokens: 600,
           system: "Tu es un assistant qui résume des sessions de travail de manière factuelle et concise. Tu reçois un historique de conversation et tu produis un résumé structuré.",
           messages: [{ role: "user", content: "Résume cette session en 5 points max : décisions prises, infos importantes, actions à faire. Format : liste à tirets, sois factuel et concis. Ne mets pas de titre.\n\nSession :\n" + historyText }],
@@ -457,12 +457,6 @@ serve(async (req) => {
       return new Response(JSON.stringify({ files, sa_email: sa.client_email }), { status: 200, headers });
     }
 
-    // ── list_drive_metadata — CC-210 ───────────────────────────────────────
-    // Retourne uniquement {id, name, mimeType, modifiedTime} pour tous les fichiers du dossier.
-    // N'appelle PAS exportDriveFile — aucun téléchargement de contenu.
-    // Utilisé par checkDriveUpdates() pour la vérification légère initiale (~100ms).
-    // Entrée : { action: 'list_drive_metadata', folder_id: string }
-    // Sortie : { files: [{id, name, mimeType, modifiedTime}], sa_email: string }
     // ── export_single_file ────────────────────────────────────────────────
     // Exporte le contenu d'UN seul fichier Drive par son ID.
     // Utilisé par checkDriveUpdates pour éviter le timeout de read_drive_folder
@@ -501,6 +495,12 @@ serve(async (req) => {
       return new Response(JSON.stringify({ file: { ...result, driveId: file_id } }), { status: 200, headers });
     }
 
+    // ── list_drive_metadata — CC-210 ───────────────────────────────────────
+    // Retourne uniquement {id, name, mimeType, modifiedTime} pour tous les fichiers du dossier.
+    // N'appelle PAS exportDriveFile — aucun téléchargement de contenu.
+    // Utilisé par checkDriveUpdates() pour la vérification légère initiale (~100ms).
+    // Entrée : { action: 'list_drive_metadata', folder_id: string }
+    // Sortie : { files: [{id, name, mimeType, modifiedTime}], sa_email: string }
     if (action === "list_drive_metadata") {
       const folderId = body.folder_id;
       if (!folderId)
