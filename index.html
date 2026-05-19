@@ -281,14 +281,155 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
 .msg.a .bubble { background: var(--sb-blue-lt); color: var(--sb-navy); border: none; }
 .msg.u .bubble { background: var(--sb-orange); color: #fff; }
 .msg-who { color: var(--tx2); }
+
+/* Transformation des avatars en hexagones "Smart Bees" */
+.cli-av, .tb-av, .av {
+  border-radius: 0 !important; /* On casse l'arrondi de base */
+  border: none !important;
+  clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
+}
+
+/* On ajuste l'avatar du client sélectionné dans la barre latérale pour qu'il pète bien */
+.cli-item.on .cli-av { 
+  background: var(--sb-orange); 
+  color: white; 
+}
+
+/* Animation de chargement aux couleurs Smart Bees */
+.thinking .dp { width: 8px; height: 8px; }
+.thinking .dp:nth-child(1) { background: var(--sb-orange); }
+.thinking .dp:nth-child(2) { background: var(--sb-coral); }
+.thinking .dp:nth-child(3) { background: var(--sb-blue-md); }
+
+/* --- LE DASHBOARD TO-DO "SMART BEES" --- */
+
+/* 1. Les filtres façon "Pilules Premium" */
+.fil {
+  background: var(--sur2);
+  border: 1px solid transparent;
+  color: var(--tx2);
+  transition: all 0.2s ease;
+  font-weight: 500;
+}
+.fil:hover {
+  background: white;
+  color: var(--sb-orange);
+  border-color: var(--sb-orange);
+  transform: translateY(-1px);
+}
+.fil.on {
+  background: var(--sb-navy);
+  color: white;
+  border-color: var(--sb-navy);
+  box-shadow: 0 2px 6px rgba(25, 54, 68, 0.2);
+}
+
+/* 2. Les cartes de Tâches : Effet "Slide" et ombres douces */
+.task {
+  border: 1px solid var(--brd);
+  border-left: 4px solid var(--sb-blue-lt); /* Marqueur visuel discret sur le côté */
+  box-shadow: 0 2px 4px rgba(25, 54, 68, 0.04);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.task:hover {
+  border-color: var(--sb-blue-md);
+  border-left-color: var(--sb-orange); /* Le marqueur passe orange au survol */
+  transform: translateX(4px); /* Petit effet de glissement vers la droite super satisfaisant */
+  box-shadow: 0 4px 12px rgba(25, 54, 68, 0.08);
+}
+
+/* 3. Les badges de Priorité avec la charte */
+.p1 { background: rgba(255, 103, 114, 0.1); color: var(--sb-coral); border: 1px solid rgba(255, 103, 114, 0.3); }
+.p2 { background: rgba(248, 155, 28, 0.1); color: var(--sb-orange); border: 1px solid rgba(248, 155, 28, 0.3); }
+.p3 { background: rgba(0, 119, 155, 0.1); color: var(--sb-blue-md); border: 1px solid rgba(0, 119, 155, 0.3); }
+
+/* 4. Les points de statut de groupe (les "gdot") transformés en mini-hexagones */
+.gdot {
+  clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
+  border-radius: 0;
+  width: 10px;
+  height: 10px;
+}
+
+/* 5. On stylise la scrollbar pour qu'elle soit super discrète */
+.todo-body::-webkit-scrollbar, .msgs::-webkit-scrollbar {
+  width: 6px;
+}
+.todo-body::-webkit-scrollbar-thumb, .msgs::-webkit-scrollbar-thumb {
+  background: var(--brd2);
+  border-radius: 10px;
+}
+.todo-body::-webkit-scrollbar-thumb:hover, .msgs::-webkit-scrollbar-thumb:hover {
+  background: var(--sb-blue-md);
+}
+
+/* --- ÉCRAN DE CONNEXION "SMART BEES" --- */
+#login {
+  /* Un léger halo bleu clair en fond pour la profondeur */
+  background: radial-gradient(circle at top left, rgba(194, 226, 245, 0.4) 0%, var(--bg) 50%);
+}
+
+.card {
+  border-top: 4px solid var(--sb-orange); /* La ligne signature en haut */
+  box-shadow: 0 10px 40px rgba(25, 54, 68, 0.08); /* Ombre douce et premium */
+  border-radius: 16px;
+}
+
+/* L'animation de l'abeille */
+.bee-login-wrapper {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.flying-bee {
+  /* Fait flotter l'abeille de haut en bas */
+  animation: hoverBee 3s ease-in-out infinite;
+}
+
+.wing-left {
+  transform-origin: 45px 45px;
+  /* Battement d'aile gauche ultra rapide */
+  animation: flapLeft 0.08s linear infinite alternate;
+}
+
+.wing-right {
+  transform-origin: 55px 45px;
+  /* Battement d'aile droite ultra rapide */
+  animation: flapRight 0.08s linear infinite alternate;
+}
+
+@keyframes hoverBee {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-8px); }
+}
+@keyframes flapLeft {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(-25deg); }
+}
+@keyframes flapRight {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(25deg); }
+}
 </style>
 </head>
 <body>
 
 <div id="login">
 <div class="card">
-  <div class="brand">Client Chat</div>
-  <div class="brand-sub">Espace projet interne</div>
+  <div class="bee-login-wrapper">
+    <svg class="flying-bee" width="60" height="60" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path class="wing-left" d="M45 45 C 20 10, 0 40, 40 60 Z" fill="var(--sb-blue-lt)" opacity="0.9"/>
+      <path class="wing-right" d="M55 45 C 80 10, 100 40, 60 60 Z" fill="var(--sb-blue-lt)" opacity="0.9"/>
+      <polygon points="50,30 65,40 65,65 50,75 35,65 35,40" fill="var(--sb-navy)"/>
+      <polygon points="35,47 65,47 65,52 35,52" fill="var(--sb-orange)"/>
+      <polygon points="37,58 63,58 63,63 37,63" fill="var(--sb-orange)"/>
+      <circle cx="50" cy="28" r="11" fill="var(--sb-navy)"/>
+      <polygon points="46,74 54,74 50,82" fill="var(--sb-coral)"/>
+    </svg>
+  </div>
+  <div class="brand" style="text-align: center; font-size: 24px; color: var(--sb-navy); font-weight: 700;">Smart Bees Chat</div>
+  <div class="brand-sub" style="text-align: center; margin-bottom: 28px;">La ruche de nos projets</div>
   <div class="tabs">
     <button class="tab on" onclick="setTab('join',this)">Rejoindre</button>
     <button class="tab" onclick="setTab('create',this)">Créer un client</button>
@@ -327,7 +468,14 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
     </div>
   </div>
   <div class="main">
-    <div class="empty" id="empty"><div class="empty-t">Sélectionne un client</div><div class="empty-s">ou crée un nouvel espace</div></div>
+    <div class="empty" id="empty">
+  <svg width="90" height="90" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-bottom: 12px; filter: drop-shadow(0 4px 6px rgba(25, 54, 68, 0.1));">
+    <path d="M46 20 L28 20 L10 50 L28 80 L46 80 Z" fill="var(--sb-orange)"/>
+    <path d="M54 20 L72 20 L90 50 L72 80 L54 80 Z" fill="var(--sb-navy)"/>
+  </svg>
+  <div class="empty-t" style="color: var(--sb-navy); font-size: 20px;">Bienvenue dans la Ruche</div>
+  <div class="empty-s">Sélectionne un espace client pour commencer à butiner.</div>
+</div>
     <div id="workspace" class="hide">
       <div class="topbar">
         <div class="tb-av" id="tb-av">?</div>
