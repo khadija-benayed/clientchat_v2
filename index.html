@@ -604,18 +604,6 @@ function getMembersFromList(containerId) {
   return members;
 }
 
-function parseMembersStr(s){
-  // Supporte deux formats :
-  // "KB:Khadija Ben Ayed PH:Pierre Henry" (nouveau format recommandé)
-  // "KB PH" (ancien format simple)
-  return (s||'').trim().split(/\s+/).filter(Boolean).map(x=>{
-    if(x.includes(':')) {
-      const [ini, ...nameParts] = x.split(':');
-      return {initials:ini.toUpperCase(), name:nameParts.join(':').trim() || ini.toUpperCase()};
-    }
-    return {initials:x.toUpperCase(), name:x.toUpperCase()};
-  });
-}
 
 function setTab(t, btn){
   document.querySelectorAll('.tab').forEach(b=>b.classList.remove('on'));
