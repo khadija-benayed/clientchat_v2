@@ -1092,33 +1092,56 @@ async function checkDriveUpdates(clientObj) {
   }
 }
 
-// CC-212 — Doc cache : 10 fichiers Drive récents en mémoire
+// CC-212 — Doc cache : lit les chunks déjà indexés dans document_chunks (Supabase)
+// Zéro appel Drive supplémentaire — pas de conflit avec checkDriveUpdates.
+// Regroupe les chunks par source_name, reconstitue le texte, garde les 10 sources les plus récentes.
 async function loadDocCache(clientObj){
   try {
-    const raw = clientObj.sources; const srcs = Array.isArray(raw) ? raw : JSON.parse(raw||'[]');
-    const driveSrc = srcs.filter(s => s.type==='drive' && s.folder_id);
-    if(!driveSrc.length){ clientObj._docCache = []; return; }
+    // Vérifier qu'il y a bien une source Drive connectée
+    const raw = clientObj.sources;
+    const srcs = Array.isArray(raw) ? raw : JSON.parse(raw||'[]');
+    const hasDrive = srcs.some(s => s.type==='drive' && s.folder_id) || !!clientObj.drive_folder_id;
+    if(!hasDrive){ clientObj._docCache = []; return; }
 
-    const meta = await callEdge({action:'list_drive_metadata', folder_id:driveSrc[0].folder_id});
-    const top10 = (meta.files||[])
-      .sort((a,b) => new Date(b.modifiedTime) - new Date(a.modifiedTime))
-      .slice(0,10);
-    if(!top10.length){ clientObj._docCache = []; return; }
+    // Lire TOUS les chunks Drive de ce client depuis Supabase
+    // On filtre source_type drive/doc/sheet — pas les sessions
+    const { data: rows, error } = await sb
+      .from('document_chunks')
+      .select('source_name, source_id, chunk_text, last_indexed_at')
+      .eq('client_id', clientObj.id)
+      .in('source_type', ['doc','sheet','drive'])
+      .order('last_indexed_at', { ascending: false });
 
-    // Promise.allSettled : si un export échoue, les autres continuent
-    const results = await Promise.allSettled(
-      top10.map(f => callEdge({action:'export_single_file', file_id:f.id, file_name:f.name, mime_type:f.mimeType}))
-    );
+    if(error) throw new Error(error.message);
+    if(!rows || rows.length === 0){ clientObj._docCache = []; return; }
 
-    clientObj._docCache = top10
-      .map((f,i) => ({
-        filename: f.name,
-        modifiedTime: f.modifiedTime,
-        content: results[i].status==='fulfilled' ? (results[i].value?.content||'') : ''
-      }))
-      .filter(d => d.content.trim());
+    // Regrouper les chunks par source_name et reconstituer le texte
+    const sourceMap = new Map();
+    for(const row of rows){
+      const key = row.source_id || row.source_name;
+      if(!sourceMap.has(key)){
+        sourceMap.set(key, {
+          filename: row.source_name,
+          last_indexed_at: row.last_indexed_at,
+          chunks: []
+        });
+      }
+      sourceMap.get(key).chunks.push(row.chunk_text);
+    }
 
-    console.log('[CC-212] Doc cache : '+clientObj._docCache.length+'/'+top10.length+' fichiers chargés');
+    // Trier par last_indexed_at desc, prendre les 10 plus récentes
+    const sorted = [...sourceMap.values()]
+      .sort((a,b) => new Date(b.last_indexed_at) - new Date(a.last_indexed_at))
+      .slice(0, 10);
+
+    clientObj._docCache = sorted.map(s => ({
+      filename: s.filename,
+      modifiedTime: s.last_indexed_at,
+      // Reconstituer le texte depuis les chunks (max 8000 chars par source pour buildL2)
+      content: s.chunks.join('\n').slice(0, 8000)
+    })).filter(d => d.content.trim());
+
+    console.log('[CC-212] Doc cache : '+clientObj._docCache.length+' sources chargées depuis Supabase ('+rows.length+' chunks)');
   } catch(e){
     console.warn('[CC-212] loadDocCache error (non bloquant):', e.message);
     clientObj._docCache = [];
@@ -1151,10 +1174,13 @@ async function selectClient(c){
   // Stocker pour injection dans le system prompt
   cur._summaries = prevSummaries;
   addMsg('a','Bonjour ! Je suis au courant du projet '+cur.name+(mStr?' — équipe : '+mStr:'')+'. Pose tes questions ou dis-moi ce que tu avances.');
-  // CC-209 — Vérifier les mises à jour Drive en arrière-plan (non bloquant)
-  checkDriveUpdates(cur);
-  // CC-212 — Charger le doc cache en arrière-plan (non bloquant)
-  loadDocCache(cur);
+  // CC-209 + CC-212 — Séquencer : indexer d'abord, charger le cache ensuite
+  // checkDriveUpdates est awaité pour que loadDocCache lise des chunks à jour.
+  // Les deux sont dans un bloc non-bloquant pour ne pas retarder l'affichage du chat.
+  (async () => {
+    await checkDriveUpdates(cur);   // indexe les nouveaux fichiers Drive en base
+    await loadDocCache(cur);        // lit depuis document_chunks — données fraîches garanties
+  })().catch(e => console.warn('[CC-212] update+cache pipeline error:', e.message));
 }
 
 async function loadTasks(){
