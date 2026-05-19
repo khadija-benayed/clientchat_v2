@@ -560,12 +560,14 @@ serve(async (req) => {
       }
 
       // ── 4. Insérer dans document_chunks ──────────────────────────────────
+      const now = new Date().toISOString();
       const rows = chunks.map((chunk, i) => ({
         client_id: client_id || null, // null possible pour fiches entreprise Phase 3
         source_type,
         source_name,
         chunk_text: chunk,
         embedding: embeddings[i],
+        last_indexed_at: now, // CC-209 — horodatage pour détection de stale
       }));
 
       const { error: insertError } = await sbAdmin.from("document_chunks").insert(rows);
@@ -592,6 +594,92 @@ serve(async (req) => {
 
       return new Response(
         JSON.stringify({ chunks_created: chunks.length }),
+        { status: 200, headers }
+      );
+    }
+
+    // ── check_updates — CC-209 ────────────────────────────────────────────
+    // Compare modifiedTime Drive vs last_indexed_at en base.
+    // Re-indexe en arrière-plan les fichiers modifiés depuis la dernière indexation.
+    // Entrée : { action: 'check_updates', client_id, files: [{source_name, source_type, content, modifiedTime}] }
+    // Sortie : { updated: [{source_name}], checked: number }
+    if (action === "check_updates") {
+      if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+        return new Response(JSON.stringify({ error: "Variables Supabase manquantes." }), { status: 500, headers });
+      }
+      const VOYAGE_KEY_CU = Deno.env.get("VOYAGE_API_KEY");
+      if (!VOYAGE_KEY_CU) {
+        return new Response(JSON.stringify({ error: "VOYAGE_API_KEY manquante." }), { status: 500, headers });
+      }
+
+      const { files } = body as {
+        files: { source_name: string; source_type: string; content: string; modifiedTime: string }[];
+      };
+      if (!files || !Array.isArray(files) || files.length === 0) {
+        return new Response(JSON.stringify({ updated: [], checked: 0 }), { status: 200, headers });
+      }
+
+      const sbAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+      const updated: string[] = [];
+
+      for (const file of files) {
+        // Récupérer le last_indexed_at le plus récent pour ce fichier/client
+        const { data: existing } = await sbAdmin
+          .from("document_chunks")
+          .select("last_indexed_at")
+          .match({ client_id: client_id || null, source_name: file.source_name })
+          .order("last_indexed_at", { ascending: false })
+          .limit(1)
+          .single();
+
+        const lastIndexed = existing?.last_indexed_at
+          ? new Date(existing.last_indexed_at).getTime()
+          : 0;
+        const modifiedTs = new Date(file.modifiedTime).getTime();
+
+        // Re-indexer seulement si le doc a été modifié après la dernière indexation
+        if (modifiedTs <= lastIndexed) continue;
+
+        try {
+          const isCSV = file.source_type === "sheet" || file.source_name.endsWith(".csv");
+          const chunks = isCSV ? chunkCSV(file.content) : chunkText(file.content);
+          if (chunks.length === 0) continue;
+
+          const embeddings = await embedChunks(chunks, VOYAGE_KEY_CU);
+          if (embeddings.length !== chunks.length) continue;
+
+          // Supprimer anciens chunks + insérer nouveaux
+          await sbAdmin.from("document_chunks").delete()
+            .match({ client_id: client_id || null, source_name: file.source_name });
+
+          const indexedAt = new Date().toISOString();
+          const rows = chunks.map((chunk, i) => ({
+            client_id: client_id || null,
+            source_type: file.source_type,
+            source_name: file.source_name,
+            chunk_text: chunk,
+            embedding: embeddings[i],
+            last_indexed_at: indexedAt,
+          }));
+          await sbAdmin.from("document_chunks").insert(rows);
+
+          // Logger la re-indexation
+          await sbAdmin.from("embedding_logs").insert({
+            client_id: client_id || null,
+            source_name: file.source_name,
+            chunks_count: chunks.length,
+            tokens_estimated: chunks.reduce((acc, c) => acc + Math.ceil(c.length / 4), 0),
+          });
+
+          updated.push(file.source_name);
+        } catch (e) {
+          console.error(`check_updates: re-indexation ${file.source_name} error:`, (e as Error).message);
+          // Non bloquant — on continue avec les autres fichiers
+        }
+      }
+
+      return new Response(
+        JSON.stringify({ updated, checked: files.length }),
         { status: 200, headers }
       );
     }

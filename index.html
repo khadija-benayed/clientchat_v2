@@ -710,6 +710,59 @@ function renderSidebar(){
   });
 }
 
+// CC-209 — Notification discrète de mise à jour (disparaît après 4s)
+function showUpdateNotif(count) {
+  let notif = document.getElementById('update-notif');
+  if (!notif) {
+    notif = document.createElement('div');
+    notif.id = 'update-notif';
+    notif.style.cssText = 'position:fixed;bottom:20px;right:20px;background:var(--bg2,#1e1e2e);border:1px solid var(--brd,#333);border-radius:8px;padding:10px 16px;font-size:13px;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,.3);transition:opacity .4s;';
+    document.body.appendChild(notif);
+  }
+  notif.textContent = '🔄 ' + count + ' document' + (count > 1 ? 's' : '') + ' mis à jour';
+  notif.style.opacity = '1';
+  clearTimeout(notif._timer);
+  notif._timer = setTimeout(() => { notif.style.opacity = '0'; }, 4000);
+}
+
+// CC-209 — Vérifier et re-indexer les docs Drive modifiés depuis la dernière indexation
+async function checkDriveUpdates(clientObj) {
+  if (!clientObj?.drive_folder_id) return; // Pas de Drive connecté
+  try {
+    // 1. Relire le dossier Drive pour avoir les modifiedTime à jour
+    const driveRes = await fetch(EDGE_URL, {
+      method: 'POST',
+      headers: EDGE_HEADERS,
+      body: JSON.stringify({ action: 'read_drive_folder', folder_id: clientObj.drive_folder_id })
+    });
+    const driveData = await driveRes.json();
+    if (!driveData.files || driveData.files.length === 0) return;
+
+    // 2. Construire le payload pour check_updates
+    const files = driveData.files.map(f => ({
+      source_name: f.filename,
+      source_type: f.type,       // 'doc' | 'sheet'
+      content: f.content,
+      modifiedTime: f.modifiedTime,
+    }));
+
+    const checkRes = await fetch(EDGE_URL, {
+      method: 'POST',
+      headers: EDGE_HEADERS,
+      body: JSON.stringify({ action: 'check_updates', client_id: clientObj.id, files })
+    });
+    const checkData = await checkRes.json();
+
+    // 3. Notifier si des docs ont été re-indexés
+    if (checkData.updated && checkData.updated.length > 0) {
+      showUpdateNotif(checkData.updated.length);
+    }
+  } catch (e) {
+    // Non bloquant — erreur silencieuse en arrière-plan
+    console.warn('checkDriveUpdates error (non bloquant):', e.message);
+  }
+}
+
 async function selectClient(c){
   // CC-102 — Sauvegarder la session courante avant de switcher
   if(cur && cur.id !== c.id && !sessionSaved && sessionExchangeCount >= 3) {
@@ -736,6 +789,8 @@ async function selectClient(c){
   // Stocker pour injection dans le system prompt
   cur._summaries = prevSummaries;
   addMsg('a','Bonjour ! Je suis au courant du projet '+cur.name+(mStr?' — équipe : '+mStr:'')+'. Pose tes questions ou dis-moi ce que tu avances.');
+  // CC-209 — Vérifier les mises à jour Drive en arrière-plan (non bloquant)
+  checkDriveUpdates(cur);
 }
 
 async function loadTasks(){
