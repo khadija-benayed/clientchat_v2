@@ -1034,13 +1034,21 @@ async function checkDriveUpdates(clientObj) {
     const updatedNames = [];
     for (const fileMeta of batch) {
       try {
-        const fileContent = exportedFiles.find(f => f.filename === fileMeta.name);
+        // Chercher par driveId en priorité (stable), fallback sur le nom
+        const fileContent = exportedFiles.find(f => f.driveId === fileMeta.id)
+                         || exportedFiles.find(f => f.filename === fileMeta.name);
         if (!fileContent) {
-          console.warn(`checkDriveUpdates: "${fileMeta.name}" absent du contenu exporté — ignoré.`);
+          console.warn(`checkDriveUpdates: "${fileMeta.name}" (${fileMeta.id}) absent du contenu exporté — ignoré.`);
           continue;
         }
 
         const sourceType = fileMeta.mimeType === 'application/vnd.google-apps.spreadsheet' ? 'sheet' : 'doc';
+
+        // Skip si le contenu est vide (fichier vide, export échoué silencieusement côté Drive)
+        if (!fileContent.content || fileContent.content.trim().length < 10) {
+          console.warn(`checkDriveUpdates: "${fileMeta.name}" contenu vide — ignoré.`);
+          continue;
+        }
 
         const indexRes = await fetch(EDGE_URL, {
           method: 'POST',
@@ -1742,7 +1750,7 @@ async function migrateDriveLegacy(){
   });
   setSources(srcs);
   // Persister en Supabase pour ne plus repasser par la migration au prochain openSettings
-  await sb.from('clients').update({sources:cur.sources}).eq('id',cur.id).catch(e=>console.warn('migrateDriveLegacy persist:', e.message));
+  try { await sb.from('clients').update({sources:cur.sources}).eq('id',cur.id); } catch(e){ console.warn('migrateDriveLegacy persist:', e.message); }
 }
 
 function estimateTokens(){
@@ -1880,7 +1888,7 @@ async function generateBrief(docsContent) {
   addSession(cur);
   // Si Supabase n'a pas pu sauvegarder côté serveur, on le fait côté client
   if (!data.saved) {
-    await sb.from('clients').update({ context: cur.context }).eq('id', cur.id).catch(e => console.warn('generateBrief client-side update:', e.message));
+    try { await sb.from('clients').update({ context: cur.context }).eq('id', cur.id); } catch(e){ console.warn('generateBrief client-side update:', e.message); }
   }
 
   return data.brief;
@@ -2066,7 +2074,7 @@ async function syncSource(idx){
     s.status = 'err';
     srcs[idx] = s;
     setSources(srcs);
-    await sb.from('clients').update({sources:cur.sources}).eq('id',cur.id).catch(()=>{});
+    try { await sb.from('clients').update({sources:cur.sources}).eq('id',cur.id); } catch(_){}
     addSession(cur);
     console.error('syncSource error:', e.message);
   }
