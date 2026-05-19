@@ -110,6 +110,9 @@ async function exportDriveFile(file: DriveFile, token: string): Promise<DriveFil
   } else if (file.mimeType === "application/vnd.google-apps.document") {
     exportUrl = `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=text/plain`;
     type = "txt";
+  } else if (file.mimeType === "application/vnd.google-apps.presentation") {
+    exportUrl = `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=text/plain`;
+    type = "txt";
   } else if (file.mimeType === "application/pdf") {
     // PDF natif Drive (pas un Google Doc) → téléchargement direct binaire
     exportUrl = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`;
@@ -174,7 +177,7 @@ function chunkText(text: string, maxChars = 2000, overlap = 200): string[] {
  * Le header est répété dans chaque chunk pour préserver le contexte colonnes.
  * Évite de couper une ligne de tableau en plein milieu (problème du chunkText naïf sur CSV).
  */
-function chunkCSV(text: string, linesPerChunk = 50): string[] {
+function chunkCSV(text: string, linesPerChunk = 15): string[] {
   const lines = text.split("\n");
   if (lines.length <= 1) return lines[0] ? [lines[0]] : [];
   const header = lines[0];
@@ -431,10 +434,21 @@ serve(async (req) => {
         );
       }
 
-      // Trier par date de modification décroissante, prendre les 20 plus récents
-      allFiles.sort((a, b) => new Date(b.modifiedTime).getTime() - new Date(a.modifiedTime).getTime());
+      // Trier : Sheets et Docs en priorité (contenu structuré), puis PDFs, puis par date décroissante
+      const typePriority = (f: DriveFile) => {
+        if (f.mimeType === "application/vnd.google-apps.spreadsheet") return 0;
+        if (f.mimeType === "application/vnd.google-apps.document") return 1;
+        if (f.mimeType === "application/vnd.google-apps.presentation") return 2;
+        if (f.mimeType === "application/pdf") return 3;
+        return 4;
+      };
+      allFiles.sort((a, b) => {
+        const tp = typePriority(a) - typePriority(b);
+        if (tp !== 0) return tp;
+        return new Date(b.modifiedTime).getTime() - new Date(a.modifiedTime).getTime();
+      });
 
-      const results = await Promise.all(allFiles.slice(0, 50).map((f) => exportDriveFile(f, token)));
+      const results = await Promise.all(allFiles.slice(0, 200).map((f) => exportDriveFile(f, token)));
       const files: DriveFileResult[] = results.filter((r): r is DriveFileResult => r !== null);
 
       return new Response(JSON.stringify({ files, sa_email: sa.client_email }), { status: 200, headers });
@@ -933,16 +947,16 @@ serve(async (req) => {
         const { data: chunks, error: matchError } = await sbAdmin.rpc("match_chunks", {
           query_embedding: queryEmbedding,
           p_client_id: client_id || null,
-          match_count: 5,
+          match_count: 15,
         });
 
         if (matchError) {
           console.error("RAG match_chunks error:", matchError.message);
         } else {
           // 3. Filtrer par seuil de pertinence
-          // 0.65 au lieu de 0.75 : les docs analytiques (plans de marquage, specs techniques)
-          // ont une sémantique plus distante des questions métier mais restent pertinents.
-          const relevant = (chunks || []).filter((c: { similarity: number }) => c.similarity > 0.65);
+          // 0.55 : seuil abaissé pour mieux couvrir les données tabulaires (plans de marquage,
+          // specs techniques) dont la sémantique est plus distante des questions métier.
+          const relevant = (chunks || []).filter((c: { similarity: number }) => c.similarity > 0.55);
 
           if (relevant.length > 0) {
             // Injecter les chunks sous la fiche client
@@ -1012,7 +1026,7 @@ serve(async (req) => {
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
-        max_tokens: 1200,
+        max_tokens: 2500,
         system: systemWithFile,
         messages: [{ role: "user", content: userContent }],
       }),
