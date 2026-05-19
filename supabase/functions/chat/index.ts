@@ -392,6 +392,68 @@ serve(async (req) => {
       return new Response(JSON.stringify({ files, sa_email: sa.client_email }), { status: 200, headers });
     }
 
+    // ── list_drive_metadata — CC-210 ───────────────────────────────────────
+    // Retourne uniquement {id, name, mimeType, modifiedTime} pour tous les fichiers du dossier.
+    // N'appelle PAS exportDriveFile — aucun téléchargement de contenu.
+    // Utilisé par checkDriveUpdates() pour la vérification légère initiale (~100ms).
+    // Entrée : { action: 'list_drive_metadata', folder_id: string }
+    // Sortie : { files: [{id, name, mimeType, modifiedTime}], sa_email: string }
+    if (action === "list_drive_metadata") {
+      const folderId = body.folder_id;
+      if (!folderId)
+        return new Response(JSON.stringify({ error: "folder_id requis" }), { status: 400, headers });
+
+      if (!GOOGLE_SA_KEY_RAW)
+        return new Response(JSON.stringify({ error: "GOOGLE_SA_KEY non configurée dans les secrets Supabase." }), { status: 500, headers });
+
+      let sa: ServiceAccountKey;
+      try {
+        sa = JSON.parse(GOOGLE_SA_KEY_RAW);
+        if (!sa.client_email || !sa.private_key) throw new Error("Champs client_email / private_key manquants");
+      } catch (e) {
+        return new Response(JSON.stringify({ error: `GOOGLE_SA_KEY invalide : ${(e as Error).message}` }), { status: 500, headers });
+      }
+
+      let token: string;
+      try {
+        token = await getGoogleAccessToken(sa, "https://www.googleapis.com/auth/drive.readonly");
+      } catch (e) {
+        return new Response(JSON.stringify({ error: `Auth Google échouée : ${(e as Error).message}` }), { status: 500, headers });
+      }
+
+      // Même récursion que read_drive_folder — sans exportDriveFile
+      const visited = new Set<string>();
+      async function listMetaInFolder(fId: string): Promise<DriveFile[]> {
+        if (visited.has(fId)) return [];
+        visited.add(fId);
+        const url = new URL("https://www.googleapis.com/drive/v3/files");
+        url.searchParams.set("q", `'${fId}' in parents and trashed = false`);
+        url.searchParams.set("fields", "files(id,name,mimeType,modifiedTime)");
+        url.searchParams.set("pageSize", "100");
+        url.searchParams.set("supportsAllDrives", "true");
+        url.searchParams.set("includeItemsFromAllDrives", "true");
+        const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
+        if (!res.ok) return [];
+        const data = await res.json();
+        const items: DriveFile[] = data.files || [];
+        const files = items.filter(f => f.mimeType !== "application/vnd.google-apps.folder");
+        const subFolders = items.filter(f => f.mimeType === "application/vnd.google-apps.folder");
+        const subFiles = await Promise.all(subFolders.map(sf => listMetaInFolder(sf.id)));
+        return [...files, ...subFiles.flat()];
+      }
+
+      const allFiles = await listMetaInFolder(folderId);
+      // Retourner uniquement les champs de métadonnées — pas de contenu
+      const metaFiles = allFiles.map(f => ({
+        id: f.id,
+        name: f.name,
+        mimeType: f.mimeType,
+        modifiedTime: f.modifiedTime,
+      }));
+
+      return new Response(JSON.stringify({ files: metaFiles, sa_email: sa.client_email }), { status: 200, headers });
+    }
+
     // ── generate_brief ─────────────────────────────────────────────────────
     // Entrée : { action: 'generate_brief', client_id: string, docs_content: {filename, content}[] }
     // Sortie : { brief: { secteur, enjeux_principaux, kpis, equipe, historique, notes } }
