@@ -203,6 +203,20 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
 .msg-file-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;background:var(--bbg);border:1px solid rgba(26,79,138,.18);border-radius:12px;font-size:10px;color:var(--blue);font-family:'DM Mono',monospace;margin-bottom:6px}
 /* CC-102 — badge sauvegarde session */
 .session-saved-badge{position:fixed;bottom:70px;left:50%;transform:translateX(-50%);background:var(--gbg);color:var(--green);border:1px solid var(--green);border-radius:20px;padding:5px 14px;font-size:11px;font-family:'DM Mono',monospace;z-index:50;pointer-events:none;transition:opacity .4s}
+.kb-btn{background:none;border:none;cursor:pointer;font-size:11px;color:var(--tx3);font-family:'DM Mono',monospace;padding:2px 6px;border-radius:4px;margin-top:2px;transition:all .15s;display:inline-flex;align-items:center;gap:3px}
+.kb-btn:hover{color:var(--blue);background:var(--bbg)}
+.kb-btn.saved{color:var(--green)}
+.kb-modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;align-items:center;justify-content:center}
+.kb-modal-overlay.open{display:flex}
+.kb-modal{background:var(--sur);border-radius:14px;padding:28px;width:100%;max-width:520px;max-height:85vh;overflow-y:auto}
+.kb-tag{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;background:var(--bbg);color:var(--blue);border-radius:20px;font-size:11px;font-family:'DM Mono',monospace;cursor:pointer}
+.kb-tag:hover{background:var(--rbg);color:var(--red)}
+.kb-entry{background:var(--sur2);border:1px solid var(--brd);border-radius:var(--r);padding:12px 14px;margin-bottom:8px}
+.kb-entry-title{font-size:13px;font-weight:500;margin-bottom:4px;color:var(--tx)}
+.kb-entry-content{font-size:12px;color:var(--tx2);line-height:1.5;white-space:pre-wrap}
+.kb-entry-meta{font-size:10px;color:var(--tx3);font-family:'DM Mono',monospace;margin-top:6px;display:flex;gap:10px;align-items:center}
+.kb-del{background:none;border:none;cursor:pointer;color:var(--tx3);font-size:13px;margin-left:auto;padding:2px 5px;border-radius:4px}
+.kb-del:hover{color:var(--red);background:var(--rbg)}
 /* CC-102 — onglets modal paramètres */
 .settings-tabs{display:flex;border-bottom:1px solid var(--brd);margin-bottom:18px;gap:0}
 .stab{flex:1;padding:8px;text-align:center;font-size:12px;font-weight:500;cursor:pointer;background:transparent;border:none;color:var(--tx3);font-family:'DM Sans',sans-serif;border-bottom:2px solid transparent;transition:all .15s}
@@ -470,7 +484,8 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
     <div class="sb-bot">
       <button class="btn-ghost" onclick="openModal('modal-join-existing')">+ Rejoindre un client</button>
       <button class="btn-ghost" onclick="openModal('modal-new')" style="margin-top:4px">+ Créer un client</button>
-      <button class="btn-logout" onclick="logout()">Déconnexion</button>
+      <button class="btn-ghost" onclick="openKbBrowser()">Base de savoir →</button>
+    <button class="btn-logout" onclick="logout()">Déconnexion</button>
     </div>
   </div>
   <div class="main">
@@ -1510,6 +1525,115 @@ function addThinking(){
   return d;
 }
 
+// ── CC-213 — Agency Knowledge Base ───────────────────────────────────────
+let _kbPendingText = '';
+
+function addKbButton(msgEl, text){
+  const btn = document.createElement('button');
+  btn.className = 'kb-btn';
+  btn.innerHTML = '+ KB';
+  btn.title = 'Sauvegarder cet insight dans la base de savoir';
+  btn.onclick = () => openKbModal(text, btn);
+  msgEl.appendChild(btn);
+}
+
+function openKbModal(text, btn){
+  _kbPendingText = text;
+  _kbPendingBtn = btn;
+  // Pré-remplir le contenu — l'utilisateur peut éditer avant de sauvegarder
+  $('kb-content').value = text;
+  $('kb-title').value = '';
+  $('kb-tags').value = '';
+  $('kb-save-err').style.display = 'none';
+  $('kb-modal-overlay').classList.add('open');
+  setTimeout(() => $('kb-title').focus(), 50);
+}
+
+function closeKbModal(){
+  $('kb-modal-overlay').classList.remove('open');
+}
+
+async function confirmSaveToKb(){
+  const title = $('kb-title').value.trim();
+  const content = $('kb-content').value.trim();
+  const tagsRaw = $('kb-tags').value.trim();
+  const tags = tagsRaw ? tagsRaw.split(',').map(t=>t.trim()).filter(Boolean) : [];
+  const err = $('kb-save-err');
+  if(!title){ err.textContent='Le titre est obligatoire.'; err.style.display='block'; return; }
+  if(!content){ err.textContent='Le contenu est obligatoire.'; err.style.display='block'; return; }
+  err.style.display='none';
+  const savedBy = cur ? getMembers()[0]?.initials || '' : '';
+  try {
+    const res = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({
+      action:'save_to_kb', title, content,
+      source_client: cur?.name || null,
+      tags, saved_by: savedBy,
+    })});
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    closeKbModal();
+    if(_kbPendingBtn){ _kbPendingBtn.innerHTML='✓ KB'; _kbPendingBtn.classList.add('saved'); _kbPendingBtn.disabled=true; }
+  } catch(e){
+    err.textContent = 'Erreur : '+e.message;
+    err.style.display = 'block';
+  }
+}
+
+// ── KB Browser ────────────────────────────────────────────────────────────
+let _kbEntries = [];
+let _kbPendingBtn = null;
+
+async function openKbBrowser(){
+  $('kb-browser-overlay').classList.add('open');
+  $('kb-search').value = '';
+  $('kb-browser-list').innerHTML = '<div style="color:var(--tx3);font-size:13px;padding:8px 0">Chargement…</div>';
+  try {
+    const { data, error } = await sb.from('agency_knowledge').select('*').order('created_at',{ascending:false});
+    if(error) throw new Error(error.message);
+    _kbEntries = data || [];
+    renderKbBrowser();
+  } catch(e){
+    $('kb-browser-list').innerHTML = '<div style="color:var(--red);font-size:13px">Erreur : '+e.message+'</div>';
+  }
+}
+
+function renderKbBrowser(){
+  const q = ($('kb-search')?.value||'').toLowerCase();
+  const filtered = _kbEntries.filter(e =>
+    !q || e.title.toLowerCase().includes(q) || e.content.toLowerCase().includes(q) ||
+    (e.tags||[]).some(t=>t.toLowerCase().includes(q))
+  );
+  if(!filtered.length){
+    $('kb-browser-list').innerHTML='<div style="color:var(--tx3);font-size:13px;padding:8px 0">'+(q?'Aucun résultat.':'Aucun insight sauvegardé pour le moment.')+'</div>';
+    return;
+  }
+  $('kb-browser-list').innerHTML = filtered.map(e => {
+    const date = new Date(e.created_at).toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'2-digit'});
+    const tags = (e.tags||[]).map(t=>'<span class="kb-tag" style="cursor:default">'+escHtml(t)+'</span>').join(' ');
+    return '<div class="kb-entry">'+
+      '<div class="kb-entry-title">'+escHtml(e.title)+'</div>'+
+      '<div class="kb-entry-content">'+escHtml(e.content)+'</div>'+
+      '<div class="kb-entry-meta">'+
+        (e.saved_by?'<span>'+escHtml(e.saved_by)+'</span>':'')+
+        '<span>'+date+'</span>'+
+        (e.source_client?'<span>'+escHtml(e.source_client)+'</span>':'')+
+        (tags?'<span>'+tags+'</span>':'')+
+        '<button class="kb-del" title="Supprimer" onclick="deleteKbEntry(&quot;'+e.id+'&quot;)">✕</button>'+
+      '</div>'+
+    '</div>';
+  }).join('');
+}
+
+async function deleteKbEntry(id){
+  if(!confirm('Supprimer cet insight ?')) return;
+  const { error } = await sb.from('agency_knowledge').delete().eq('id',id);
+  if(error){ alert('Erreur : '+error.message); return; }
+  _kbEntries = _kbEntries.filter(e=>e.id!==id);
+  renderKbBrowser();
+}
+
+function escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
 function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}
 
 // ── Panel resizer ─────────────────────────────────────────────────────────
@@ -1840,6 +1964,8 @@ async function send(){
     const assistantMsgEl = addMsg('a',replyText);
     // CC-203 — Badge sources RAG
     addSourcesBadge(assistantMsgEl, ragSources);
+    // CC-213 — Bouton "Sauvegarder dans la KB"
+    addKbButton(assistantMsgEl, replyText);
 
     if(jsonStr){
       try{
@@ -2782,5 +2908,36 @@ window.addEventListener('load', async () => {
 // La sauvegarde se fait au 5e échange, tous les 10 ensuite,
 // au changement de client et à la déconnexion.
 </script>
+
+<!-- CC-213 — Agency KB save modal -->
+<div class="kb-modal-overlay" id="kb-modal-overlay">
+  <div class="kb-modal">
+    <h2 style="font-size:15px;font-weight:500;margin-bottom:6px">Sauvegarder dans la base de savoir</h2>
+    <p style="font-size:12px;color:var(--tx3);margin-bottom:18px">Cet insight sera partagé avec toute l'équipe Smartbees (anonymisé).</p>
+    <label>Titre court</label>
+    <input type="text" id="kb-title" placeholder="Ex : Setup GA4 e-commerce sans gtag">
+    <label>Contenu <span style="font-weight:400;color:var(--tx3)">(édite pour anonymiser si besoin)</span></label>
+    <textarea id="kb-content" rows="6" style="width:100%;padding:10px 12px;border:1px solid var(--brd2);border-radius:var(--rs);font-family:'DM Sans',sans-serif;font-size:13px;color:var(--tx);background:var(--sur2);resize:vertical;outline:none;margin-bottom:14px"></textarea>
+    <label>Tags <span style="font-weight:400;color:var(--tx3)">(séparés par des virgules)</span></label>
+    <input type="text" id="kb-tags" placeholder="GA4, tracking, audit">
+    <div id="kb-save-err" style="display:none" class="err"></div>
+    <div class="modal-foot">
+      <button class="btn btn-sec" onclick="closeKbModal()">Annuler</button>
+      <button class="btn" style="width:auto;padding:11px 22px" onclick="confirmSaveToKb()">Sauvegarder</button>
+    </div>
+  </div>
+</div>
+
+<!-- CC-213 — Agency KB browser modal -->
+<div class="kb-modal-overlay" id="kb-browser-overlay">
+  <div class="kb-modal" style="max-width:600px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+      <h2 style="font-size:15px;font-weight:500;margin:0">Base de savoir Smartbees</h2>
+      <button class="btn-sec btn" style="width:auto;padding:6px 14px;font-size:12px" onclick="document.getElementById('kb-browser-overlay').classList.remove('open')">Fermer</button>
+    </div>
+    <input type="text" id="kb-search" placeholder="Rechercher…" oninput="renderKbBrowser()" style="margin-bottom:14px">
+    <div id="kb-browser-list" style="min-height:80px"></div>
+  </div>
+</div>
 </body>
 </html>
