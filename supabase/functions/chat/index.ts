@@ -1017,6 +1017,30 @@ serve(async (req) => {
       return new Response(JSON.stringify({ deleted: true }), { status: 200, headers });
     }
 
+    // ── save_to_kb — CC-213 ───────────────────────────────────────────────
+    // Sauvegarde un insight dans agency_knowledge (base de savoir partagée de l'agence).
+    // Entrée : { action: 'save_to_kb', title, content, source_client?, tags?, saved_by? }
+    // Sortie : { saved: true, id: uuid }
+    if (action === "save_to_kb") {
+      if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+        return new Response(JSON.stringify({ error: "Variables Supabase manquantes." }), { status: 500, headers });
+      }
+      const { title, content: kbContent, source_client, tags, saved_by } = body;
+      if (!title || !kbContent) {
+        return new Response(JSON.stringify({ error: "title et content requis." }), { status: 400, headers });
+      }
+      const sbAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+      const { data: inserted, error: insertErr } = await sbAdmin
+        .from("agency_knowledge")
+        .insert({ title, content: kbContent, source_client: source_client || null, tags: tags || [], saved_by: saved_by || null })
+        .select("id")
+        .single();
+      if (insertErr) {
+        return new Response(JSON.stringify({ error: insertErr.message }), { status: 500, headers });
+      }
+      return new Response(JSON.stringify({ saved: true, id: inserted.id }), { status: 200, headers });
+    }
+
     // ── RAG — CC-203 : recherche sémantique avant appel Claude ───────────
     // Vectorise le message utilisateur et injecte les chunks pertinents dans le system prompt.
     // Fiche client (CC-107) reste en haut — chunks RAG ajoutés en dessous.
