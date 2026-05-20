@@ -1,6 +1,20 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// CC-211 — Calcul coût par modèle
+function calculateCost(
+  model: string,
+  usage: { input_tokens: number; output_tokens: number } | null | undefined
+): number {
+  if (!usage) return 0;
+  const rates: Record<string, [number, number]> = {
+    'claude-sonnet-4-6':         [0.000003,   0.000015  ],
+    'claude-haiku-4-5-20251001': [0.00000025, 0.00000125],
+  };
+  const [inRate, outRate] = rates[model] ?? rates['claude-sonnet-4-6'];
+  return (usage.input_tokens * inRate) + (usage.output_tokens * outRate);
+}
+
 const headers = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
@@ -297,7 +311,11 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
-    const { system, message, action, client_id, history, folder_id } = body;
+    const { system, message, action, client_id, history, folder_id, message_type } = body;
+    const messageType: string = message_type || 'chat';
+    const chatModel: string = messageType === 'task_action'
+  ? 'claude-haiku-4-5-20251001'
+  : 'claude-sonnet-4-6';
     const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_KEY");
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
     const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -1095,7 +1113,7 @@ serve(async (req) => {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        model: chatModel,   // ← variable au lieu de hardcodé
         max_tokens: 2500,
         system: systemWithFile,
         messages: [{ role: "user", content: userContent }],
@@ -1104,6 +1122,19 @@ serve(async (req) => {
 
     const data = await r.json();
     if (data.error) return new Response(JSON.stringify({ error: data.error.message }), { status: 400, headers });
+
+    // CC-211 — Log usage non bloquant
+    if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+      const sbLog = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+      sbLog.from('usage_logs').insert({
+        client_id: client_id || null,
+        model: chatModel,
+        message_type: messageType,
+        tokens_input:  data.usage?.input_tokens,
+        tokens_output: data.usage?.output_tokens,
+        cost_usd: calculateCost(chatModel, data.usage),
+      }).then(() => {}).catch(() => {}); // intentionnellement non-bloquant
+    }
 
     const text = data.content?.filter((c: { type: string }) => c.type === "text").map((c: { text: string }) => c.text).join("") || "";
     return new Response(JSON.stringify({ text, sources_used: sourcesUsed }), { status: 200, headers });

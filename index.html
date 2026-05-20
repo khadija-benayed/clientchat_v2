@@ -1457,11 +1457,11 @@ function addThinking(){
 function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}
 function resize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,120)+'px';}
 
-async function callClaude(system,message,file=null,clientId=null){
+async function callClaude(system,message,file=null,clientId=null,messageType='chat'){
   const payload={system,message};
   if(file) payload.file=file;
-  // CC-203 — client_id requis pour que match_chunks filtre les chunks du bon client
   if(clientId) payload.client_id=clientId;
+  payload.message_type=messageType;
   const r=await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify(payload)});
   const data=await r.json();
   if(data.error) throw new Error(data.error);
@@ -1745,7 +1745,8 @@ async function send(){
   console.debug(`[CC-211] intent: action=${_isAction} question=${_isQuestion} complex=${_isComplex} → L2=${_needL2} L3=${_needL3} | sys~${Math.round(sys.length/4)}tok`);
 
   try {
-    const {text: raw, sources: ragSources}=await callClaude(sys,txt,fileToSend,cur?.id||null);
+    const messageType = _isAction ? 'task_action' : 'chat';
+    const {text: raw, sources: ragSources}=await callClaude(sys,txt,fileToSend,cur?.id||null,messageType);
     th.remove();
 
     const parts=raw.split('---JSON---');
