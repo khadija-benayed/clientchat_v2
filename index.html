@@ -99,8 +99,8 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
 .sync-lbl{font-size:11px;color:var(--tx3)}
 .btn-sm{padding:5px 10px;font-size:12px;border:1px solid var(--brd2);border-radius:var(--rs);background:transparent;cursor:pointer;color:var(--tx2);font-family:'DM Sans',sans-serif}
 .btn-sm:hover{background:var(--sur2)}
-.wsp{flex:1;display:grid;grid-template-columns:1fr 380px;overflow:hidden}
-.chat-panel{display:flex;flex-direction:column;border-right:1px solid var(--brd);background:var(--sur);overflow:hidden}
+.wsp{flex:1;display:flex;flex-direction:row;overflow:hidden}
+.chat-panel{display:flex;flex-direction:column;background:var(--sur);overflow:hidden;flex:1;min-width:320px}
 .msgs{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:12px}
 .msgs::-webkit-scrollbar{width:4px}
 .msgs::-webkit-scrollbar-thumb{background:var(--brd2);border-radius:4px}
@@ -113,6 +113,12 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
 .msg.a .bubble{background:var(--sur2);border:1px solid var(--brd);border-bottom-left-radius:4px}
 .msg-badge{margin-top:5px;font-size:11px;color:var(--green);font-family:'DM Mono',monospace;display:flex;align-items:center;gap:4px}
 .msg-badge::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0}
+.msg-time{font-size:10px;color:var(--tx3);font-family:'DM Mono',monospace;margin-top:3px;opacity:.7}
+.msg.u .msg-time{text-align:right}
+.sync-progress{font-size:11px;color:var(--tx3);font-family:'DM Mono',monospace;padding:2px 8px;background:var(--abg);border-radius:20px;border:1px solid var(--brd2);display:none;margin-left:4px}
+.sync-progress.on{display:inline}
+.resizer{width:5px;background:transparent;cursor:col-resize;flex-shrink:0;transition:background .15s;z-index:10}
+.resizer:hover,.resizer.dragging{background:var(--acc)}
 .thinking{background:var(--sur2);border:1px solid var(--brd);border-radius:12px;border-bottom-left-radius:4px;padding:12px 16px;display:flex;gap:5px;align-items:center}
 .dp{width:6px;height:6px;border-radius:50%;background:var(--tx3);animation:dp 1.3s infinite}
 .dp:nth-child(2){animation-delay:.2s}.dp:nth-child(3){animation-delay:.4s}
@@ -124,7 +130,7 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
 .send{width:36px;height:36px;flex-shrink:0;border-radius:var(--rs);background:var(--acc);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center}
 .send:hover{opacity:.9}
 .hint{font-size:11px;color:var(--tx3);margin-top:6px}
-.todo-panel{display:flex;flex-direction:column;background:var(--bg);overflow:hidden}
+.todo-panel{display:flex;flex-direction:column;background:var(--bg);overflow:hidden;width:var(--todo-w,380px);min-width:240px;max-width:600px;flex-shrink:0;border-left:1px solid var(--brd)}
 .todo-head{padding:14px 16px 10px;background:var(--sur);border-bottom:1px solid var(--brd);flex-shrink:0}
 .todo-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
 .todo-title{font-size:13px;font-weight:500}
@@ -483,6 +489,7 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
         <div class="tb-right">
           <div class="sync-dot" id="sdot"></div>
           <span class="sync-lbl" id="slbl">—</span>
+          <span class="sync-progress" id="sync-progress"></span>
           <button class="btn-sm" onclick="openSettings()">Paramètres</button>
         </div>
       </div>
@@ -502,7 +509,8 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
             <div class="hint">Entrée pour envoyer · Shift+Entrée pour saut de ligne · 📎 PDF ou image</div>
           </div>
         </div>
-        <div class="todo-panel">
+        <div class="resizer" id="panel-resizer"></div>
+        <div class="todo-panel" id="todo-panel">
           <div class="todo-head">
             <div class="todo-top"><span class="todo-title">To-do</span><span class="todo-cnt" id="tcnt">—</span></div>
             <div class="filters" id="frow"></div>
@@ -775,6 +783,11 @@ function show(id){ $(id).classList.remove('hide'); }
 function hide(id){ $(id).classList.add('hide'); }
 function closeModal(id){ $(id).classList.remove('open'); }
 function setSyncDot(color, txt){ $('sdot').style.background=color; $('slbl').textContent=txt; }
+function setSyncProgress(done, total){
+  const el=$('sync-progress'); if(!el) return;
+  if(done===null){ el.classList.remove('on'); el.textContent=''; return; }
+  el.classList.add('on'); el.textContent=done+'/'+total+' indexés';
+}
 // CC-106 — Échappement HTML anti-XSS stockée
 function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function mStyle(ini){ const i=((ini||'?').charCodeAt(0)+((ini||'?').charCodeAt(1)||0))%MC.length; return MC[i]; }
@@ -1018,6 +1031,7 @@ async function checkDriveUpdates(clientObj) {
     }
 
     console.log(`checkDriveUpdates: ${toIndex.length} fichier(s) à indexer (${toIndex.filter(f=>f.reason==='new').length} nouveaux, ${toIndex.filter(f=>f.reason==='modified').length} modifiés).`);
+    setSyncProgress(0, toIndex.length);
 
     // ── Étape 5 : exporter + indexer fichier par fichier (anti-timeout) ──
     // On n'utilise plus read_drive_folder (exporte tout en parallèle → timeout sur 98 fichiers).
@@ -1083,6 +1097,7 @@ async function checkDriveUpdates(clientObj) {
         }
 
         updatedNames.push(fileMeta.name);
+        setSyncProgress(updatedNames.length, toIndex.length);
         console.log(`checkDriveUpdates: "${fileMeta.name}" indexé [${fileMeta.reason}] — ${indexData.chunks_created} chunks.`);
       } catch (fileErr) {
         console.warn(`checkDriveUpdates: erreur pour "${fileMeta.name}" (non bloquant):`, fileErr.message);
@@ -1092,8 +1107,14 @@ async function checkDriveUpdates(clientObj) {
     if (updatedNames.length > 0) {
       showUpdateNotif(updatedNames.length);
       if (toIndex.length > MAX_PER_RUN) {
-        console.log(`checkDriveUpdates: ${toIndex.length - MAX_PER_RUN} fichier(s) restant(s) — traités au prochain chargement.`);
+        const remaining = toIndex.length - MAX_PER_RUN;
+        setSyncProgress(updatedNames.length, toIndex.length); // badge reste visible : "2/98 indexés"
+        console.log(`checkDriveUpdates: ${remaining} fichier(s) restant(s) — traités au prochain chargement.`);
+      } else {
+        setSyncProgress(null, null);
       }
+    } else {
+      setSyncProgress(null, null);
     }
   } catch (e) {
     console.warn('checkDriveUpdates error (non bloquant):', e.message);
@@ -1104,55 +1125,64 @@ async function checkDriveUpdates(clientObj) {
 // Zéro appel Drive supplémentaire — pas de conflit avec checkDriveUpdates.
 // Regroupe les chunks par source_name, reconstitue le texte, garde les 10 sources les plus récentes.
 async function loadDocCache(clientObj){
+  // CC-212b — L2 cache indépendant du RAG.
+  // localStorage d'abord (instantané), Drive en arrière-plan si stale.
+  // Fonctionne même avec Voyage free tier à 0 fichier indexé.
   try {
-    // Vérifier qu'il y a bien une source Drive connectée
     const raw = clientObj.sources;
     const srcs = Array.isArray(raw) ? raw : JSON.parse(raw||'[]');
-    const hasDrive = srcs.some(s => s.type==='drive' && s.folder_id) || !!clientObj.drive_folder_id;
-    if(!hasDrive){ clientObj._docCache = []; return; }
+    const folderId = srcs.find(s=>s.type==='drive'&&s.folder_id)?.folder_id || clientObj.drive_folder_id;
+    if(!folderId){ clientObj._docCache = []; return; }
 
-    // Lire TOUS les chunks Drive de ce client depuis Supabase
-    // On filtre source_type drive/doc/sheet — pas les sessions
-    const { data: rows, error } = await sb
-      .from('document_chunks')
-      .select('source_name, source_id, chunk_text, last_indexed_at')
-      .eq('client_id', clientObj.id)
-      .in('source_type', ['doc','sheet','drive'])
-      .order('last_indexed_at', { ascending: false });
+    const CACHE_KEY = 'cc-doccache-'+clientObj.id;
+    const CACHE_TTL = 30 * 60 * 1000; // 30 min
+    let cached = null;
+    try { cached = JSON.parse(localStorage.getItem(CACHE_KEY)||'null'); } catch(_){}
+    const age = cached ? Date.now()-(cached.ts||0) : Infinity;
 
-    if(error) throw new Error(error.message);
-    if(!rows || rows.length === 0){ clientObj._docCache = []; return; }
-
-    // Regrouper les chunks par source_name et reconstituer le texte
-    const sourceMap = new Map();
-    for(const row of rows){
-      const key = row.source_id || row.source_name;
-      if(!sourceMap.has(key)){
-        sourceMap.set(key, {
-          filename: row.source_name,
-          last_indexed_at: row.last_indexed_at,
-          chunks: []
-        });
-      }
-      sourceMap.get(key).chunks.push(row.chunk_text);
+    if(cached && age < CACHE_TTL && cached.docs?.length){
+      clientObj._docCache = cached.docs;
+      console.log('[CC-212b] Cache localStorage : '+cached.docs.length+' fichiers ('+Math.round(age/60000)+'min)');
+      if(age > 15*60*1000) refreshDocCache(clientObj, folderId, CACHE_KEY); // refresh silencieux
+      return;
     }
-
-    // Trier par last_indexed_at desc, prendre les 10 plus récentes
-    const sorted = [...sourceMap.values()]
-      .sort((a,b) => new Date(b.last_indexed_at) - new Date(a.last_indexed_at))
-      .slice(0, 10);
-
-    clientObj._docCache = sorted.map(s => ({
-      filename: s.filename,
-      modifiedTime: s.last_indexed_at,
-      // Reconstituer le texte depuis les chunks (max 8000 chars par source pour buildL2)
-      content: s.chunks.join('\n').slice(0, 8000)
-    })).filter(d => d.content.trim());
-
-    console.log('[CC-212] Doc cache : '+clientObj._docCache.length+' sources chargées depuis Supabase ('+rows.length+' chunks)');
+    await refreshDocCache(clientObj, folderId, CACHE_KEY);
   } catch(e){
-    console.warn('[CC-212] loadDocCache error (non bloquant):', e.message);
+    console.warn('[CC-212b] loadDocCache error:', e.message);
     clientObj._docCache = [];
+  }
+}
+
+async function refreshDocCache(clientObj, folderId, cacheKey){
+  try {
+    const metaRes = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,
+      body:JSON.stringify({action:'list_drive_metadata',folder_id:folderId})});
+    const metaData = await metaRes.json();
+    if(!metaData.files?.length){ clientObj._docCache=[]; return; }
+
+    const EXPORTABLE=['application/vnd.google-apps.document','application/vnd.google-apps.spreadsheet',
+      'application/vnd.google-apps.presentation','application/pdf'];
+    const toExport = metaData.files
+      .filter(f=>EXPORTABLE.includes(f.mimeType))
+      .sort((a,b)=>new Date(b.modifiedTime)-new Date(a.modifiedTime))
+      .slice(0,10);
+
+    const docs=[];
+    for(const f of toExport){
+      try{
+        const r=await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,
+          body:JSON.stringify({action:'export_single_file',file_id:f.id,file_name:f.name,mime_type:f.mimeType})});
+        const d=await r.json();
+        if(!d.error&&d.file?.content&&d.file.content.trim().length>10)
+          docs.push({filename:f.name,modifiedTime:f.modifiedTime,content:d.file.content.slice(0,8000)});
+      }catch(e){ console.warn('[CC-212b] export error '+f.name+':',e.message); }
+    }
+    clientObj._docCache=docs;
+    try{ localStorage.setItem(cacheKey,JSON.stringify({ts:Date.now(),docs})); }catch(_){}
+    console.log('[CC-212b] Cache refreshed from Drive : '+docs.length+' fichiers');
+  }catch(e){
+    console.warn('[CC-212b] refreshDocCache error:',e.message);
+    clientObj._docCache=clientObj._docCache||[];
   }
 }
 
@@ -1435,12 +1465,23 @@ async function loadHistoryPanel(){
   }).join('');
 }
 
+function fmtMsgTime(d){
+  const now=new Date();
+  const isToday=d.toDateString()===now.toDateString();
+  const yesterday=new Date(now); yesterday.setDate(now.getDate()-1);
+  const isYest=d.toDateString()===yesterday.toDateString();
+  const hm=d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+  if(isToday) return hm;
+  if(isYest) return 'Hier '+hm;
+  return d.toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit'})+' '+hm;
+}
 function addMsg(role,text,badge){
   const c=$('msgs');
   const d=document.createElement('div'); d.className='msg '+role;
   if(role==='a'){const w=document.createElement('div');w.className='msg-who';w.textContent='Claude · '+(cur?.name||'');d.appendChild(w);}
   const b=document.createElement('div'); b.className='bubble'; b.textContent=text; d.appendChild(b);
   if(badge){const bg=document.createElement('div');bg.className='msg-badge';bg.textContent=badge;d.appendChild(bg);}
+  const t=document.createElement('div'); t.className='msg-time'; t.textContent=fmtMsgTime(new Date()); d.appendChild(t);
   c.appendChild(d); c.scrollTop=c.scrollHeight;
   return d;
 }
@@ -1455,6 +1496,34 @@ function addThinking(){
 }
 
 function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}
+
+// ── Panel resizer ─────────────────────────────────────────────────────────
+(function(){
+  const resizer=document.getElementById('panel-resizer');
+  const todo=document.getElementById('todo-panel');
+  if(!resizer||!todo) return;
+  let drag=false, sx=0, sw=0;
+  resizer.addEventListener('mousedown',e=>{
+    drag=true; sx=e.clientX; sw=todo.offsetWidth;
+    resizer.classList.add('dragging');
+    document.body.style.cssText+='cursor:col-resize;user-select:none';
+  });
+  document.addEventListener('mousemove',e=>{
+    if(!drag) return;
+    const w=Math.min(600,Math.max(240,sw+(sx-e.clientX)));
+    todo.style.width=w+'px';
+  });
+  document.addEventListener('mouseup',()=>{
+    if(!drag) return; drag=false;
+    resizer.classList.remove('dragging');
+    document.body.style.cursor=''; document.body.style.userSelect='';
+    try{ localStorage.setItem('cc-todo-w',todo.offsetWidth); }catch(_){}
+  });
+  try{
+    const saved=parseInt(localStorage.getItem('cc-todo-w')||'0');
+    if(saved>=240&&saved<=600) todo.style.width=saved+'px';
+  }catch(_){}
+})();
 function resize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,120)+'px';}
 
 async function callClaude(system,message,file=null,clientId=null,messageType='chat'){
