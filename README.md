@@ -1,219 +1,114 @@
-# Client Chat
+# Client Chat (Smart Bees)
 
-Interface de gestion de projets clients avec chat IA (Claude), to-do intégrée, et mémoire des sessions.
-
----
-
-## Architecture
-
-```
-index.html (Netlify — statique)
-    ↓ fetch POST
-Supabase Edge Function /functions/v1/chat   ← timeout 150s, 500k appels/mois gratuits
-    ↓
-API Claude (Anthropic) / Google Drive API
-    ↓
-Supabase (Postgres + Realtime + pgvector)
-```
-
-## Stack
-
-| Couche       | Techno                              | Hébergement        |
-|--------------|-------------------------------------|--------------------|
-| Frontend     | HTML/CSS/JS vanilla                 | Netlify (gratuit)  |
-| Backend      | Supabase Edge Function (Deno)       | Supabase (gratuit) |
-| Base données | Supabase Postgres + Realtime        | Supabase (gratuit) |
-| Vectoriel    | pgvector (embeddings VoyageIA)        | Supabase (gratuit) |
-| IA chat      | Claude claude-sonnet-4-6 (Anthropic)| API externe        |
-| Embeddings   | voyage-3 — 1024 dims (Voyage AI)      | API externe        |
-
-**100 % gratuit** sur les tiers actuels (hors coûts API Anthropic).
+Interface de gestion de projets clients avec chat IA (Claude), to-do intégrée, mémoire des sessions, et base de savoir agence (Agency KB).
 
 ---
 
-## Fonctionnalités
+## 🏗 Stack Technique & Architecture
 
-- **Chat IA par client** — Claude connaît le contexte du client, l'équipe, et la to-do
-- **To-do intégrée** — Claude peut créer, modifier, assigner, supprimer des tâches en langage naturel
-- **Mémoire des sessions** — résumés automatiques des conversations, injectés dans le contexte
-- **Sources de contexte** — Google Drive (dossier complet) et PDF uploadés
-- **Fiche client générée** — résumé structuré (secteur, enjeux, KPIs, équipe) généré depuis les docs Drive
-- **Pièces jointes** — PDF et images analysés directement dans le chat
-- **Realtime** — synchronisation live de la to-do entre membres
+| Couche | Techno | Hébergement |
+| --- | --- | --- |
+| **Frontend** | HTML/CSS/JS vanilla (SPA) | GitHub Pages |
+| **Backend** | Supabase Edge Function (Deno) | Supabase |
+| **Base de données** | Supabase Postgres + Realtime | Supabase |
+| **IA Conversationnelle** | Claude 3.5 Sonnet (`claude-sonnet-4-6`) | API Anthropic |
+| **IA Tâches (NLP)** | Claude 3.5 Haiku (`claude-haiku-4-5-20251001`) | API Anthropic |
+| **Embeddings (Vectoriel)** | Voyage-3 (1024 dims) | API Voyage AI |
 
 ---
 
-## Déploiement
+## ✨ Fonctionnalités Opérationnelles (NOW)
 
-### Prérequis
+* **Chat + Tasks :** Routage intelligent. Sonnet gère les conversations complexes, Haiku est déclenché pour les actions rapides sur la to-do (création, modification, assignation).
+* **Mémoire des sessions :** Résumés automatiques sauvegardés en base et réinjectés dans le contexte.
+* **Connexion Drive :** Liste les métadonnées et exporte le contenu des fichiers Google Drive.
+* **Brief Client Généré :** Fiche structurée (JSON) générée automatiquement à partir des sources Drive.
+* **Usage Logs :** Suivi des coûts et de la consommation des tokens par modèle (`usage_logs`).
+* **L2 Doc Cache (Fallback) :** Injection directe en contexte des 10 documents Drive les plus récents (permet de contourner temporairement les limitations du RAG).
+* **Agency KB (Stub) :** Sauvegarde d'insights croisés entre clients dans une table dédiée (`agency_knowledge`).
+
+---
+
+## ⚠️ Contraintes Actuelles & Workaround (Le "Problème Voyage AI")
+
+**Le constat :** L'indexation RAG complète est actuellement bloquée par la limite du *Free Tier* de Voyage AI (**3 requêtes par minute**, 10K tokens/min). Il est impossible d'indexer un Drive complet (ex: 98 fichiers) sans déclencher des erreurs 429 et 502, même avec une file d'attente.
+
+**La solution temporaire (L2 Cache) :**
+Pour garantir une démonstration fluide, le système s'appuie actuellement sur un **Cache L2** :
+
+1. Le brief client auto-généré donne le contexte global.
+2. Au chargement du client, les 10 fichiers Drive les plus récents sont exportés et injectés *en texte brut* directement dans le System Prompt.
+3. **Résultat :** L'IA dispose des documents les plus chauds en mémoire immédiate, couvrant 80% des cas d'usage sans avoir besoin du RAG.
+
+---
+
+## 🚀 Roadmap
+
+### NEXT — Optimisations (Free)
+
+* **Fix Sync Reliability :** Maintien du délai de 22s et `MAX_PER_RUN=2` pour le check Drive en arrière-plan.
+* **Sync Progress UX :** Amélioration du compteur dans l'UI ("X/98 indexés") qui persiste entre les sessions.
+* **Notion Source (Stub) :** Préparation du pipeline d'exportation pour l'API Notion.
+
+### LATER — Déblocage API Payantes
+
+* **Migration OpenAI Embeddings :** Passage sur `text-embedding-3-small` ($0.02 / 1M tokens) pour lever la limite de rate-limit.
+* **Full RAG :** Indexation instantanée (< 2 min) de l'intégralité des fichiers clients et recherche sémantique fonctionnelle.
+* **Agency KB Populated :** Injection automatisée et anonymisée des insights de l'agence dans tous les *system prompts*.
+* **Source Citations :** Affichage UI des documents précis ayant servi à formuler une réponse.
+* **Cross-client Search :** Capacité d'interroger la base globale ("Comment a-t-on géré cette situation pour un autre client ?").
+
+---
+
+## 📦 Déploiement
+
+### 1. Frontend (GitHub Pages)
+
+Le déploiement Netlify a été remplacé par **GitHub Pages** pour corriger les erreurs 403.
+Le workflow `.github/workflows/deploy.yml` publie automatiquement le dossier `/public` à chaque push sur la branche `main`.
+
+### 2. Backend (Edge Function)
 
 ```bash
-brew install supabase/tap/supabase
-supabase login
+supabase functions deploy chat --project-ref [PROJECT_ID]
+
 ```
 
-### 1. Edge Function
+### 3. Secrets requis (Supabase)
 
-```bash
-supabase functions deploy chat --project-ref erpjerfvswesipmdqxab
-```
-
-### 2. Secrets Supabase
-
-Dans **Supabase Dashboard → Project Settings → Edge Functions → Secrets** :
-
-| Variable                    | Description                              |
-|-----------------------------|------------------------------------------|
-| `ANTHROPIC_KEY`             | Clé API Anthropic Claude                 |
-| `GOOGLE_SA_KEY`             | JSON complet de la Service Account Google|
-| `SUPABASE_URL`              | URL du projet Supabase                   |
-| `SUPABASE_SERVICE_ROLE_KEY` | Clé service_role Supabase                |
-
-> ⚠️ Ne jamais committer ces clés dans le repo.
-
-### 3. Frontend (Netlify)
-
-`public/index.html` est déployé automatiquement via Netlify (connect GitHub → branche `main`).
+* `ANTHROPIC_KEY`
+* `VOYAGE_API_KEY`
+* `GOOGLE_SA_KEY` (JSON complet)
+* `SUPABASE_URL`
+* `SUPABASE_SERVICE_ROLE_KEY`
 
 ---
 
-## Structure du repo
+## 🗄️ Schéma de Base de Données (Mises à jour)
 
-```
-clientchat_v2/
-├── public/
-│   └── index.html                   # Frontend complet (SPA vanilla)
-├── supabase/
-│   └── functions/
-│       └── chat/
-│           └── index.ts             # Edge Function (Deno) — backend IA + Drive
-├── netlify.toml                     # Config Netlify (publish = public uniquement)
-└── README.md
-```
-
----
-
-## Schéma base de données
+Ajouts récents au schéma Postgres :
 
 ```sql
--- Clients
-CREATE TABLE clients (
-  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  name            text NOT NULL,
-  password_hash   text NOT NULL,
-  members         text DEFAULT '[]',
-  context         text,
-  drive_folder_id text,
-  sources         text DEFAULT '[]',
-  created_at      timestamptz DEFAULT now()
-);
-
--- Tâches
-CREATE TABLE tasks (
-  id          bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-  client_id   uuid REFERENCES clients(id) ON DELETE CASCADE,
-  title       text NOT NULL,
-  prio        text DEFAULT 'P2',
-  status      text DEFAULT 'todo',
-  assignee    text DEFAULT '',
-  blocker     text,
-  note        text,
-  updated_at  timestamptz DEFAULT now(),
-  created_at  timestamptz DEFAULT now()
-);
-
--- Résumés de sessions (CC-102)
-CREATE TABLE session_summaries (
-  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  client_id    uuid REFERENCES clients(id) ON DELETE CASCADE,
-  summary_text text NOT NULL,
-  created_at   timestamptz DEFAULT now()
-);
-
--- Chunks vectoriels (CC-108)
-CREATE TABLE document_chunks (
-  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  client_id   uuid REFERENCES clients(id) ON DELETE CASCADE,
-  source_type text NOT NULL,
-  source_name text NOT NULL,
-  chunk_text  text NOT NULL,
-  embedding   vector(1024),  -- Voyage AI voyage-3 (1024 dims)
-  created_at  timestamptz DEFAULT now()
-);
-
--- Logs embeddings / surveillance coûts (CC-109)
-CREATE TABLE embedding_logs (
+-- Suivi des coûts API (CC-211)
+CREATE TABLE usage_logs (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id        uuid REFERENCES clients(id) ON DELETE SET NULL,
-  source_name      text NOT NULL,
-  chunks_count     int  NOT NULL DEFAULT 0,
-  tokens_estimated int  NOT NULL DEFAULT 0,
+  model            text NOT NULL,
+  message_type     text NOT NULL,
+  tokens_input     int,
+  tokens_output    int,
+  cost_usd         numeric(10,6),
   created_at       timestamptz DEFAULT now()
 );
 
--- Extensions
-CREATE EXTENSION IF NOT EXISTS vector;
-
--- Realtime activé sur tasks
-ALTER PUBLICATION supabase_realtime ADD TABLE tasks;
+-- Base de savoir partagée de l'agence (CC-213)
+CREATE TABLE agency_knowledge (
+  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  title            text NOT NULL,
+  content          text NOT NULL,
+  source_client    text,
+  tags             text[],
+  saved_by         text,
+  created_at       timestamptz DEFAULT now()
+);
 ```
-
----
-
-## Développement local
-
-```bash
-# Lancer la Edge Function en local
-supabase functions serve chat
-
-# Pointer le front vers localhost : modifier EDGE_URL dans index.html
-# → http://localhost:54321/functions/v1/chat
-```
-
----
-
-## Surveillance des coûts embeddings
-
-Requête à lancer dans **Supabase Dashboard → SQL Editor** :
-
-```sql
-SELECT
-  DATE(created_at)                                      AS jour,
-  SUM(tokens_estimated)                                 AS tokens_total,
-  COUNT(*)                                              AS nb_appels,
-  ROUND(SUM(tokens_estimated) / 1000000.0 * 0.02, 6)   AS cout_usd
-FROM embedding_logs
-GROUP BY 1
-ORDER BY 1 DESC;
-```
-
-> `voyage-3` = **gratuit jusqu'à 200M tokens/mois** (Voyage AI free tier)
-
----
-
-## Surveillance des coûts embeddings (Voyage AI)
-
-Alertes configurées sur **dash.voyageai.com → Usage** :
-
-| Limite     | Valeur          |
-|------------|-----------------|
-| Free tier  | 200M tokens/mois|
-| Au-delà    | 0.06 $ / 1M tokens |
-
-> Tant que le volume mensuel reste sous 200M tokens, le coût est **0 €**.
-
----
-
-## Tickets réalisés
-
-| Ticket | Description                                          |
-|--------|------------------------------------------------------|
-| CC-101 | Migration Netlify Functions → Supabase Edge Function |
-| CC-102 | Persistance des sessions (résumés automatiques)      |
-| CC-103 | Pièces jointes (PDF + images) dans le chat           |
-| CC-104 | Sources de contexte (Google Drive, PDF)              |
-| CC-105 | Verrou anti double-envoi                             |
-| CC-106 | Sécurité XSS (échappement HTML)                      |
-| CC-107 | Fiche client générée depuis les docs Drive           |
-| CC-108 | Setup pgvector + table document_chunks               |
-| CC-109 | Surveillance coûts embeddings (embedding_logs)       |
