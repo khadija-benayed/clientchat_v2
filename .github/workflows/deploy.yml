@@ -23,10 +23,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Copy index.html to public folder
+      - name: Copy files to public folder
         run: |
           mkdir -p public
           cp index.html public/index.html
+          cp styles.css public/styles.css
+          cp db.js public/db.js
+          cp ui.js public/ui.js
+          cp app.js public/app.js
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
