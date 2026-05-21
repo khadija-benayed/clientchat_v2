@@ -840,18 +840,18 @@ function renderTodo(hi=[]){
     });
     html+='</div>';
   });
-  // Conserver la valeur de recherche entre les renders
+  // Conserver la valeur de recherche et l'état du focus avant le remplacement
   const prevSearch = el.querySelector('#todo-search');
   const savedSearch = prevSearch ? prevSearch.value : '';
+  const hadFocus = prevSearch != null && document.activeElement === prevSearch;
   // Injecter : barre de recherche + tâches (ou message vide)
   el.innerHTML =
     '<input class="todo-search" id="todo-search" type="text" placeholder="Rechercher une tâche…" autocomplete="off" oninput="renderTodo()">'
     + (html || '<div style="padding:16px 20px 8px;color:var(--tx3);font-size:13px;text-align:center">Aucune tâche</div>');
-  // Remettre la valeur sans déclencher oninput
+  // Remettre la valeur et le focus sur le nouvel input
   const newSearch = el.querySelector('#todo-search');
-  if(newSearch && savedSearch) { newSearch.value = savedSearch; }
-  // Réattacher le focus si l'input était actif
-  if(prevSearch && document.activeElement === prevSearch) newSearch.focus();
+  if(newSearch && savedSearch) newSearch.value = savedSearch;
+  if(hadFocus) newSearch.focus();
 }
 
 async function openSettings(){
