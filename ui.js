@@ -717,11 +717,11 @@ async function send(){
               } else {
                 t.note = u.note;
               }
-            }if(u.assignee)t.assignee=u.assignee;changed.push(u.id);ops.push(upsertTask(t));}
+            }if(u.assignee)t.assignee=u.assignee;if(u.due_date!==undefined)t.due_date=u.due_date;changed.push(u.id);ops.push(upsertTask(t));}
             }
             for(const nt of (p.new_tasks||[])){
               if(!nt.title) continue;
-              const newT={id:-1,title:nt.title,prio:nt.prio||'P2',status:nt.status||'todo',assignee:nt.assignee||'',blocker:nt.blocker||null,note:nt.note||null};
+              const newT={id:-1,title:nt.title,prio:nt.prio||'P2',status:nt.status||'todo',assignee:nt.assignee||'',blocker:nt.blocker||null,note:nt.note||null,due_date:nt.due_date||null};
               tasks.push(newT);ops.push(upsertTask(newT));changed.push('new');
             }
             for(const did of (p.delete_ids||[])){
