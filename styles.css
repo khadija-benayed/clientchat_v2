@@ -601,3 +601,93 @@ select {
 }
 .task.dragging { opacity: .3; }
 
+/* ── Bouton calendrier ───────────────────────────────────────────────────── */
+.btn-cal {
+  background: transparent;
+  border: 1px solid var(--brd2);
+  border-radius: var(--rs);
+  padding: 4px 8px;
+  cursor: pointer;
+  color: var(--tx2);
+  display: flex;
+  align-items: center;
+  transition: .15s;
+}
+.btn-cal:hover { background: var(--sur2); color: var(--tx); }
+
+/* ── Calendrier modal ────────────────────────────────────────────────────── */
+.cal-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.cal-nav button {
+  background: transparent;
+  border: 1px solid var(--brd2);
+  border-radius: var(--rs);
+  padding: 3px 13px;
+  cursor: pointer;
+  color: var(--tx);
+  font-size: 17px;
+  line-height: 1.4;
+  transition: .15s;
+}
+.cal-nav button:hover { background: var(--sur2); }
+.cal-nav span { font-weight: 500; font-size: 14px; color: var(--tx); }
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  margin-bottom: 4px;
+}
+.cal-dow {
+  text-align: center;
+  font-size: 11px;
+  color: var(--tx3);
+  font-weight: 500;
+  padding: 4px 0;
+}
+.cal-cell {
+  min-height: 40px;
+  border-radius: var(--rs);
+  padding: 5px 3px 3px;
+  font-size: 12px;
+  text-align: center;
+  color: var(--tx2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.cal-empty { min-height: 40px; }
+.cal-has-tasks { cursor: pointer; }
+.cal-has-tasks:hover { background: var(--sur2); }
+.cal-today { background: var(--sb-navy); color: #fff !important; font-weight: 600; border-radius: var(--rs); }
+.cal-today:hover { opacity: .88; }
+.cal-overdue { color: var(--red); }
+.cal-dots { display: flex; gap: 2px; justify-content: center; margin-top: 3px; flex-wrap: wrap; }
+.cal-dot { width: 5px; height: 5px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+
+.cal-day-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tx);
+  margin: 14px 0 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--brd);
+  text-transform: capitalize;
+}
+.cal-task-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--rs);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--tx);
+  transition: .12s;
+}
+.cal-task-item:hover { background: var(--sur2); }
+

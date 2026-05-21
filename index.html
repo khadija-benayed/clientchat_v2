@@ -133,7 +133,15 @@
         <div class="resizer" id="panel-resizer"></div>
         <div class="todo-panel" id="todo-panel">
           <div class="todo-head">
-            <div class="todo-top"><span class="todo-title">To-do</span><span class="todo-cnt" id="tcnt">—</span></div>
+            <div class="todo-top">
+              <span class="todo-title">To-do</span>
+              <div style="display:flex;align-items:center;gap:8px">
+                <button class="btn-cal" onclick="openCalendar()" title="Vue calendrier">
+                  <i data-lucide="calendar" style="width:14px;height:14px"></i>
+                </button>
+                <span class="todo-cnt" id="tcnt">—</span>
+              </div>
+            </div>
             <div class="filters" id="frow"></div>
           </div>
           <div class="todo-body" id="tbody"></div>
@@ -344,6 +352,17 @@
   <div class="modal-foot">
     <button class="btn btn-sec" onclick="closeModal('modal-new')">Annuler</button>
     <button class="btn" style="width:auto" onclick="createClientModal()">Créer</button>
+  </div>
+</div>
+</div>
+
+<!-- Modal calendrier -->
+<div class="modal-bg" id="modal-cal">
+<div class="modal" style="max-width:360px">
+  <h2 style="margin-bottom:14px">Calendrier des échéances</h2>
+  <div id="cal-body"></div>
+  <div class="modal-foot">
+    <button class="btn btn-sec" onclick="closeModal('modal-cal')">Fermer</button>
   </div>
 </div>
 </div>

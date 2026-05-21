@@ -61,7 +61,9 @@ function isComplexQuery(msg) {
 // buildL1 : instructions tâches, JSON schema, membres, matchContext, historique.
 // Paramètres issus du scope de send() — appelé depuis l'intérieur de send().
 function buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr }) {
+  const today = new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
   return 'Tu es l\'assistant projet de l\'équipe sur le client '+cur.name+'.\n'
+    +'Date du jour : '+today+'.\n'
     +'TO-DO ACTUELLE : '+snap()+'\n'
     +'Équipe : '+(mStr||'Non renseignée')+'.\n'
     +'Membres valides (initiales et noms complets) : '+mFull+'. Utilise les initiales dans le JSON.\n'
@@ -795,10 +797,11 @@ function makeDueBadge(t) {
   if(!t.due_date || t.status==='done') return '';
   const due = new Date(t.due_date); due.setHours(23,59,59);
   const diff = (due - new Date()) / (1000*60*60*24);
-  const d = esc(t.due_date.slice(5).replace('-','/'));
-  if(diff < 0) return '<span class="due-badge overdue">⚠ '+d+' dépassé</span>';
-  if(diff <= 7) return '<span class="due-badge soon">⏳ '+d+'</span>';
-  return '<span class="due-badge ok">📅 '+d+'</span>';
+  const [y, mo, d] = t.due_date.split('-');
+  const label = `${d}/${mo}/${y}`;
+  if(diff < 0) return `<span class="due-badge overdue">⚠ ${label}</span>`;
+  if(diff <= 7) return `<span class="due-badge soon">⏳ ${label}</span>`;
+  return `<span class="due-badge ok">📅 ${label}</span>`;
 }
 
 function renderTodo(hi=[]){
@@ -1674,4 +1677,86 @@ async function createClientModal(){
   const {data,error}=await sb.from('clients').insert({name,password_hash:hash,members:JSON.stringify(membersData)}).select().single();
   if(error){showErr('new-err',error.message);return;}
   closeModal('modal-new');addSession(data);renderSidebar();selectClient(data);
+}
+
+// ── Calendrier des échéances ──────────────────────────────────────────────
+let _calYear, _calMonth;
+
+function openCalendar() {
+  const now = new Date();
+  _calYear = now.getFullYear();
+  _calMonth = now.getMonth();
+  renderCalendar();
+  openModal('modal-cal');
+}
+
+function calNav(dir) {
+  _calMonth += dir;
+  if(_calMonth < 0)  { _calMonth = 11; _calYear--; }
+  if(_calMonth > 11) { _calMonth = 0;  _calYear++; }
+  renderCalendar();
+}
+
+function renderCalendar() {
+  const MONTHS = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+  const JOURS  = ['L','M','M','J','V','S','D'];
+
+  // date ISO → tâches non terminées
+  const taskMap = {};
+  tasks.forEach(t => {
+    if(t.due_date && t.status !== 'done')
+      (taskMap[t.due_date] = taskMap[t.due_date] || []).push(t);
+  });
+
+  const today   = new Date().toISOString().slice(0,10);
+  const lastDay = new Date(_calYear, _calMonth + 1, 0).getDate();
+  let startDow  = new Date(_calYear, _calMonth, 1).getDay();
+  startDow = startDow === 0 ? 6 : startDow - 1; // lundi en premier
+
+  let html = `<div class="cal-nav">
+    <button onclick="calNav(-1)" title="Mois précédent">‹</button>
+    <span>${MONTHS[_calMonth]} ${_calYear}</span>
+    <button onclick="calNav(1)" title="Mois suivant">›</button>
+  </div><div class="cal-grid">`;
+
+  JOURS.forEach(j => { html += `<div class="cal-dow">${j}</div>`; });
+  for(let i = 0; i < startDow; i++) html += '<div class="cal-empty"></div>';
+
+  for(let d = 1; d <= lastDay; d++) {
+    const ds = `${_calYear}-${String(_calMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const isToday   = ds === today;
+    const isPast    = ds < today;
+    const dayTasks  = taskMap[ds] || [];
+    const hasTasks  = dayTasks.length > 0;
+
+    const dots = dayTasks.map(t => {
+      const c = t.prio==='P1' ? 'var(--red)' : t.prio==='P3' ? 'var(--sb-blue-md)' : 'var(--amb)';
+      return `<span class="cal-dot" style="background:${c}"></span>`;
+    }).join('');
+
+    const cls = ['cal-cell',
+      isToday  ? 'cal-today'    : '',
+      isPast && hasTasks ? 'cal-overdue' : '',
+      hasTasks ? 'cal-has-tasks': ''
+    ].filter(Boolean).join(' ');
+
+    html += `<div class="${cls}"${hasTasks ? ` onclick="calDayClick('${ds}')"` : ''}>${d}${dots ? `<div class="cal-dots">${dots}</div>` : ''}</div>`;
+  }
+
+  html += '</div><div id="cal-day-tasks"></div>';
+  $('cal-body').innerHTML = html;
+}
+
+function calDayClick(dateStr) {
+  const dayTasks = tasks.filter(t => t.due_date === dateStr && t.status !== 'done');
+  if(!dayTasks.length) return;
+  const label = new Date(dateStr+'T12:00:00').toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
+  $('cal-day-tasks').innerHTML =
+    `<div class="cal-day-label">${label}</div>` +
+    dayTasks.map(t =>
+      `<div class="cal-task-item" onclick="closeModal('modal-cal');openTaskModal(${t.id})">
+        <span class="prio ${(t.prio||'P2').toLowerCase()}">${t.prio||'P2'}</span>
+        <span>${esc(t.title)}</span>
+      </div>`
+    ).join('');
 }
