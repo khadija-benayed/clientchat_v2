@@ -794,11 +794,15 @@ function injectDeadlineFilter(){
 }
 
 function makeDueBadge(t) {
-  if(!t.due_date || t.status==='done') return '';
+  if(!t.due_date) return '';
   const due = new Date(t.due_date); due.setHours(23,59,59);
-  const diff = (due - new Date()) / (1000*60*60*24);
+  const now = new Date();
   const [y, mo, d] = t.due_date.split('-');
   const label = `${d}/${mo}/${y}`;
+  if(t.status === 'done') {
+    return due < now ? `<span class="due-badge done-late-badge">✓ ${label}</span>` : '';
+  }
+  const diff = (due - now) / (1000*60*60*24);
   if(diff < 0) return `<span class="due-badge overdue">⚠ ${label}</span>`;
   if(diff <= 7) return `<span class="due-badge soon">⏳ ${label}</span>`;
   return `<span class="due-badge ok">📅 ${label}</span>`;
@@ -833,7 +837,13 @@ function renderTodo(hi=[]){
       const avatars=assigneeList.length>0?assigneeList.map(a=>{const ms=mStyle(a);return '<div class="av" style="background:'+ms.bg+';color:'+ms.c+'">'+a.substring(0,2)+'</div>';}).join(''):'<div class="av" style="background:var(--sur2);color:var(--tx3)">?</div>';
       const assigneeLabel=assigneeList.join(' + ')||'—';
       const dueBadge = makeDueBadge(t);
-      html+='<div class="task'+(hi.includes(t.id)?' new':'')+' task-clickable" draggable="true" data-id="'+t.id+'" data-status="'+s.k+'" style="cursor:pointer"><div class="t1"><span class="prio '+(t.prio||'P2').toLowerCase()+'">'+(t.prio||'P2')+'</span><span class="ttl">'+esc(t.title)+'</span>'+dueBadge+'</div>';
+      const _now = new Date();
+      const _due = t.due_date ? new Date(t.due_date + 'T23:59:59') : null;
+      const _isOverdue = _due && t.status !== 'done' && _due < _now;
+      const _isDoneLate = _due && t.status === 'done' && _due < _now;
+      const _isP1 = (t.prio || 'P2') === 'P1';
+      const extraCls = (_isOverdue ? ' overdue' : '') + (_isP1 && t.status !== 'done' ? ' p1-urgent' : '') + (_isDoneLate ? ' done-late' : '');
+      html+='<div class="task'+(hi.includes(t.id)?' new':'')+extraCls+' task-clickable" draggable="true" data-id="'+t.id+'" data-status="'+s.k+'" style="cursor:pointer"><div class="t1"><span class="prio '+(t.prio||'P2').toLowerCase()+'">'+(t.prio||'P2')+'</span><span class="ttl">'+esc(t.title)+'</span>'+dueBadge+'</div>';
       if(t.blocker)html+='<div class="textra blk">Blocage : '+esc(t.blocker)+'</div>';
       if(t.note)html+='<div class="textra note" style="white-space:pre-wrap">'+esc(t.note)+'</div>';
       html+='<div class="t2"><div class="tperson">'+avatars+'<span>'+esc(assigneeLabel)+'</span></div><span class="spill '+sc+'">'+sl+'</span></div></div>';

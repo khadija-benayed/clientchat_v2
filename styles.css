@@ -445,10 +445,27 @@ select {
 .textra.blk { color: var(--red); }
 .textra.note{ color: var(--tx2); }
 
-.due-badge          { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-family: 'DM Mono',monospace; padding: 2px 7px; border-radius: 20px; font-weight: 500; }
-.due-badge.overdue  { background: var(--rbg); color: var(--red); }
-.due-badge.soon     { background: var(--abg); color: var(--amb); }
-.due-badge.ok       { background: var(--gbg); color: var(--green); }
+.due-badge               { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-family: 'DM Mono',monospace; padding: 2px 7px; border-radius: 20px; font-weight: 500; }
+.due-badge.overdue       { background: var(--rbg); color: var(--red); }
+.due-badge.soon          { background: var(--abg); color: var(--amb); }
+.due-badge.ok            { background: var(--gbg); color: var(--green); }
+.due-badge.done-late-badge { background: var(--sur3); color: var(--tx3); }
+
+/* ── États visuels des tâches ──────────────────────────────── */
+/* P1 non terminée */
+.task.p1-urgent { border-left-color: var(--c-red); }
+.task.p1-urgent:hover { border-left-color: var(--c-red); }
+
+/* En retard (non terminée, deadline dépassée) */
+.task.overdue { border-left-color: var(--red); background: rgba(217,79,90,0.04); }
+.task.overdue:hover { border-left-color: var(--red); }
+
+/* P1 + en retard */
+.task.overdue.p1-urgent { background: rgba(217,79,90,0.07); box-shadow: 0 1px 6px rgba(217,79,90,0.14); }
+
+/* Terminée en retard */
+.task.done-late { opacity: 0.65; }
+.task.done-late .ttl { color: var(--tx3); }
 
 /* ── Modals ── */
 .modal-bg          { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 100; align-items: center; justify-content: center; }
