@@ -9,7 +9,6 @@ function toggleSidebar() {
   const btn = document.getElementById('collapse-btn');
   const collapsed = sb.classList.toggle('collapsed');
   localStorage.setItem('cc-sb-collapsed', collapsed ? '1' : '0');
-  // Swap icon
   btn.innerHTML = collapsed
     ? '<i data-lucide="panel-left-open" style="width:16px;height:16px"></i>'
     : '<i data-lucide="panel-left-close" style="width:16px;height:16px"></i>';
@@ -63,12 +62,10 @@ function navigateClient(dir) {
 }
 
 window.addEventListener('load', async () => {
-  // Restaurer dark mode
   const savedDark = localStorage.getItem('cc-dark');
   const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
   setDark(savedDark !== null ? savedDark === '1' : prefersDark);
 
-  // Restaurer collapse sidebar
   if (localStorage.getItem('cc-sb-collapsed') === '1') {
     const sb_el = document.getElementById('sidebar');
     const btn = document.getElementById('collapse-btn');
@@ -148,11 +145,9 @@ function applyTaskOrder() {
     if (!saved || !saved.length) return;
     const map = Object.fromEntries(tasks.map(t => [t.id, t]));
     const ordered = saved.map(id => map[id]).filter(Boolean);
-    tasks.forEach(t => { if (!ordered.find(x => x.id === t.id)) ordered.push(t); });
+    const orderedIds = new Set(ordered.map(x => x.id));
+    tasks.forEach(t => { if (!orderedIds.has(t.id)) ordered.push(t); });
     tasks = ordered;
   } catch(_) {}
 }
 
-// CC-102 — beforeunload supprimé : non fiable pour appels IA async
-// La sauvegarde se fait au 5e échange, tous les 10 ensuite,
-// au changement de client et à la déconnexion.

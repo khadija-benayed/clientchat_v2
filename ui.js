@@ -3,9 +3,6 @@
 //          tâches (renderTodo, drag & drop inclus)
 // Dépend de : db.js
 // ════════════════════════════════════════════════════════
-// ── CC-102 : Persistance des sessions ──────────────────────────────────────
-
-// Récupérer les N derniers résumés de session pour un client
 async function loadPreviousSummaries(clientId, limit=5){
   try {
     const {data, error} = await sb
@@ -170,10 +167,10 @@ async function saveSessionSummary(){
     const data = await r.json();
     if(data.saved){
       showSessionSavedBadge();
-      // Mettre à jour le cache local pour la prochaine inactivité éventuelle
       if(!cur._summaries) cur._summaries = [];
       cur._summaries.push({summary_text: data.summary, created_at: new Date().toISOString()});
       if(cur._summaries.length > 5) cur._summaries.shift();
+      _histLoadedForClientId = null; // force history panel refresh on next open
     } else {
       sessionSaved = false; // permettre un retry si erreur
     }
@@ -206,9 +203,12 @@ function switchSettingsTab(tab){
   if(tab==='hist') loadHistoryPanel();
 }
 
-// Charger le panneau Historique
+let _histLoadedForClientId = null;
+
 async function loadHistoryPanel(){
   if(!cur) return;
+  if(_histLoadedForClientId === cur.id) return;
+  _histLoadedForClientId = cur.id;
   $('hist-loading').style.display='block';
   $('hist-list').innerHTML='';
   const summaries = await loadPreviousSummaries(cur.id, 20);
@@ -337,14 +337,14 @@ function renderKbBrowser(){
   }
   $('kb-browser-list').innerHTML = filtered.map(e => {
     const date = new Date(e.created_at).toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'2-digit'});
-    const tags = (e.tags||[]).map(t=>'<span class="kb-tag" style="cursor:default">'+escHtml(t)+'</span>').join(' ');
+    const tags = (e.tags||[]).map(t=>'<span class="kb-tag" style="cursor:default">'+esc(t)+'</span>').join(' ');
     return '<div class="kb-entry">'+
-      '<div class="kb-entry-title">'+escHtml(e.title)+'</div>'+
-      '<div class="kb-entry-content">'+escHtml(e.content)+'</div>'+
+      '<div class="kb-entry-title">'+esc(e.title)+'</div>'+
+      '<div class="kb-entry-content">'+esc(e.content)+'</div>'+
       '<div class="kb-entry-meta">'+
-        (e.saved_by?'<span>'+escHtml(e.saved_by)+'</span>':'')+
+        (e.saved_by?'<span>'+esc(e.saved_by)+'</span>':'')+
         '<span>'+date+'</span>'+
-        (e.source_client?'<span>'+escHtml(e.source_client)+'</span>':'')+
+        (e.source_client?'<span>'+esc(e.source_client)+'</span>':'')+
         (tags?'<span>'+tags+'</span>':'')+
         '<button class="kb-del" title="Supprimer" onclick="deleteKbEntry(&quot;'+e.id+'&quot;)">✕</button>'+
       '</div>'+
@@ -359,8 +359,6 @@ async function deleteKbEntry(id){
   _kbEntries = _kbEntries.filter(e=>e.id!==id);
   renderKbBrowser();
 }
-
-function escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}
 
@@ -391,6 +389,10 @@ function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()
     if(saved>=240&&saved<=600) todo.style.width=saved+'px';
   }catch(_){}
 })();
+// Shared handler: close all open source tooltips on any outside click
+document.addEventListener('click',()=>{
+  document.querySelectorAll('.sources-tooltip').forEach(t=>t.style.display='none');
+});
 function resize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,120)+'px';}
 
 async function callClaude(system,message,file=null,clientId=null,messageType='chat'){
@@ -439,12 +441,12 @@ function addSourcesBadge(msgEl, sources){
 
   badge.appendChild(tip);
 
-  // Toggle tooltip au clic
   badge.addEventListener('click',e=>{
     e.stopPropagation();
-    tip.style.display=tip.style.display==='none'?'block':'none';
+    const isOpen = tip.style.display !== 'none';
+    document.querySelectorAll('.sources-tooltip').forEach(t=>t.style.display='none');
+    if(!isOpen) tip.style.display='block';
   });
-  document.addEventListener('click',()=>{ tip.style.display='none'; }, {once:true});
 
   msgEl.appendChild(badge);
   lucide.createIcons();
@@ -457,12 +459,10 @@ function snap(){
 async function send(){
   const inp=$('inp'), txt=inp.value.trim();
   if(!txt||!cur) return;
-  // CC-105 — Verrou anti double-envoi
   const sendBtn = document.querySelector('.send');
   sendBtn.disabled = true;
   inp.disabled = true;
   inp.value=''; inp.style.height='auto';
-  // CC-103 — Capturer et vider le fichier avant envoi
   const fileToSend = selectedFile ? {...selectedFile} : null;
   if(fileToSend){ clearFile(); }
   // Affichage message utilisateur + badge fichier éventuel
@@ -473,7 +473,6 @@ async function send(){
     badge.innerHTML = '<i data-lucide="paperclip" style="width:12px;height:12px;vertical-align:-1px"></i> ' + esc(fileToSend.name);
     userMsgEl.insertBefore(badge, userMsgEl.querySelector('.bubble'));
   }
-  // CC-102 — Compteur échanges + reset timer inactivité
   sessionExchangeCount++;
   resetInactivityTimer();
   const th=addThinking();
@@ -682,7 +681,6 @@ async function send(){
     + (_needL2 ? buildL2(ctxForPrompt) : '')
     + (_needL3 ? buildL3() : '');
 
-  // Log de debug — permet de vérifier l'impact dans la console navigateur
   console.debug(`[CC-211] intent: action=${_isAction} question=${_isQuestion} complex=${_isComplex} → L2=${_needL2} L3=${_needL3} | sys~${Math.round(sys.length/4)}tok`);
 
   try {
@@ -754,13 +752,10 @@ async function send(){
     if($('msgs').querySelector('.thinking')) th.remove();
     addMsg('a','Erreur : '+e.message);
   } finally {
-    // CC-105 — Réactiver le bouton et la textarea dans tous les cas
     sendBtn.disabled = false;
     inp.disabled = false;
     inp.focus();
   }
-  // CC-102 — Sauvegarde intelligente : au 5e échange, puis tous les 10
-  // On lance en arrière-plan sans bloquer l'UI
   const shouldSave = !sessionSaved && (sessionExchangeCount === 5 || (sessionExchangeCount > 5 && sessionExchangeCount % 10 === 0));
   if(shouldSave) saveSessionSummary();
 }
@@ -796,6 +791,16 @@ function injectDeadlineFilter(){
   bar.appendChild(btn);
 }
 
+function makeDueBadge(t) {
+  if(!t.due_date || t.status==='done') return '';
+  const due = new Date(t.due_date); due.setHours(23,59,59);
+  const diff = (due - new Date()) / (1000*60*60*24);
+  const d = esc(t.due_date.slice(5).replace('-','/'));
+  if(diff < 0) return '<span class="due-badge overdue">⚠ '+d+' dépassé</span>';
+  if(diff <= 7) return '<span class="due-badge soon">⏳ '+d+'</span>';
+  return '<span class="due-badge ok">📅 '+d+'</span>';
+}
+
 function renderTodo(hi=[]){
   renderFilters();
   injectDeadlineFilter();
@@ -824,16 +829,8 @@ function renderTodo(hi=[]){
       const assigneeList=(t.assignee||'').split(/[,+\s]+/).map(a=>a.trim()).filter(Boolean);
       const avatars=assigneeList.length>0?assigneeList.map(a=>{const ms=mStyle(a);return '<div class="av" style="background:'+ms.bg+';color:'+ms.c+'">'+a.substring(0,2)+'</div>';}).join(''):'<div class="av" style="background:var(--sur2);color:var(--tx3)">?</div>';
       const assigneeLabel=assigneeList.join(' + ')||'—';
-      const dueBadge = (()=>{
-        if(!t.due_date || t.status==='done') return '';
-        const due = new Date(t.due_date); due.setHours(23,59,59);
-        const now = new Date();
-        const diff = (due - now) / (1000*60*60*24);
-        if(diff < 0) return '<span class="due-badge overdue">⚠ '+esc(t.due_date.slice(5).replace('-','/')+' dépassé')+'</span>';
-        if(diff <= 7) return '<span class="due-badge soon">⏳ '+esc(t.due_date.slice(5).replace('-','/'))+'</span>';
-        return '<span class="due-badge ok">📅 '+esc(t.due_date.slice(5).replace('-','/'))+'</span>';
-      })();
-      html+='<div class="task'+(hi.includes(t.id)?' new':'')+' task-clickable" draggable="true" data-id="'+t.id+'" data-status="'+s.k+'" onclick="openTaskModal('+t.id+')" style="cursor:pointer"><div class="t1"><span class="prio '+(t.prio||'P2').toLowerCase()+'">'+(t.prio||'P2')+'</span><span class="ttl">'+esc(t.title)+'</span>'+dueBadge+'</div>';
+      const dueBadge = makeDueBadge(t);
+      html+='<div class="task'+(hi.includes(t.id)?' new':'')+' task-clickable" draggable="true" data-id="'+t.id+'" data-status="'+s.k+'" style="cursor:pointer"><div class="t1"><span class="prio '+(t.prio||'P2').toLowerCase()+'">'+(t.prio||'P2')+'</span><span class="ttl">'+esc(t.title)+'</span>'+dueBadge+'</div>';
       if(t.blocker)html+='<div class="textra blk">Blocage : '+esc(t.blocker)+'</div>';
       if(t.note)html+='<div class="textra note" style="white-space:pre-wrap">'+esc(t.note)+'</div>';
       html+='<div class="t2"><div class="tperson">'+avatars+'<span>'+esc(assigneeLabel)+'</span></div><span class="spill '+sc+'">'+sl+'</span></div></div>';
@@ -1134,13 +1131,7 @@ async function syncSource(idx){
       if(metaD.error) throw new Error(metaD.error);
       if(!metaD.files||!metaD.files.length) throw new Error('Aucun fichier lisible');
 
-      const EXPORTABLE = [
-        'application/vnd.google-apps.document',
-        'application/vnd.google-apps.spreadsheet',
-        'application/vnd.google-apps.presentation',
-        'application/pdf',
-      ];
-      const exportableFiles = metaD.files.filter(f => EXPORTABLE.includes(f.mimeType));
+      const exportableFiles = metaD.files.filter(f => EXPORTABLE_MIMETYPES.includes(f.mimeType));
 
       // ── Étape 2 : exporter + indexer tous les fichiers en parallèle (concurrence = 3) ──
       // CONCURRENCE 3 = on traite 3 fichiers simultanément.

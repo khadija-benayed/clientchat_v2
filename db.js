@@ -6,22 +6,24 @@ const SB_URL = 'https://erpjerfvswesipmdqxab.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVycGplcmZ2c3dlc2lwbWRxeGFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4NTQwNDEsImV4cCI6MjA5MjQzMDA0MX0.ftgCx_YzClgkNCPF5PprnPJd-y6mdl_vETtvl6pzG2U';
 const EDGE_URL = SB_URL + '/functions/v1/chat';
 const EDGE_HEADERS = {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SB_KEY};
+const EXPORTABLE_MIMETYPES = [
+  'application/vnd.google-apps.document',
+  'application/vnd.google-apps.spreadsheet',
+  'application/vnd.google-apps.presentation',
+  'application/pdf',
+];
 let sb = null;
 let cur = null, tasks = [], activeF = 'all', rtChan = null;
 
-// CC-212 — Helper Edge Function
 let session = JSON.parse(localStorage.getItem('cc-sess') || '[]');
 
-// CC-212 — Helper Edge Function
 async function callEdge(payload){
   const r = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify(payload)});
   if(!r.ok) throw new Error('Edge HTTP '+r.status);
   return r.json();
 }
-// CC-103 — Pièce jointe
 let selectedFile = null; // {data: base64, mediaType, name}
 
-// CC-103 — Sélection fichier
 function onFileSelected(input) {
   const file = input.files[0];
   if (!file) return;
@@ -51,7 +53,6 @@ function clearFile() {
   $('attach-btn').disabled = false;
   renderFileBadge();
 }
-// CC-102 — Persistance des sessions
 let inactivityTimer = null;
 let sessionExchangeCount = 0;   // nb d'échanges user↔assistant dans la session courante
 let sessionSaved = false;        // éviter de sauvegarder deux fois la même session
@@ -67,7 +68,6 @@ function setSyncProgress(done, total){
   if(done===null){ el.classList.remove('on'); el.textContent=''; return; }
   el.classList.add('on'); el.textContent=done+'/'+total+' indexés';
 }
-// CC-106 — Échappement HTML anti-XSS stockée
 function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function mStyle(ini){ const i=((ini||'?').charCodeAt(0)+((ini||'?').charCodeAt(1)||0))%MC.length; return MC[i]; }
 function getMembers(){ try{ return JSON.parse(cur?.members||'[]'); }catch{ return []; } }
@@ -111,23 +111,11 @@ function getMembersFromList(containerId) {
   return members;
 }
 
-function parseMembersStr(s){
-  // Supporte deux formats :
-  // "KB:Khadija Ben Ayed PH:Pierre Henry" (nouveau format recommandé)
-  // "KB PH" (ancien format simple)
-  return (s||'').trim().split(/\s+/).filter(Boolean).map(x=>{
-    if(x.includes(':')) {
-      const [ini, ...nameParts] = x.split(':');
-      return {initials:ini.toUpperCase(), name:nameParts.join(':').trim() || ini.toUpperCase()};
-    }
-    return {initials:x.toUpperCase(), name:x.toUpperCase()};
-  });
-}
-
 function setTab(t, btn){
   document.querySelectorAll('.tab').forEach(b=>b.classList.remove('on'));
   btn.classList.add('on');
-  t==='join' ? (show('pane-join'),hide('pane-create')) : (hide('pane-join'),show('pane-create'));
+  if(t === 'join') { show('pane-join'); hide('pane-create'); }
+  else { hide('pane-join'); show('pane-create'); }
 }
 
 async function loadClientList(){
@@ -190,9 +178,10 @@ function leaveClient(e, clientId) {
 }
 
 function logout(){
-  // CC-102 — Sauvegarder avant de quitter
   if(cur && !sessionSaved && sessionExchangeCount >= 3) saveSessionSummary();
-  session=[];localStorage.removeItem('cc-sess');location.reload();
+  session = [];
+  localStorage.removeItem('cc-sess');
+  location.reload();
 }
 
 function enterApp(client){
@@ -210,7 +199,7 @@ function renderSidebar(){
     const av=document.createElement('div'); av.className='cli-av'; av.textContent=c.name.substring(0,2).toUpperCase();
     const nm=document.createElement('span'); nm.className='cli-name'; nm.textContent=c.name;
     const lv=document.createElement('span'); lv.className='cli-leave'; lv.textContent='×'; lv.title='Quitter ce client';
-    lv.addEventListener('click', e=>{ e.stopPropagation(); leaveClient(e, c.id); });
+    lv.addEventListener('click', e=>{ leaveClient(e, c.id); });
     d.appendChild(av); d.appendChild(nm); d.appendChild(lv);
     d.onclick=()=>selectClient(c);
     el.appendChild(d);
@@ -266,13 +255,6 @@ async function checkDriveUpdates(clientObj) {
         indexedMap[row.source_id] = { last_indexed_at: row.last_indexed_at, source_name: row.source_name };
       }
     }
-
-    const EXPORTABLE_MIMETYPES = [
-      'application/vnd.google-apps.document',
-      'application/vnd.google-apps.spreadsheet',
-      'application/vnd.google-apps.presentation',
-      'application/pdf',
-    ];
 
     // ── Étape 3 : classifier chaque fichier Drive ──
     // • jamais indexé → à indexer
@@ -439,10 +421,8 @@ async function refreshDocCache(clientObj, folderId, cacheKey){
     const metaData = await metaRes.json();
     if(!metaData.files?.length){ clientObj._docCache=[]; return; }
 
-    const EXPORTABLE=['application/vnd.google-apps.document','application/vnd.google-apps.spreadsheet',
-      'application/vnd.google-apps.presentation','application/pdf'];
     const toExport = metaData.files
-      .filter(f=>EXPORTABLE.includes(f.mimeType))
+      .filter(f=>EXPORTABLE_MIMETYPES.includes(f.mimeType))
       .sort((a,b)=>new Date(b.modifiedTime)-new Date(a.modifiedTime))
       .slice(0,10);
 
@@ -453,24 +433,20 @@ async function refreshDocCache(clientObj, folderId, cacheKey){
     const cachedMap = {};
     for(const d of (cached?.docs||[])) if(d.driveId) cachedMap[d.driveId]=d;
 
-    const docs=[];
     let skipped=0;
-    for(const f of toExport){
-      // Si le fichier est déjà en cache ET n'a pas été modifié → réutiliser, pas d'export
+    const results = await Promise.all(toExport.map(async f => {
       const hit = cachedMap[f.id];
-      if(hit && hit.modifiedTime === f.modifiedTime){
-        docs.push(hit);
-        skipped++;
-        continue;
-      }
+      if(hit && hit.modifiedTime === f.modifiedTime){ skipped++; return hit; }
       try{
         const r=await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,
           body:JSON.stringify({action:'export_single_file',file_id:f.id,file_name:f.name,mime_type:f.mimeType})});
         const d=await r.json();
         if(!d.error&&d.file?.content&&d.file.content.trim().length>10)
-          docs.push({driveId:f.id,filename:f.name,modifiedTime:f.modifiedTime,content:d.file.content.slice(0,8000)});
+          return {driveId:f.id,filename:f.name,modifiedTime:f.modifiedTime,content:d.file.content.slice(0,8000)};
       }catch(e){ console.warn('[CC-212b] export error '+f.name+':',e.message); }
-    }
+      return null;
+    }));
+    const docs=results.filter(Boolean);
     clientObj._docCache=docs;
     try{ localStorage.setItem(cacheKey,JSON.stringify({ts:Date.now(),docs})); }catch(_){}
     console.log('[CC-212b] Cache refreshed : '+docs.length+' fichiers ('+skipped+' réutilisés, '+(docs.length-skipped)+' re-exportés)');
@@ -481,7 +457,6 @@ async function refreshDocCache(clientObj, folderId, cacheKey){
 }
 
 async function selectClient(c){
-  // CC-102 — Sauvegarder la session courante avant de switcher
   if(cur && cur.id !== c.id && !sessionSaved && sessionExchangeCount >= 3) {
     await saveSessionSummary();
   }
@@ -493,26 +468,23 @@ async function selectClient(c){
   $('tb-name').textContent=cur.name;
   $('msgs').innerHTML='';
   tasks=[]; activeF='all'; renderFilters();
-  // CC-102 — Reset compteurs de session
   sessionExchangeCount=0; sessionSaved=false;
   resetInactivityTimer();
   setSyncDot('#EF9F27','chargement…');
-  await loadTasks();
+  const [prevSummaries] = await Promise.all([
+    loadPreviousSummaries(cur.id),
+    loadTasks()
+  ]);
   subscribeRT();
   initTaskDnd();
-  // CC-102 — Charger les résumés des sessions précédentes
-  const prevSummaries = await loadPreviousSummaries(cur.id);
   const mems=getMembers();
   const mStr=mems.map(m=>m.name||m.initials).join(' & ');
-  // Stocker pour injection dans le system prompt
   cur._summaries = prevSummaries;
   addMsg('a','Bonjour ! Je suis au courant du projet '+cur.name+(mStr?' — équipe : '+mStr:'')+'. Pose tes questions ou dis-moi ce que tu avances.');
-  // CC-209 + CC-212 — Séquencer : indexer d'abord, charger le cache ensuite
-  // checkDriveUpdates est awaité pour que loadDocCache lise des chunks à jour.
-  // Les deux sont dans un bloc non-bloquant pour ne pas retarder l'affichage du chat.
+  // checkDriveUpdates must complete before loadDocCache to ensure fresh chunks
   (async () => {
-    await checkDriveUpdates(cur);   // indexe les nouveaux fichiers Drive en base
-    await loadDocCache(cur);        // lit depuis document_chunks — données fraîches garanties
+    await checkDriveUpdates(cur);
+    await loadDocCache(cur);
   })().catch(e => console.warn('[CC-212] update+cache pipeline error:', e.message));
 }
 
