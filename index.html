@@ -226,6 +226,11 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
 .hist-text{font-size:12px;color:var(--tx);white-space:pre-wrap;line-height:1.6}
 .task-modal-del{font-size:12px;color:var(--red);background:transparent;border:1px solid var(--rbg);border-radius:var(--rs);padding:5px 10px;cursor:pointer;font-family:'DM Sans',sans-serif}
 .task-modal-del:hover{background:var(--rbg)}
+.due-badge{display:inline-flex;align-items:center;gap:3px;font-size:10px;font-family:'DM Mono',monospace;padding:2px 7px;border-radius:20px;font-weight:500}
+.due-badge.overdue{background:var(--rbg);color:var(--red)}
+.due-badge.soon{background:#FFF3CD;color:#92400E}
+.due-badge.ok{background:var(--gbg);color:var(--green)}
+.task-meta-label{font-size:11px;font-weight:500;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
 .member-row{display:flex;gap:6px;align-items:center;margin-bottom:8px}
 .member-row input{margin-bottom:0;flex:1}
 .member-row input:first-child{max-width:70px}
@@ -686,6 +691,10 @@ select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%
     <div>
       <div class="task-meta-label">Assigné à</div>
       <select id="task-modal-assignee"></select>
+    </div>
+    <div>
+      <div class="task-meta-label">Échéance</div>
+      <input type="date" id="task-modal-due" style="font-family:'DM Mono',monospace;font-size:12px;padding:6px 8px;border:1px solid var(--brd2);border-radius:var(--rs);background:var(--sur2);color:var(--tx);width:100%"/>
     </div>
   </div>
   <div id="task-modal-blocker-wrap" class="hide">
@@ -1260,9 +1269,9 @@ async function loadTasks(){
 
 async function upsertTask(t){
   if(t.id&&t.id>0){
-    await sb.from('tasks').update({title:t.title,prio:t.prio,status:t.status,assignee:t.assignee,blocker:t.blocker,note:t.note,updated_at:new Date().toISOString()}).eq('id',t.id);
+    await sb.from('tasks').update({title:t.title,prio:t.prio,status:t.status,assignee:t.assignee,blocker:t.blocker,note:t.note,due_date:t.due_date||null,updated_at:new Date().toISOString()}).eq('id',t.id);
   } else {
-    const {data}=await sb.from('tasks').insert({client_id:cur.id,title:t.title,prio:t.prio||'P2',status:t.status||'todo',assignee:t.assignee||'',blocker:t.blocker||null,note:t.note||null}).select().single();
+    const {data}=await sb.from('tasks').insert({client_id:cur.id,title:t.title,prio:t.prio||'P2',status:t.status||'todo',assignee:t.assignee||'',blocker:t.blocker||null,note:t.note||null,due_date:t.due_date||null}).select().single();
     if(data) t.id=data.id;
   }
 }
@@ -1359,6 +1368,7 @@ function buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr }) {
     +'- Ajouter note : {"id":X,"note":"texte de la note"}\n'
     +'- Renommer : {"id":X,"new_title":"nouveau titre"}\n'
     +'- Prio : {"id":X,"prio":"P1|P2|P3"}\n'
+    +'- Échéance : {"id":X,"due_date":"YYYY-MM-DD"} — utilise ce format ISO. Pour supprimer : {"id":X,"due_date":null}\n'
     +'- Assignation : "à X" / "côté X" → assignee=initiales X. "à X et Y" → assignee="X+Y".\n'
     +'- Relecture : "passer en relecture côté X" → assignee=X + status=waiting.\n'
     +'- fini/terminé → done | bloqué → blocked | en cours → inprogress | retour/retravailler → todo.\n'
@@ -1718,7 +1728,7 @@ function addSourcesBadge(msgEl, sources){
 }
 
 function snap(){
-  return JSON.stringify(tasks.map(t=>({id:t.id,title:t.title,prio:t.prio,status:t.status,assignee:t.assignee,blocker:t.blocker||null,note:t.note||null})));
+  return JSON.stringify(tasks.map(t=>({id:t.id,title:t.title,prio:t.prio,status:t.status,assignee:t.assignee,blocker:t.blocker||null,note:t.note||null,due_date:t.due_date||null})));
 }
 
 async function send(){
@@ -2032,6 +2042,15 @@ async function send(){
   if(shouldSave) saveSessionSummary();
 }
 
+function getDueSoonCount(){
+  const now = new Date();
+  return tasks.filter(t => {
+    if(!t.due_date || t.status === 'done') return false;
+    const due = new Date(t.due_date); due.setHours(23,59,59);
+    return (due - now) / (1000*60*60*24) <= 7;
+  }).length;
+}
+
 function renderFilters(){
   const mems=getMembers();
   const stats=[{k:'all',l:'Tout'},{k:'blocked',l:'Bloqué'},{k:'inprogress',l:'En cours'},{k:'waiting',l:'En attente'},{k:'todo',l:'À faire'},{k:'done',l:'Fait'}];
@@ -2041,12 +2060,31 @@ function renderFilters(){
 
 function setFil(f,btn){activeF=f;document.querySelectorAll('.fil').forEach(b=>b.classList.remove('on'));btn.classList.add('on');renderTodo();}
 
+function injectDeadlineFilter(){
+  const bar = document.querySelector('.filters');
+  if(!bar || bar.querySelector('[data-f="deadline"]')) return;
+  const count = getDueSoonCount();
+  if(count === 0) { const old = bar.querySelector('[data-f="deadline"]'); if(old) old.remove(); return; }
+  const btn = document.createElement('button');
+  btn.className = 'fil' + (activeF==='deadline'?' on':'');
+  btn.setAttribute('data-f','deadline');
+  btn.textContent = '⏰ Cette semaine ('+count+')';
+  btn.onclick = () => setFil('deadline', btn);
+  bar.appendChild(btn);
+}
+
 function renderTodo(hi=[]){
   renderFilters();
+  injectDeadlineFilter();
   const secs=[{k:'blocked',l:'Bloqué',c:'#E24B4A'},{k:'inprogress',l:'En cours',c:'#8B5CF6'},{k:'waiting',l:'En attente',c:'#EF9F27'},{k:'todo',l:'À faire',c:'#378ADD'},{k:'done',l:'Fait',c:'#52b788'}];
   const mems=getMembers(); const mI=mems.map(m=>m.initials);
   const filt=tasks.filter(t=>{
     if(activeF==='all')return true;
+    if(activeF==='deadline'){
+      if(!t.due_date || t.status==='done') return false;
+      const due=new Date(t.due_date); due.setHours(23,59,59);
+      return (due-new Date())/(1000*60*60*24)<=7;
+    }
     if(mI.includes(activeF))return (t.assignee||'').split(/[,+\s]+/).map(a=>a.trim()).includes(activeF);
     return t.status===activeF;
   });
@@ -2062,7 +2100,16 @@ function renderTodo(hi=[]){
       const assigneeList=(t.assignee||'').split(/[,+\s]+/).map(a=>a.trim()).filter(Boolean);
       const avatars=assigneeList.length>0?assigneeList.map(a=>{const ms=mStyle(a);return '<div class="av" style="background:'+ms.bg+';color:'+ms.c+'">'+a.substring(0,2)+'</div>';}).join(''):'<div class="av" style="background:var(--sur2);color:var(--tx3)">?</div>';
       const assigneeLabel=assigneeList.join(' + ')||'—';
-      html+='<div class="task'+(hi.includes(t.id)?' new':'')+' task-clickable" onclick="openTaskModal('+t.id+')" style="cursor:pointer"><div class="t1"><span class="prio '+(t.prio||'P2').toLowerCase()+'">'+(t.prio||'P2')+'</span><span class="ttl">'+esc(t.title)+'</span></div>';
+      const dueBadge = (()=>{
+        if(!t.due_date || t.status==='done') return '';
+        const due = new Date(t.due_date); due.setHours(23,59,59);
+        const now = new Date();
+        const diff = (due - now) / (1000*60*60*24);
+        if(diff < 0) return '<span class="due-badge overdue">⚠ '+esc(t.due_date.slice(5).replace('-','/')+' dépassé')+'</span>';
+        if(diff <= 7) return '<span class="due-badge soon">⏳ '+esc(t.due_date.slice(5).replace('-','/'))+'</span>';
+        return '<span class="due-badge ok">📅 '+esc(t.due_date.slice(5).replace('-','/'))+'</span>';
+      })();
+      html+='<div class="task'+(hi.includes(t.id)?' new':'')+' task-clickable" onclick="openTaskModal('+t.id+')" style="cursor:pointer"><div class="t1"><span class="prio '+(t.prio||'P2').toLowerCase()+'">'+(t.prio||'P2')+'</span><span class="ttl">'+esc(t.title)+'</span>'+dueBadge+'</div>';
       if(t.blocker)html+='<div class="textra blk">Blocage : '+esc(t.blocker)+'</div>';
       if(t.note)html+='<div class="textra note" style="white-space:pre-wrap">'+esc(t.note)+'</div>';
       html+='<div class="t2"><div class="tperson">'+avatars+'<span>'+esc(assigneeLabel)+'</span></div><span class="spill '+sc+'">'+sl+'</span></div></div>';
@@ -2661,6 +2708,7 @@ function openTaskModal(taskId) {
   $('task-modal-status').value = t.status || 'todo';
   $('task-modal-prio').value = t.prio || 'P2';
   $('task-modal-note-input').value = '';
+  $('task-modal-due').value = t.due_date || '';
 
   // Blocker
   const blockerWrap = $('task-modal-blocker-wrap');
@@ -2749,6 +2797,7 @@ async function saveTaskFromModal() {
   t.prio = $('task-modal-prio').value;
   t.assignee = $('task-modal-assignee').value;
   t.blocker = t.status === 'blocked' ? ($('task-modal-blocker').value.trim() || null) : null;
+  t.due_date = $('task-modal-due').value || null;
   setSyncDot('#EF9F27','sauvegarde…');
   await upsertTask(t);
   setSyncDot('#52b788','synchronisé');
