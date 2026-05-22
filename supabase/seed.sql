@@ -138,9 +138,12 @@ RETURNS TABLE (
   chunk_text  text,
   similarity  double precision
 )
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 AS $$
+BEGIN
+  SET LOCAL hnsw.ef_search = 40;
+  RETURN QUERY
   SELECT
     dc.id,
     dc.source_name,
@@ -148,10 +151,10 @@ AS $$
     dc.chunk_text,
     1 - (dc.embedding <=> query_embedding) AS similarity
   FROM document_chunks dc
-  WHERE
-    (dc.client_id = p_client_id OR dc.client_id IS NULL)
+  WHERE (dc.client_id = p_client_id OR dc.client_id IS NULL)
   ORDER BY dc.embedding <=> query_embedding
   LIMIT match_count;
+END;
 $$;
 
 -- match_chunks v2 — surcharge avec seuil de similarité et client_id dans le retour
@@ -169,9 +172,12 @@ RETURNS TABLE (
   chunk_text  text,
   similarity  double precision
 )
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 AS $$
+BEGIN
+  SET LOCAL hnsw.ef_search = 40;
+  RETURN QUERY
   SELECT
     dc.id,
     dc.client_id,
@@ -184,6 +190,7 @@ AS $$
     AND 1 - (dc.embedding <=> query_embedding) > match_threshold
   ORDER BY dc.embedding <=> query_embedding
   LIMIT match_count;
+END;
 $$;
 
 -- ── Row Level Security ────────────────────────────────────────────────────────
