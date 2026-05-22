@@ -9,7 +9,7 @@
 - **Base de données** : Supabase (PostgreSQL) — client JS `@supabase/supabase-js@2` via CDN
 - **Backend** : Supabase Edge Functions (Deno) — point d'entrée unique `EDGE_URL = SB_URL + '/functions/v1/chat'`
 - **IA** : Claude (Anthropic) appelé côté Edge Function, jamais directement depuis le front
-- **Embeddings / RAG** : Voyage AI — rate limit plan gratuit : 3 RPM, délai entre fichiers obligatoire
+- **Embeddings / RAG** : Supabase.ai gte-small (natif Edge Runtime) — 384 dims, gratuit, sans rate limit
 - **Stockage documents** : Google Drive (export via Edge Function)
 - **Déploiement** : GitHub Pages (push sur `main` → CI → `public/`) ; Netlify en fallback (`publish = "public"`)
 

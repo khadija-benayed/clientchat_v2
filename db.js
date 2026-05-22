@@ -299,19 +299,13 @@ async function checkDriveUpdates(clientObj) {
     // À la place : export_single_file par ID → 1 appel Edge Function par fichier, séquentiel.
     // Limite à 8 par run pour rester bien sous les 150s de timeout Supabase.
     // Convergence garantie : le reste est traité au prochain selectClient().
-    // Voyage AI plan gratuit : 3 RPM / 10K TPM — 2 fichiers max par run, délai entre chaque
-    const MAX_PER_RUN = 2;
-    const INTER_FILE_DELAY_MS = 22000; // 22s entre fichiers → 2-3 RPM max
+    // gte-small natif — pas de rate limit, 10 fichiers max par run pour rester sous le timeout Edge Function
+    const MAX_PER_RUN = 10;
     const batch = toIndex.slice(0, MAX_PER_RUN);
     const updatedNames = [];
 
     for (let fi = 0; fi < batch.length; fi++) {
       const fileMeta = batch[fi];
-      // Délai entre fichiers (pas avant le premier)
-      if (fi > 0) {
-        console.log(`checkDriveUpdates: pause ${INTER_FILE_DELAY_MS/1000}s avant "${fileMeta.name}" (rate limit Voyage AI)…`);
-        await new Promise(r => setTimeout(r, INTER_FILE_DELAY_MS));
-      }
       try {
         // 1. Exporter le contenu du fichier via son ID Drive
         const exportRes = await fetch(EDGE_URL, {
