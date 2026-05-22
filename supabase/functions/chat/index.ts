@@ -861,24 +861,20 @@ serve(async (req) => {
         // 1. Vectoriser la question
         const queryEmbedding = await embedText(message);
 
-        // 2. Chercher les 5 chunks les plus proches via match_chunks()
+        // 2. Chercher les chunks les plus proches via match_chunks() (filtrage par seuil en SQL)
         const { data: chunks, error: matchError } = await sbAdmin.rpc("match_chunks", {
           query_embedding: queryEmbedding,
-          p_client_id: client_id || null,
+          match_threshold: 0.45,
           match_count: 15,
+          p_client_id: client_id || null,
         });
 
         if (matchError) {
           console.error("RAG match_chunks error:", matchError.message);
         } else {
-          // 3. Filtrer par seuil de pertinence
-          // 0.40 : calibré pour gte-small (384 dims) — les données tabulaires (plans de marquage,
-          // specs techniques) produisent une similarité plus faible qu'avec voyage-3 (1024 dims).
-          const relevant = (chunks || []).filter((c: { similarity: number }) => c.similarity > 0.45);
-
-          if (relevant.length > 0) {
+          if ((chunks || []).length > 0) {
             // Injecter les chunks sous la fiche client
-            const ragBlock = relevant
+            const ragBlock = (chunks || [])
               .map((c: { chunk_text: string; source_name: string }) =>
                 `— ${c.source_name}\n${c.chunk_text}`
               )
@@ -888,7 +884,7 @@ serve(async (req) => {
               + "\n\n[Extraits de documents pertinents]\n" + ragBlock;
 
             // Construire sources_used pour le front
-            sourcesUsed = relevant.map((c: { source_name: string; source_type: string; chunk_text: string }) => ({
+            sourcesUsed = (chunks || []).map((c: { source_name: string; source_type: string; chunk_text: string }) => ({
               source_name: c.source_name,
               source_type: c.source_type,
               preview: c.chunk_text.slice(0, 120),
