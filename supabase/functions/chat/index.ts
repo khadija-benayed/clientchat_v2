@@ -1,6 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+const session = new Supabase.ai.Session('gte-small');
+
 // CC-211 — Calcul coût par modèle
 function calculateCost(
   model: string,
@@ -204,103 +206,9 @@ function chunkCSV(text: string, linesPerChunk = 15): string[] {
   return chunks;
 }
 
-// ── Embeddings Voyage AI ───────────────────────────────────────────────────
-
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-/**
- * Vectorise un tableau de chunks via Voyage AI (voyage-3, 1024 dims).
- * Batchée par 128 inputs max (limite API Voyage AI).
- * Retry automatique sur 429 avec backoff exponentiel (max 4 tentatives).
- * Retourne les embeddings dans le même ordre que les chunks en entrée.
- */
-async function embedChunks(chunks: string[], voyageKey: string): Promise<number[][]> {
-  const BATCH_SIZE = 128;
-  const batches: string[][] = [];
-  for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
-    batches.push(chunks.slice(i, i + BATCH_SIZE));
-  }
-
-  const allEmbeddings: number[][] = [];
-  for (const batch of batches) {
-    let lastErr: Error | null = null;
-    // Retry avec backoff : 5s, 15s, 30s — couvre le reset de la fenêtre 1-min Voyage AI
-    for (const waitMs of [0, 5_000, 15_000, 30_000]) {
-      if (waitMs > 0) await sleep(waitMs);
-      const res = await fetch("https://api.voyageai.com/v1/embeddings", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${voyageKey}`,
-        },
-        body: JSON.stringify({
-          model: "voyage-3", // 1024 dims — validé CC-202b
-          input: batch,
-        }),
-      });
-
-      if (res.status === 429) {
-        const errText = await res.text();
-        lastErr = new Error(`Voyage AI 429 rate limit: ${errText.substring(0, 200)}`);
-        console.warn(`embedChunks: 429 rate limit — retry après ${waitMs}ms`);
-        continue;
-      }
-
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`Voyage AI HTTP ${res.status}: ${errText}`);
-      }
-
-      const data = await res.json();
-      if (!data.data || !Array.isArray(data.data)) {
-        throw new Error(`Voyage AI réponse invalide: ${JSON.stringify(data)}`);
-      }
-
-      // L'API Voyage retourne les embeddings avec un champ `index` — trier pour garantir l'ordre
-      const sorted = (data.data as { index: number; embedding: number[] }[])
-        .sort((a, b) => a.index - b.index)
-        .map(d => d.embedding);
-
-      allEmbeddings.push(...sorted);
-      lastErr = null;
-      break;
-    }
-    if (lastErr) throw lastErr; // Toutes les tentatives épuisées
-  }
-
-  return allEmbeddings;
-}
-
-// ── Recherche sémantique — CC-203 ─────────────────────────────────────────
-
-/**
- * Vectorise un message utilisateur via Voyage AI.
- * Utilise voyage-3 (1024 dims) — MÊME modèle que l'indexation CC-202.
- * Important : mélanger les modèles (voyage-3 vs voyage-3-lite) invalide la similarité cosinus.
- */
-async function embedQuery(text: string, voyageKey: string): Promise<number[]> {
-  const res = await fetch("https://api.voyageai.com/v1/embeddings", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${voyageKey}`,
-    },
-    body: JSON.stringify({
-      model: "voyage-3", // même modèle que CC-202 — ne pas changer
-      input: [text],
-    }),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Voyage AI embedQuery HTTP ${res.status}: ${errText}`);
-  }
-
-  const data = await res.json();
-  if (!data.data?.[0]?.embedding) {
-    throw new Error(`Voyage AI embedQuery réponse invalide: ${JSON.stringify(data)}`);
-  }
-  return data.data[0].embedding;
+async function embedText(text: string): Promise<number[]> {
+  const output = await session.run(text, { mean_pool: true, normalize: true });
+  return Array.from(output as number[]);
 }
 
 // ── Serve ──────────────────────────────────────────────────────────────────
@@ -362,32 +270,29 @@ serve(async (req) => {
       // CC-208 — Indexer le résumé dans document_chunks pour la recherche sémantique
       // source_type = 'session' → badge 🕐 dans le front (CC-203 sourceIcon)
       // Le delete-before-insert dans index_source gère la déduplication automatiquement
-      const VOYAGE_KEY_SUM = Deno.env.get("VOYAGE_API_KEY");
-      if (VOYAGE_KEY_SUM) {
-        try {
-          const sbAdmin2 = createClient(SUPABASE_URL!, SUPABASE_SERVICE_KEY!);
-          const sessionDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-          const sessionSourceName = `Session du ${sessionDate}`;
+      try {
+        const sbAdmin2 = createClient(SUPABASE_URL!, SUPABASE_SERVICE_KEY!);
+        const sessionDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+        const sessionSourceName = `Session du ${sessionDate}`;
 
-          // Supprimer un éventuel chunk existant pour cette date (idempotent)
-          await sbAdmin2
-            .from("document_chunks")
-            .delete()
-            .match({ client_id, source_name: sessionSourceName });
+        // Supprimer un éventuel chunk existant pour cette date (idempotent)
+        await sbAdmin2
+          .from("document_chunks")
+          .delete()
+          .match({ client_id, source_name: sessionSourceName });
 
-          // Vectoriser et insérer
-          const embedding = await embedQuery(summaryText, VOYAGE_KEY_SUM);
-          await sbAdmin2.from("document_chunks").insert({
-            client_id,
-            source_type: "session",
-            source_name: sessionSourceName,
-            chunk_text: summaryText,
-            embedding,
-          });
-        } catch (idxErr) {
-          // Non bloquant — le résumé est déjà sauvegardé dans session_summaries
-          console.error("CC-208 index session error (non bloquant):", (idxErr as Error).message);
-        }
+        // Vectoriser et insérer
+        const embedding = await embedText(summaryText);
+        await sbAdmin2.from("document_chunks").insert({
+          client_id,
+          source_type: "session",
+          source_name: sessionSourceName,
+          chunk_text: summaryText,
+          embedding,
+        });
+      } catch (idxErr) {
+        // Non bloquant — le résumé est déjà sauvegardé dans session_summaries
+        console.error("CC-208 index session error (non bloquant):", (idxErr as Error).message);
       }
 
       return new Response(JSON.stringify({ saved: true, summary: summaryText }), { status: 200, headers });
@@ -705,13 +610,6 @@ serve(async (req) => {
     // Sortie : { chunks_created: number }
     if (action === "index_source") {
       // ── 0. Valider les secrets et les paramètres requis ──────────────────
-      const VOYAGE_KEY = Deno.env.get("VOYAGE_API_KEY");
-      if (!VOYAGE_KEY) {
-        return new Response(
-          JSON.stringify({ error: "VOYAGE_API_KEY non configurée dans les secrets Supabase." }),
-          { status: 500, headers }
-        );
-      }
       if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
         return new Response(
           JSON.stringify({ error: "Variables Supabase manquantes (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)." }),
@@ -810,21 +708,16 @@ serve(async (req) => {
       }
 
       // ── 3. Vectoriser avec Voyage AI ─────────────────────────────────────
-      let embeddings: number[][];
+      const embeddings: number[][] = [];
       try {
-        embeddings = await embedChunks(chunks, VOYAGE_KEY);
+        for (const chunk of chunks) {
+          embeddings.push(await embedText(chunk));
+        }
       } catch (e) {
-        console.error("index_source: embedChunks error:", (e as Error).message);
+        console.error("index_source: embedText error:", (e as Error).message);
         return new Response(
-          JSON.stringify({ error: `Voyage AI: ${(e as Error).message}` }),
+          JSON.stringify({ error: `Embedding: ${(e as Error).message}` }),
           { status: 502, headers }
-        );
-      }
-
-      if (embeddings.length !== chunks.length) {
-        return new Response(
-          JSON.stringify({ error: `Incohérence : ${chunks.length} chunks mais ${embeddings.length} embeddings reçus.` }),
-          { status: 500, headers }
         );
       }
 
@@ -877,11 +770,6 @@ serve(async (req) => {
       if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
         return new Response(JSON.stringify({ error: "Variables Supabase manquantes." }), { status: 500, headers });
       }
-      const VOYAGE_KEY_CU = Deno.env.get("VOYAGE_API_KEY");
-      if (!VOYAGE_KEY_CU) {
-        return new Response(JSON.stringify({ error: "VOYAGE_API_KEY manquante." }), { status: 500, headers });
-      }
-
       const { files } = body as {
         files: { source_name: string; source_id?: string; source_type: string; content: string; modifiedTime: string }[];
       };
@@ -918,8 +806,10 @@ serve(async (req) => {
           const chunks = isCSV ? chunkCSV(file.content) : chunkText(file.content);
           if (chunks.length === 0) continue;
 
-          const embeddings = await embedChunks(chunks, VOYAGE_KEY_CU);
-          if (embeddings.length !== chunks.length) continue;
+          const embeddings: number[][] = [];
+          for (const chunk of chunks) {
+            embeddings.push(await embedText(chunk));
+          }
 
           // Supprimer anciens chunks — par source_id si dispo (stable), sinon source_name
           const delMatch = file.source_id
@@ -1044,16 +934,15 @@ serve(async (req) => {
     // ── RAG — CC-203 : recherche sémantique avant appel Claude ───────────
     // Vectorise le message utilisateur et injecte les chunks pertinents dans le system prompt.
     // Fiche client (CC-107) reste en haut — chunks RAG ajoutés en dessous.
-    const VOYAGE_KEY = Deno.env.get("VOYAGE_API_KEY");
     let systemWithRAG = system || "";
     let sourcesUsed: { source_name: string; source_type: string; preview: string }[] = [];
 
-    if (message && VOYAGE_KEY && SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+    if (message && SUPABASE_URL && SUPABASE_SERVICE_KEY) {
       try {
         const sbAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
         // 1. Vectoriser la question
-        const queryEmbedding = await embedQuery(message, VOYAGE_KEY);
+        const queryEmbedding = await embedText(message);
 
         // 2. Chercher les 5 chunks les plus proches via match_chunks()
         const { data: chunks, error: matchError } = await sbAdmin.rpc("match_chunks", {
@@ -1068,7 +957,7 @@ serve(async (req) => {
           // 3. Filtrer par seuil de pertinence
           // 0.55 : seuil abaissé pour mieux couvrir les données tabulaires (plans de marquage,
           // specs techniques) dont la sémantique est plus distante des questions métier.
-          const relevant = (chunks || []).filter((c: { similarity: number }) => c.similarity > 0.55);
+          const relevant = (chunks || []).filter((c: { similarity: number }) => c.similarity > 0.40);
 
           if (relevant.length > 0) {
             // Injecter les chunks sous la fiche client
