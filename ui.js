@@ -16,16 +16,6 @@ async function loadPreviousSummaries(clientId, limit=5){
   } catch(e) { console.error('loadPreviousSummaries:', e); return []; }
 }
 
-// Construire le bloc résumés pour le system prompt
-function buildSummariesBlock(){
-  const summaries = cur?._summaries || [];
-  if(!summaries.length) return '';
-  const lines = summaries.map(s => {
-    const d = new Date(s.created_at).toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'2-digit'});
-    return '— Session du '+d+' :\n'+s.summary_text;
-  });
-  return '\n\n[Sessions précédentes]\n'+lines.join('\n\n');
-}
 
 // ── CC-211 — Détection d'intention pour prompt adaptatif ─────────────────
 // Retourne true si le message est une action tâche (verbe d'action court).
@@ -1201,7 +1191,6 @@ async function syncSource(idx){
 
       // ── Génération différée de la fiche client ──
       // 15s suffisent maintenant que l'indexation est parallèle et non-bloquante.
-      // Le backoff 429 dans embedChunks absorbe les pics Voyage AI sans saturer Anthropic.
       setTimeout(async () => {
         if (!docsForBrief.length) return;
         try {

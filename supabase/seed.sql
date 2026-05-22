@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS document_chunks (
   source_id        text                    -- Google Drive file ID (stable, résistant au renommage)
 );
 
--- embedding_logs : traçabilité des indexations Voyage AI (CC-207)
+-- embedding_logs : traçabilité des indexations (CC-207)
 CREATE TABLE IF NOT EXISTS embedding_logs (
   id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id        uuid        REFERENCES clients(id) ON DELETE SET NULL,
