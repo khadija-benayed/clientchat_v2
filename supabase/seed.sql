@@ -44,14 +44,14 @@ CREATE TABLE IF NOT EXISTS session_summaries (
   created_at    timestamptz             DEFAULT now()
 );
 
--- document_chunks : embeddings RAG — voyage-3 (1024 dims)
+-- document_chunks : embeddings RAG — gte-small (384 dims)
 CREATE TABLE IF NOT EXISTS document_chunks (
   id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id        uuid        REFERENCES clients(id) ON DELETE CASCADE,  -- NULL = base agence
   source_type      text        NOT NULL,   -- 'doc' | 'sheet' | 'session' | 'pdf'
   source_name      text        NOT NULL,   -- nom affiché dans l'UI
   chunk_text       text        NOT NULL,
-  embedding        vector(1024),
+  embedding        vector(384),
   created_at       timestamptz             DEFAULT now(),
   last_indexed_at  timestamptz             DEFAULT now(),
   source_id        text                    -- Google Drive file ID (stable, résistant au renommage)
@@ -92,10 +92,10 @@ CREATE TABLE IF NOT EXISTS usage_logs (
 
 -- ── Index de performance ──────────────────────────────────────────────────────
 
--- Recherche vectorielle ivfflat cosinus — voyage-3, 1024 dims (lists=100)
+-- Recherche vectorielle ivfflat cosinus — gte-small, 384 dims (lists=50)
 CREATE INDEX IF NOT EXISTS document_chunks_embedding_idx
   ON document_chunks USING ivfflat (embedding vector_cosine_ops)
-  WITH (lists = 100);
+  WITH (lists = 50);
 
 -- Lookup rapide par source Drive (checkDriveUpdates, index_source)
 CREATE INDEX IF NOT EXISTS idx_document_chunks_source_id
@@ -127,7 +127,7 @@ CREATE INDEX IF NOT EXISTS tasks_due_date_idx
 -- match_chunks v1 — utilisée par le pipeline RAG (Edge Function)
 -- Retourne les N chunks les plus proches pour un client donné + base agence (client_id IS NULL).
 CREATE OR REPLACE FUNCTION match_chunks(
-  query_embedding vector,
+  query_embedding vector(384),
   p_client_id     uuid,
   match_count     integer DEFAULT 5
 )
