@@ -1,7 +1,7 @@
 -- ════════════════════════════════════════════════════════════════════════════
 -- seed.sql — Schéma complet clientchat_v2
 -- Vérifié contre la base de production (erpjerfvswesipmdqxab) le 2026-05-22
--- Modèle d'embeddings : voyage-3 (1024 dimensions)
+-- Modèle d'embeddings : gte-small / Supabase.ai (384 dimensions)
 -- ════════════════════════════════════════════════════════════════════════════
 
 -- ── Extensions ───────────────────────────────────────────────────────────────
