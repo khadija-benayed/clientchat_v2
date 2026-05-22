@@ -156,7 +156,7 @@ $$;
 
 -- match_chunks v2 — surcharge avec seuil de similarité et client_id dans le retour
 CREATE OR REPLACE FUNCTION match_chunks(
-  query_embedding  vector,
+  query_embedding  vector(384),
   match_threshold  double precision,
   match_count      integer,
   p_client_id      uuid
@@ -180,7 +180,7 @@ AS $$
     dc.chunk_text,
     1 - (dc.embedding <=> query_embedding) AS similarity
   FROM document_chunks dc
-  WHERE dc.client_id = p_client_id
+  WHERE (dc.client_id = p_client_id OR dc.client_id IS NULL)
     AND 1 - (dc.embedding <=> query_embedding) > match_threshold
   ORDER BY dc.embedding <=> query_embedding
   LIMIT match_count;
