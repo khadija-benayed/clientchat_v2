@@ -172,20 +172,57 @@ async function exportDriveFile(file: DriveFile, token: string): Promise<DriveFil
 // ── Chunking ───────────────────────────────────────────────────────────────
 
 /**
- * Découpe un texte brut en chunks avec overlap.
- * maxChars = 1500 chars ≈ 375 tokens — limite conservatrice pour gte-small (512 tokens max).
- * overlap = 150 chars pour éviter de perdre le contexte aux jonctions.
+ * Découpe un texte en chunks en respectant les limites sémantiques.
+ * Priorité : coupure sur double-saut de ligne (paragraphes), puis sur fin de phrase, puis sur chars.
+ * maxChars = 1400 chars ≈ 350 tokens (marge sous la limite gte-small de 512 tokens).
+ * overlap = 300 chars, calé sur le début d'une phrase pour préserver le contexte aux jonctions.
  */
-function chunkText(text: string, maxChars = 1500, overlap = 150): string[] {
-  const chunks: string[] = [];
-  let start = 0;
-  while (start < text.length) {
-    const end = Math.min(start + maxChars, text.length);
-    chunks.push(text.slice(start, end));
-    if (end === text.length) break;
-    start += maxChars - overlap;
+function chunkText(text: string, maxChars = 1400, overlap = 300): string[] {
+  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  if (!normalized) return [];
+
+  // Étape 1 : découper en segments sémantiques (paragraphes, puis phrases pour les blocs longs)
+  const segments: string[] = [];
+  for (const para of normalized.split(/\n{2,}/)) {
+    const p = para.trim();
+    if (!p) continue;
+    if (p.length <= maxChars) {
+      segments.push(p);
+    } else {
+      // Paragraphe trop long : couper sur les fins de phrase
+      let buf = '';
+      for (const sent of p.split(/(?<=[.!?])\s+/)) {
+        const candidate = buf ? buf + ' ' + sent : sent;
+        if (candidate.length > maxChars && buf) {
+          segments.push(buf.trim());
+          buf = sent;
+        } else {
+          buf = candidate;
+        }
+      }
+      if (buf.trim()) segments.push(buf.trim());
+    }
   }
-  return chunks;
+
+  // Étape 2 : fusionner les segments en chunks ≤ maxChars, avec overlap sur les jonctions
+  const chunks: string[] = [];
+  let current = '';
+
+  for (const seg of segments) {
+    const joined = current ? current + '\n\n' + seg : seg;
+    if (joined.length > maxChars && current) {
+      chunks.push(current);
+      // Overlap : garder les derniers `overlap` chars du chunk, calé sur un début de phrase
+      const tail = current.slice(-overlap);
+      const sentStart = tail.search(/(?<=[.!?])\s/);
+      const overlapText = sentStart > 0 ? tail.slice(sentStart + 1) : tail;
+      current = overlapText ? overlapText + '\n\n' + seg : seg;
+    } else {
+      current = joined;
+    }
+  }
+  if (current.trim()) chunks.push(current.trim());
+  return chunks.length ? chunks : [normalized.slice(0, maxChars)];
 }
 
 /**
