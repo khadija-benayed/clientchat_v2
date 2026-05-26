@@ -1134,9 +1134,14 @@ async function regenerateBrief() {
 
 
 async function syncSource(idx){
+  if (_indexingInProgress) {
+    addMsg('a', '⏳ Une indexation est déjà en cours, réessaie dans quelques secondes.');
+    return;
+  }
+  _indexingInProgress = true;
   const srcs = getSources();
   const s = srcs[idx];
-  if(!s) return;
+  if(!s) { _indexingInProgress = false; return; }
 
   // UI : passer en état syncing
   const syncBtn = $('src-sync-'+idx);
@@ -1183,12 +1188,14 @@ async function syncSource(idx){
           }
 
           const sourceType = fileMeta.mimeType === 'application/vnd.google-apps.spreadsheet' ? 'sheet' : 'doc';
-          const idxR = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({
-            action:'index_source', client_id:cur.id,
-            source_type:sourceType, source_id:fileMeta.id,
-            source_name:fileMeta.name, content:expD.file.content,
-          })});
-          if(idxR.ok){ const idxD = await idxR.json(); if(!idxD.error) indexedCount++; }
+          try {
+            await indexSourceBatched({
+              action:'index_source', client_id:cur.id,
+              source_type:sourceType, source_id:fileMeta.id,
+              source_name:fileMeta.name, content:expD.file.content,
+            });
+            indexedCount++;
+          } catch(idxErr) { console.warn('syncSource: index_source error for', fileMeta.name, idxErr.message); }
         } catch(e) { console.warn('syncSource: processFile error for', fileMeta.name, e.message); }
       }
 
@@ -1250,6 +1257,8 @@ async function syncSource(idx){
     try { await sb.from('clients').update({sources:cur.sources}).eq('id',cur.id); } catch(_){}
     addSession(cur);
     console.error('syncSource error:', e.message);
+  } finally {
+    _indexingInProgress = false;
   }
 
   renderSources();
@@ -1405,21 +1414,13 @@ async function confirmAddSource(type){
         cur.context = newCtx; addSession(cur);
 
         // ── Indexer le PDF dans document_chunks pour le RAG ──────────────
-        try {
-          await fetch(EDGE_URL, {
-            method: 'POST',
-            headers: EDGE_HEADERS,
-            body: JSON.stringify({
-              action: 'index_source',
-              client_id: cur.id,
-              source_type: 'file',
-              source_name: file.name,
-              content: result.text, // résumé extracté — suffisant pour la recherche sémantique
-            })
-          });
-        } catch(idxErr) {
-          console.warn('confirmAddSource file: index_source error (non bloquant):', idxErr.message);
-        }
+        indexSourceBatched({
+          action: 'index_source',
+          client_id: cur.id,
+          source_type: 'file',
+          source_name: file.name,
+          content: result.text,
+        }).catch(idxErr => console.warn('confirmAddSource file: index_source error (non bloquant):', idxErr.message));
         // ─────────────────────────────────────────────────────────────────
 
         closeModal('modal-add-source');

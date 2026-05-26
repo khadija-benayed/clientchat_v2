@@ -22,6 +22,20 @@ async function callEdge(payload){
   if(!r.ok) throw new Error('Edge HTTP '+r.status);
   return r.json();
 }
+
+// Indexe une source en plusieurs appels de MAX_CHUNKS chunks pour éviter les 546.
+async function indexSourceBatched(payload) {
+  let startChunk = 0;
+  let totalCreated = 0;
+  while (true) {
+    const data = await callEdge({ ...payload, start_chunk: startChunk });
+    if (data.error) throw new Error(data.error);
+    totalCreated += data.chunks_created;
+    if (!data.has_more) break;
+    startChunk = data.next_chunk;
+  }
+  return { chunks_created: totalCreated };
+}
 let selectedFile = null; // {data: base64, mediaType, name}
 
 function onFileSelected(input) {
@@ -221,6 +235,8 @@ function showUpdateNotif(count) {
   notif._timer = setTimeout(() => { notif.style.opacity = '0'; }, 4000);
 }
 
+let _indexingInProgress = false;
+
 // CC-209 — Vérifier et re-indexer les docs Drive modifiés depuis la dernière indexation
 // CC-210 — checkDriveUpdates : vérification légère en 2 étapes
 // Étape 1 : list_drive_metadata (metadata only, ~100ms, 0 export Drive)
@@ -228,6 +244,8 @@ function showUpdateNotif(count) {
 // Étape 3 : re-télécharger + index_source UNIQUEMENT les fichiers modifiés (max 5)
 async function checkDriveUpdates(clientObj) {
   if (!clientObj?.drive_folder_id) return;
+  if (_indexingInProgress) return;
+  _indexingInProgress = true;
   try {
     // ── Étape 1 : métadonnées uniquement (id, name, mimeType, modifiedTime) ──
     const metaRes = await fetch(EDGE_URL, {
@@ -337,31 +355,28 @@ async function checkDriveUpdates(clientObj) {
 
         // 2. Indexer
         const sourceType = fileMeta.mimeType === 'application/vnd.google-apps.spreadsheet' ? 'sheet' : 'doc';
-        const indexRes = await fetch(EDGE_URL, {
-          method: 'POST',
-          headers: EDGE_HEADERS,
-          body: JSON.stringify({
+        let indexData;
+        try {
+          indexData = await indexSourceBatched({
             action: 'index_source',
             client_id: clientObj.id,
             source_type: sourceType,
             source_id: fileMeta.id,
             source_name: fileMeta.name,
             content: fileContent.content,
-          })
-        });
-        if (!indexRes.ok) {
-          console.warn(`checkDriveUpdates: index HTTP ${indexRes.status} pour "${fileMeta.name}"`);
-          continue;
-        }
-        const indexData = await indexRes.json();
-        if (indexData.error) {
-          console.warn(`checkDriveUpdates: index_source error pour "${fileMeta.name}":`, indexData.error);
+          });
+        } catch (idxErr) {
+          console.warn(`checkDriveUpdates: index_source error pour "${fileMeta.name}":`, idxErr.message);
           continue;
         }
 
-        updatedNames.push(fileMeta.name);
-        setSyncProgress(updatedNames.length, toIndex.length);
-        console.log(`checkDriveUpdates: "${fileMeta.name}" indexé [${fileMeta.reason}] — ${indexData.chunks_created} chunks.`);
+        if (indexData.chunks_created && indexData.chunks_created > 0) {
+          updatedNames.push(fileMeta.name);
+          setSyncProgress(updatedNames.length, toIndex.length);
+          console.log(`checkDriveUpdates: "${fileMeta.name}" indexé [${fileMeta.reason}] — ${indexData.chunks_created} chunks.`);
+        } else {
+          console.warn(`checkDriveUpdates: "${fileMeta.name}" — 0 chunks créés, non comptabilisé.`);
+        }
       } catch (fileErr) {
         console.warn(`checkDriveUpdates: erreur pour "${fileMeta.name}" (non bloquant):`, fileErr.message);
       }
@@ -381,6 +396,8 @@ async function checkDriveUpdates(clientObj) {
     }
   } catch (e) {
     console.warn('checkDriveUpdates error (non bloquant):', e.message);
+  } finally {
+    _indexingInProgress = false;
   }
 }
 

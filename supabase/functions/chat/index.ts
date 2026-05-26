@@ -1,7 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-let session: Supabase.ai.Session | null = null;
 
 // CC-211 — Calcul coût par modèle
 function calculateCost(
@@ -162,7 +161,7 @@ async function exportDriveFile(file: DriveFile, token: string): Promise<DriveFil
 
     const content = await res.text();
     // Budget : 50 000 chars ≈ 12 500 tokens par fichier.
-    return { filename: file.name, type, content: content.substring(0, 50_000), modifiedTime: file.modifiedTime };
+    return { filename: file.name, type, content: content.substring(0, 20_000), modifiedTime: file.modifiedTime };
   } catch (e) {
     console.error(`Export error for ${file.name}:`, e);
     return null;
@@ -243,10 +242,24 @@ function chunkCSV(text: string, linesPerChunk = 15): string[] {
   return chunks;
 }
 
+const EMBEDDER_URL = Deno.env.get("EMBEDDER_URL"); // ex: https://clientchat-embedder.onrender.com
+
+async function embedTexts(texts: string[]): Promise<number[][]> {
+  if (!EMBEDDER_URL) throw new Error("EMBEDDER_URL non configurée");
+  const res = await fetch(`${EMBEDDER_URL}/embed`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ texts }),
+  });
+  if (!res.ok) throw new Error(`Embedder HTTP ${res.status}`);
+  const data = await res.json();
+  return data.embeddings;
+}
+
+// Wrapper single-text pour les appels RAG (vectorisation de la question)
 async function embedText(text: string): Promise<number[]> {
-  if (!session) session = new Supabase.ai.Session('gte-small');
-  const output = await session.run(text, { mean_pool: true, normalize: true });
-  return Array.from(output as number[]);
+  const results = await embedTexts([text]);
+  return results[0];
 }
 
 // ── Serve ──────────────────────────────────────────────────────────────────
@@ -745,39 +758,42 @@ serve(async (req) => {
         );
       }
 
-      // ── 2. Vectoriser (gte-small) — séquentiel pour éviter les pics mémoire ─
-      // Promise.all sur 30+ chunks simultanés fait crasher la Edge Function (546).
-      // Le loop séquentiel coûte ~2s/fichier max, bien en dessous du timeout 60s.
+      // ── Batching anti-546 : traiter MAX_CHUNKS chunks par appel ──────────
+      // Le front rappelle avec start_chunk incrémenté jusqu'à has_more=false.
+      const MAX_CHUNKS = 20;
+      const startChunk = typeof body.start_chunk === "number" ? body.start_chunk : 0;
+      const batch = chunks.slice(startChunk, startChunk + MAX_CHUNKS);
+      const hasMore = startChunk + MAX_CHUNKS < chunks.length;
+      const nextChunk = startChunk + MAX_CHUNKS;
+
+      // ── 2. Vectoriser (worker Python) — batch unique, élimine le 546 ────────
       let embeddings: number[][];
       try {
-        embeddings = [];
-        for (const chunk of chunks) {
-          embeddings.push(await embedText(chunk));
-        }
+        embeddings = await embedTexts(batch);
       } catch (e) {
-        console.error("index_source: embedText error:", (e as Error).message);
+        console.error("index_source: embedTexts error:", (e as Error).message);
         return new Response(
           JSON.stringify({ error: `Embedding: ${(e as Error).message}` }),
           { status: 502, headers }
         );
       }
 
-      // ── 3. Supprimer les anciens chunks (embeddings OK) ──────────────────
+      // ── 3. Supprimer les anciens chunks (premier appel uniquement) ────────
       // Si source_id fourni (fichier Drive) : déduplication sur l'ID stable → gère les renommages.
       // Sinon : fallback sur source_name (sources manuelles, sessions).
-      const deleteQuery = sbAdmin.from("document_chunks").delete();
-      const { error: deleteError } = source_id
-        ? await deleteQuery.match({ client_id: client_id || null, source_id })
-        : await deleteQuery.match({ client_id: client_id || null, source_name });
-
-      if (deleteError) {
-        console.error("index_source: delete anciens chunks error:", deleteError.message);
-        // Non bloquant — on continue : l'insert va créer les nouveaux chunks
+      if (startChunk === 0) {
+        const deleteQuery = sbAdmin.from("document_chunks").delete();
+        const { error: deleteError } = source_id
+          ? await deleteQuery.match({ client_id: client_id || null, source_id })
+          : await deleteQuery.match({ client_id: client_id || null, source_name });
+        if (deleteError) {
+          console.error("index_source: delete anciens chunks error:", deleteError.message);
+        }
       }
 
       // ── 4. Insérer dans document_chunks ──────────────────────────────────
       const now = new Date().toISOString();
-      const rows = chunks.map((chunk, i) => ({
+      const rows = batch.map((chunk, i) => ({
         client_id: client_id || null,
         source_type,
         source_name,                          // affiché dans l'UI, mis à jour même si renommé
@@ -796,21 +812,27 @@ serve(async (req) => {
         );
       }
 
-      // ── 5. Logger dans embedding_logs (CC-207) ───────────────────────────
-      const tokensEstimated = chunks.reduce((acc, c) => acc + Math.ceil(c.length / 4), 0);
-      const { error: logError } = await sbAdmin.from("embedding_logs").insert({
-        client_id: client_id || null,
-        source_name,
-        chunks_count: chunks.length,
-        tokens_estimated: tokensEstimated,
-      });
-      if (logError) {
-        // Non bloquant — le log est informatif, l'indexation est déjà faite
-        console.error("index_source: insert embedding_logs error:", logError.message);
+      // ── 5. Logger dans embedding_logs (dernier appel uniquement) ─────────
+      if (!hasMore) {
+        const tokensEstimated = chunks.reduce((acc, c) => acc + Math.ceil(c.length / 4), 0);
+        const { error: logError } = await sbAdmin.from("embedding_logs").insert({
+          client_id: client_id || null,
+          source_name,
+          chunks_count: chunks.length,
+          tokens_estimated: tokensEstimated,
+        });
+        if (logError) {
+          console.error("index_source: insert embedding_logs error:", logError.message);
+        }
       }
 
       return new Response(
-        JSON.stringify({ chunks_created: chunks.length }),
+        JSON.stringify({
+          chunks_created: batch.length,
+          has_more: hasMore,
+          next_chunk: hasMore ? nextChunk : undefined,
+          total_chunks: chunks.length,
+        }),
         { status: 200, headers }
       );
     }
@@ -916,8 +938,8 @@ serve(async (req) => {
         // Second-pass TS à 0.62 = injection stricte ; fallback top-2 si rien ne passe.
         const { data: chunks, error: matchError } = await sbAdmin.rpc("match_chunks", {
           query_embedding: queryEmbedding,
-          match_threshold: 0.52,
-          match_count: 10,
+          match_threshold: 0.55,
+          match_count: 8,
           p_client_id: client_id || null,
         });
 
