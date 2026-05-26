@@ -864,7 +864,7 @@ serve(async (req) => {
         // 2. Chercher les chunks les plus proches via match_chunks() (filtrage par seuil en SQL)
         const { data: chunks, error: matchError } = await sbAdmin.rpc("match_chunks", {
           query_embedding: queryEmbedding,
-          match_threshold: 0.45,
+          match_threshold: 0.3,
           match_count: 15,
           p_client_id: client_id || null,
         });

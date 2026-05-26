@@ -413,17 +413,20 @@ function sourceIcon(type){
 // CC-203 — Ajouter le badge sources sous un message Claude
 function addSourcesBadge(msgEl, sources){
   if(!sources||sources.length===0) return;
+  // Dédupliquer par source_name — garder le premier chunk (meilleur score)
+  const seen=new Set();
+  const unique=sources.filter(s=>{ if(seen.has(s.source_name)) return false; seen.add(s.source_name); return true; });
   const badge=document.createElement('div');
   badge.className='msg-badge msg-sources-badge';
   badge.style.cssText='cursor:pointer;user-select:none;position:relative;';
-  badge.textContent='📚 '+sources.length+' source'+(sources.length>1?'s':'');
+  badge.textContent='📚 '+unique.length+' source'+(unique.length>1?'s':'');
 
   // Tooltip
   const tip=document.createElement('div');
   tip.className='sources-tooltip';
   tip.style.cssText='display:none;position:absolute;bottom:calc(100% + 6px);left:0;background:var(--sur);border:1px solid var(--brd2);border-radius:var(--r);padding:10px 12px;min-width:260px;max-width:340px;z-index:999;color:var(--tx);box-shadow:0 2px 12px rgba(0,0,0,.1);';
 
-  sources.forEach(s=>{
+  unique.forEach(s=>{
     const row=document.createElement('div');
     row.style.cssText='margin-bottom:8px;font-size:12px;line-height:1.4;';
     row.innerHTML='<span style="font-weight:600;">'+sourceIcon(s.source_type)+' '+s.source_name+'</span>'
@@ -1081,13 +1084,15 @@ async function regenerateBrief() {
   $('brief-content').innerHTML = '<div class="brief-empty">Génération en cours…</div>';
 
   try {
-    // Récupérer les docs depuis le contexte existant (déjà synchro)
-    // On extrait le bloc Drive du contexte si présent, sinon on force une re-sync
-    const docsContent = extractDocsFromContext();
+    // Utiliser le doc cache déjà en mémoire (rechargé au selectClient)
+    // pour éviter une re-sync Drive complète inutile.
+    const docsContent = cur._docCache?.length
+      ? cur._docCache.map(d => ({ filename: d.filename, content: d.content }))
+      : extractDocsFromContext();
     if (!docsContent.length) {
-      // Pas de contenu en cache → lancer la sync Drive puis générer
+      // Aucun contenu disponible → lancer la sync Drive puis générer
       await syncSource(srcs.indexOf(driveSrcs[0]));
-      // syncSource appelle generateBrief en interne, donc c'est bon
+      // syncSource appelle generateBrief en interne
     } else {
       await generateBrief(docsContent);
       renderBrief();
