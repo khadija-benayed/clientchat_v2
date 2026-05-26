@@ -381,10 +381,6 @@ function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()
     if(saved>=240&&saved<=600) todo.style.width=saved+'px';
   }catch(_){}
 })();
-// Shared handler: close all open source tooltips on any outside click
-document.addEventListener('click',()=>{
-  document.querySelectorAll('.sources-tooltip').forEach(t=>t.style.display='none');
-});
 function resize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,120)+'px';}
 
 async function callClaude(system,message,file=null,clientId=null,messageType='chat'){
@@ -410,40 +406,43 @@ function sourceIcon(type){
   return icons[type] || '<i data-lucide="star" style="width:14px;height:14px;vertical-align:-2px"></i>';
 }
 
-// CC-203 — Ajouter le badge sources sous un message Claude
+// Sources RAG — liste dépliable sous le message
 function addSourcesBadge(msgEl, sources){
   if(!sources||sources.length===0) return;
-  // Dédupliquer par source_name — garder le premier chunk (meilleur score)
   const seen=new Set();
   const unique=sources.filter(s=>{ if(seen.has(s.source_name)) return false; seen.add(s.source_name); return true; });
-  const badge=document.createElement('div');
-  badge.className='msg-badge msg-sources-badge';
-  badge.style.cssText='cursor:pointer;user-select:none;position:relative;';
-  badge.textContent='📚 '+unique.length+' source'+(unique.length>1?'s':'');
 
-  // Tooltip
-  const tip=document.createElement('div');
-  tip.className='sources-tooltip';
-  tip.style.cssText='display:none;position:absolute;bottom:calc(100% + 6px);left:0;background:var(--sur);border:1px solid var(--brd2);border-radius:var(--r);padding:10px 12px;min-width:260px;max-width:340px;z-index:999;color:var(--tx);box-shadow:0 2px 12px rgba(0,0,0,.1);';
+  const container=document.createElement('div');
+  container.className='msg-sources';
+
+  const toggle=document.createElement('button');
+  toggle.className='msg-sources-toggle';
+  toggle.innerHTML='<i data-lucide="layers" style="width:11px;height:11px;"></i> '
+    +unique.length+' source'+(unique.length>1?'s':'')
+    +' <i data-lucide="chevron-down" class="src-chevron" style="width:11px;height:11px;transition:transform .15s;"></i>';
+
+  const list=document.createElement('div');
+  list.className='msg-sources-list';
 
   unique.forEach(s=>{
-    const row=document.createElement('div');
-    row.style.cssText='margin-bottom:8px;font-size:12px;line-height:1.4;';
-    row.innerHTML='<span style="font-weight:600;">'+sourceIcon(s.source_type)+' '+s.source_name+'</span>'
-      +'<div style="color:var(--tx3,#888);margin-top:2px;">'+s.preview+'…</div>';
-    tip.appendChild(row);
+    const item=document.createElement('div');
+    item.className='msg-source-item';
+    const name=s.source_name||'Fichier sans nom';
+    item.innerHTML='<div class="src-name">'+sourceIcon(s.source_type)+' '+esc(name)+'</div>'
+      +(s.preview?'<div class="src-preview">'+esc(s.preview)+'…</div>':'');
+    list.appendChild(item);
   });
 
-  badge.appendChild(tip);
-
-  badge.addEventListener('click',e=>{
+  toggle.addEventListener('click',e=>{
     e.stopPropagation();
-    const isOpen = tip.style.display !== 'none';
-    document.querySelectorAll('.sources-tooltip').forEach(t=>t.style.display='none');
-    if(!isOpen) tip.style.display='block';
+    const open=list.classList.toggle('open');
+    const chevron=toggle.querySelector('.src-chevron');
+    if(chevron) chevron.style.transform=open?'rotate(180deg)':'';
   });
 
-  msgEl.appendChild(badge);
+  container.appendChild(toggle);
+  container.appendChild(list);
+  msgEl.appendChild(container);
   lucide.createIcons();
 }
 
