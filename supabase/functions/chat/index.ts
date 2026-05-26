@@ -913,18 +913,28 @@ serve(async (req) => {
           console.error("RAG match_chunks error:", matchError.message);
         } else {
           if ((chunks || []).length > 0) {
-            // Injecter les chunks sous la fiche client
-            const ragBlock = (chunks || [])
-              .map((c: { chunk_text: string; source_name: string }) =>
-                `— ${c.source_name}\n${c.chunk_text}`
-              )
+            // Second-pass : ne garder que les chunks au-dessus d'un seuil de pertinence élevé.
+            // match_chunks récupère 15 candidats à 0.3 (filet large) ;
+            // on n'injecte que ceux à ≥ 0.50 (signal clair), avec un minimum de 2 au cas où.
+            type Chunk = { chunk_text: string; source_name: string; source_type: string; similarity: number };
+            const HIGH_THRESHOLD = 0.50;
+            const MAX_INJECT    = 8;
+            const MIN_INJECT    = 2;
+            const allChunks = (chunks || []) as Chunk[];
+            const highQ = allChunks.filter(c => c.similarity >= HIGH_THRESHOLD);
+            const toInject: Chunk[] = highQ.length >= MIN_INJECT
+              ? highQ.slice(0, MAX_INJECT)
+              : allChunks.slice(0, MIN_INJECT);
+
+            const ragBlock = toInject
+              .map(c => `— ${c.source_name}\n${c.chunk_text}`)
               .join("\n\n");
 
             systemWithRAG = systemWithRAG
               + "\n\n[Extraits de documents pertinents]\nIMPORTANT : quand tu utilises une information issue de ces extraits, cite le nom du fichier source entre parenthèses dans ta réponse, ex : *(source : NomDuFichier)*. Si tu utilises plusieurs fichiers, cite chacun.\n\n" + ragBlock;
 
-            // Construire sources_used pour le front
-            sourcesUsed = (chunks || []).map((c: { source_name: string; source_type: string; chunk_text: string }) => ({
+            // Construire sources_used pour le front (uniquement les chunks effectivement injectés)
+            sourcesUsed = toInject.map(c => ({
               source_name: c.source_name,
               source_type: c.source_type,
               preview: c.chunk_text.slice(0, 120),
