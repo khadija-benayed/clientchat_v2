@@ -260,8 +260,11 @@ serve(async (req) => {
     const { system, message, action, client_id, history, folder_id, message_type } = body;
     const messageType: string = message_type || 'chat';
     const chatModel: string = messageType === 'task_action'
-  ? 'claude-haiku-4-5-20251001'
-  : 'claude-sonnet-4-6';
+      ? 'claude-haiku-4-5-20251001'
+      : 'claude-sonnet-4-6';
+    // task_action : JSON + courte explication → 1 500 suffisent
+    // chat        : analyse de briefs, benchmarks, stratégies → 5 000 pour ne pas tronquer
+    const chatMaxTokens: number = messageType === 'task_action' ? 1500 : 5000;
     const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_KEY");
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
     const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -902,10 +905,12 @@ serve(async (req) => {
         const queryEmbedding = await embedText(message);
 
         // 2. Chercher les chunks les plus proches via match_chunks() (filtrage par seuil en SQL)
+        // SQL threshold 0.52 = filet propre (gte-small : 0.3 ramène quasi tout, 0.5+ = signal réel).
+        // Second-pass TS à 0.62 = injection stricte ; fallback top-2 si rien ne passe.
         const { data: chunks, error: matchError } = await sbAdmin.rpc("match_chunks", {
           query_embedding: queryEmbedding,
-          match_threshold: 0.3,
-          match_count: 15,
+          match_threshold: 0.52,
+          match_count: 10,
           p_client_id: client_id || null,
         });
 
@@ -913,12 +918,9 @@ serve(async (req) => {
           console.error("RAG match_chunks error:", matchError.message);
         } else {
           if ((chunks || []).length > 0) {
-            // Second-pass : ne garder que les chunks au-dessus d'un seuil de pertinence élevé.
-            // match_chunks récupère 15 candidats à 0.3 (filet large) ;
-            // on n'injecte que ceux à ≥ 0.50 (signal clair), avec un minimum de 2 au cas où.
             type Chunk = { chunk_text: string; source_name: string; source_type: string; similarity: number };
-            const HIGH_THRESHOLD = 0.50;
-            const MAX_INJECT    = 8;
+            const HIGH_THRESHOLD = 0.62;
+            const MAX_INJECT    = 6;
             const MIN_INJECT    = 2;
             const allChunks = (chunks || []) as Chunk[];
             const highQ = allChunks.filter(c => c.similarity >= HIGH_THRESHOLD);
@@ -926,15 +928,22 @@ serve(async (req) => {
               ? highQ.slice(0, MAX_INJECT)
               : allChunks.slice(0, MIN_INJECT);
 
-            const ragBlock = toInject
-              .map(c => `— ${c.source_name}\n${c.chunk_text}`)
-              .join("\n\n");
+            // Séparer documents (Drive/PDF) et sessions pour éviter les confusions de citation
+            const docChunks     = toInject.filter(c => c.source_type !== 'session');
+            const sessionChunks = toInject.filter(c => c.source_type === 'session');
 
-            systemWithRAG = systemWithRAG
-              + "\n\n[Extraits de documents pertinents]\nIMPORTANT : quand tu utilises une information issue de ces extraits, cite le nom du fichier source entre parenthèses dans ta réponse, ex : *(source : NomDuFichier)*. Si tu utilises plusieurs fichiers, cite chacun.\n\n" + ragBlock;
+            if (docChunks.length > 0) {
+              const docBlock = docChunks.map(c => `— ${c.source_name}\n${c.chunk_text}`).join("\n\n");
+              systemWithRAG += "\n\n[Documents pertinents]\nIMPORTANT : quand tu utilises une information issue de ces extraits, cite le nom du fichier source entre parenthèses, ex : *(source : NomDuFichier)*.\n\n" + docBlock;
+            }
 
-            // Construire sources_used pour le front (uniquement les chunks effectivement injectés)
-            sourcesUsed = toInject.map(c => ({
+            if (sessionChunks.length > 0) {
+              const sessBlock = sessionChunks.map(c => `— ${c.source_name}\n${c.chunk_text}`).join("\n\n");
+              systemWithRAG += "\n\n[Historique pertinent]\nExtraits de sessions passées liés à la question. Utilise-les pour enrichir ta réponse mais ne les cite pas avec *(source : ...)* — ils font partie de l'historique des échanges, pas des documents de référence.\n\n" + sessBlock;
+            }
+
+            // Construire sources_used pour le front : uniquement les docs (pas les sessions — déjà visibles dans l'UI)
+            sourcesUsed = docChunks.map(c => ({
               source_name: c.source_name,
               source_type: c.source_type,
               preview: c.chunk_text.slice(0, 120),
@@ -990,7 +999,7 @@ serve(async (req) => {
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model: chatModel,   // ← variable au lieu de hardcodé
-        max_tokens: 2500,
+        max_tokens: chatMaxTokens,
         system: systemWithFile,
         messages: [{ role: "user", content: userContent }],
       }),
