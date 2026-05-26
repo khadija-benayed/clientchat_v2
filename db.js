@@ -439,9 +439,9 @@ async function refreshDocCache(clientObj, folderId, cacheKey){
   try {
     const {data} = await sb
       .from('document_chunks')
-      .select('source_name, source_id, chunk_text')
+      .select('source_name, source_id, chunk_text, last_indexed_at')
       .eq('client_id', clientObj.id)
-      .in('source_type', ['doc','sheet','pdf'])
+      .in('source_type', ['doc','sheet','pdf','file'])
       .order('last_indexed_at', {ascending:false})
       .order('source_name');
 
@@ -450,12 +450,13 @@ async function refreshDocCache(clientObj, folderId, cacheKey){
     // Grouper par source_name — insertion order = source la plus récente en premier
     const bySource = {};
     for(const row of data){
-      if(!bySource[row.source_name]) bySource[row.source_name]={source_id:row.source_id,text:''};
+      if(!bySource[row.source_name]) bySource[row.source_name]={source_id:row.source_id,last_indexed_at:row.last_indexed_at,text:''};
       if(bySource[row.source_name].text.length < 8000)
         bySource[row.source_name].text += (bySource[row.source_name].text?'\n':'')+row.chunk_text;
     }
     const docs = Object.entries(bySource).slice(0,10).map(([name,v])=>({
-      driveId: v.source_id, filename: name, content: v.text.slice(0,8000)
+      driveId: v.source_id, filename: name, content: v.text.slice(0,8000),
+      modifiedTime: v.last_indexed_at || null,
     }));
     clientObj._docCache = docs;
     try{ localStorage.setItem(cacheKey,JSON.stringify({ts:Date.now(),docs})); }catch(_){}

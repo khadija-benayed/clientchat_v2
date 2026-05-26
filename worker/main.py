@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 from typing import List
@@ -20,6 +21,8 @@ class EmbedRequest(BaseModel):
 
 @app.get("/health")
 def health():
+    if model is None:
+        return JSONResponse(status_code=503, content={"ok": False, "reason": "model not loaded"})
     return {"ok": True}
 
 
@@ -27,5 +30,7 @@ def health():
 def embed(req: EmbedRequest):
     if not req.texts:
         return {"embeddings": []}
+    if model is None:
+        return JSONResponse(status_code=503, content={"error": "model not loaded"})
     embeddings = model.encode(req.texts, normalize_embeddings=True)
     return {"embeddings": embeddings.tolist()}

@@ -173,10 +173,10 @@ async function exportDriveFile(file: DriveFile, token: string): Promise<DriveFil
 /**
  * Découpe un texte en chunks en respectant les limites sémantiques.
  * Priorité : coupure sur double-saut de ligne (paragraphes), puis sur fin de phrase, puis sur chars.
- * maxChars = 1400 chars ≈ 350 tokens (marge sous la limite gte-small de 512 tokens).
- * overlap = 300 chars, calé sur le début d'une phrase pour préserver le contexte aux jonctions.
+ * maxChars = 400 chars ≈ 100 tokens (limite 128 tokens de paraphrase-multilingual-MiniLM-L12-v2).
+ * overlap = 80 chars, calé sur le début d'une phrase pour préserver le contexte aux jonctions.
  */
-function chunkText(text: string, maxChars = 1400, overlap = 300): string[] {
+function chunkText(text: string, maxChars = 400, overlap = 80): string[] {
   const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
   if (!normalized) return [];
 
@@ -229,7 +229,7 @@ function chunkText(text: string, maxChars = 1400, overlap = 300): string[] {
  * Le header est répété dans chaque chunk pour préserver le contexte colonnes.
  * Évite de couper une ligne de tableau en plein milieu (problème du chunkText naïf sur CSV).
  */
-function chunkCSV(text: string, linesPerChunk = 15): string[] {
+function chunkCSV(text: string, linesPerChunk = 5): string[] {
   const lines = text.split("\n");
   if (lines.length <= 1) return lines[0] ? [lines[0]] : [];
   const header = lines[0];
@@ -250,9 +250,13 @@ async function embedTexts(texts: string[]): Promise<number[][]> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ texts }),
+    signal: AbortSignal.timeout(45_000),
   });
   if (!res.ok) throw new Error(`Embedder HTTP ${res.status}`);
   const data = await res.json();
+  if (!Array.isArray(data.embeddings) || data.embeddings.length !== texts.length) {
+    throw new Error(`Embedder: réponse invalide (attendu ${texts.length}, reçu ${Array.isArray(data.embeddings) ? data.embeddings.length : typeof data.embeddings})`);
+  }
   return data.embeddings;
 }
 
@@ -984,7 +988,7 @@ serve(async (req) => {
           }
         }
       } catch (ragErr) {
-        // RAG non bloquant — si Voyage AI est down, Claude répond quand même sans RAG
+        // RAG non bloquant — si le worker embedder est down, Claude répond quand même sans RAG
         console.error("RAG pipeline error (non bloquant):", (ragErr as Error).message);
       }
     }

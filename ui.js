@@ -111,8 +111,8 @@ function buildL2(ctxForPrompt) {
     for(const doc of cur._docCache){
       const chunk = doc.content.slice(0,8000); // max 8k chars par doc
       if(total + chunk.length > MAX_CHARS) break;
-      const d = new Date(doc.modifiedTime).toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'2-digit'});
-      cacheBlock += '\n--- '+doc.filename+' (modifié le '+d+') ---\n'+chunk+'\n';
+      const d = doc.modifiedTime ? new Date(doc.modifiedTime).toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'2-digit'}) : null;
+      cacheBlock += '\n--- '+doc.filename+(d?' (modifié le '+d+')':'')+' ---\n'+chunk+'\n';
       total += chunk.length;
     }
     if(total > 0){
@@ -1139,6 +1139,7 @@ async function syncSource(idx){
     return;
   }
   _indexingInProgress = true;
+  const syncClientId = cur?.id; // freeze client reference — prevents brief race if user switches client
   const srcs = getSources();
   const s = srcs[idx];
   if(!s) { _indexingInProgress = false; return; }
@@ -1222,6 +1223,7 @@ async function syncSource(idx){
       // 15s suffisent maintenant que l'indexation est parallèle et non-bloquante.
       setTimeout(async () => {
         if (!docsForBrief.length) return;
+        if (cur?.id !== syncClientId) return; // user switched clients during sync
         try {
           addMsg('a', '⏳ Génération de la fiche client en cours…');
           const brief = await generateBrief(docsForBrief);
