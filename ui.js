@@ -388,6 +388,13 @@ async function callClaude(system,message,file=null,clientId=null,messageType='ch
   if(file) payload.file=file;
   if(clientId) payload.client_id=clientId;
   payload.message_type=messageType;
+  if(messageType==='chat'){
+    // Derniers échanges de la session courante (hors message utilisateur courant déjà dans le DOM)
+    let hist=extractChatHistory().slice(0,-1).slice(-6);
+    // L'API Claude exige que messages[] commence par un rôle "user"
+    while(hist.length && hist[0].role==='a') hist.shift();
+    if(hist.length) payload.chat_history=hist;
+  }
   const r=await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify(payload)});
   const data=await r.json();
   if(data.error) throw new Error(data.error);

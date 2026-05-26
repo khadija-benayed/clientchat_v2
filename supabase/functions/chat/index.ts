@@ -405,9 +405,13 @@ serve(async (req) => {
 
         totalFilesFound += files.length;
 
-        // Récursion sur les sous-dossiers (limit globale MAX_FILES respectée)
-        const subFiles = await Promise.all(subFolders.map(sf => listFilesInFolder(sf.id)));
-        return [...files, ...subFiles.flat()];
+        // Récursion séquentielle : Promise.all sur des arbres larges dépasse le timeout 60s
+        const subFiles: DriveFile[] = [];
+        for (const sf of subFolders) {
+          if (totalFilesFound >= MAX_FILES) break;
+          subFiles.push(...await listFilesInFolder(sf.id));
+        }
+        return [...files, ...subFiles];
       }
 
       const allFiles = await listFilesInFolder(folderId);
@@ -542,8 +546,11 @@ serve(async (req) => {
         const files = allItems.filter(f => f.mimeType !== "application/vnd.google-apps.folder");
         const subFolders = allItems.filter(f => f.mimeType === "application/vnd.google-apps.folder");
         metaTotalFound += files.length;
-        const subFiles = await Promise.all(subFolders.map(sf => listMetaInFolder(sf.id)));
-        return [...files, ...subFiles.flat()];
+        const subFiles: DriveFile[] = [];
+        for (const sf of subFolders) {
+          subFiles.push(...await listMetaInFolder(sf.id));
+        }
+        return [...files, ...subFiles];
       }
 
       const allFiles = await listMetaInFolder(folderId);
@@ -994,14 +1001,26 @@ serve(async (req) => {
       userContent = message;
     }
 
+    // Construire messages[] multi-tour : historique session + message courant
+    type HistMsg = { role: 'u' | 'a'; text: string };
+    const rawHist = (body.chat_history || []) as HistMsg[];
+    while (rawHist.length && rawHist[0].role === 'a') rawHist.shift(); // doit commencer par user
+    const messagesForClaude: Array<{ role: 'user' | 'assistant'; content: unknown }> = [
+      ...rawHist.map(m => ({
+        role: (m.role === 'u' ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: m.text,
+      })),
+      { role: 'user' as const, content: userContent },
+    ];
+
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
-        model: chatModel,   // ← variable au lieu de hardcodé
+        model: chatModel,
         max_tokens: chatMaxTokens,
         system: systemWithFile,
-        messages: [{ role: "user", content: userContent }],
+        messages: messagesForClaude,
       }),
     });
 
