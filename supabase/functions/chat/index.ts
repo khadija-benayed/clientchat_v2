@@ -698,12 +698,15 @@ serve(async (req) => {
         );
       }
 
-      // ── 2. Vectoriser (gte-small) ────────────────────────────────────────
-      // Delete APRÈS embedding : si l'embedding échoue, les anciens chunks restent intacts.
-      // Promise.all : tous les chunks en parallèle → ~300ms fixe quelle que soit la taille.
+      // ── 2. Vectoriser (gte-small) — séquentiel pour éviter les pics mémoire ─
+      // Promise.all sur 30+ chunks simultanés fait crasher la Edge Function (546).
+      // Le loop séquentiel coûte ~2s/fichier max, bien en dessous du timeout 60s.
       let embeddings: number[][];
       try {
-        embeddings = await Promise.all(chunks.map(embedText));
+        embeddings = [];
+        for (const chunk of chunks) {
+          embeddings.push(await embedText(chunk));
+        }
       } catch (e) {
         console.error("index_source: embedText error:", (e as Error).message);
         return new Response(

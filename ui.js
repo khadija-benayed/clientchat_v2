@@ -1162,7 +1162,8 @@ async function syncSource(idx){
       let indexedCount = 0;
 
       // Pool de concurrence : traite max CONCURRENCY fichiers simultanément
-      const CONCURRENCY = 3;
+      // Réduit à 1 : l'Edge Function crash (546) si plusieurs gros fichiers s'indexent en parallèle
+      const CONCURRENCY = 1;
       async function processFile(fileMeta) {
         try {
           const expR = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({action:'export_single_file',file_id:fileMeta.id,file_name:fileMeta.name,mime_type:fileMeta.mimeType})});
