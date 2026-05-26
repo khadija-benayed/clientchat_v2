@@ -9,7 +9,7 @@
 - **Base de données** : Supabase (PostgreSQL) — client JS `@supabase/supabase-js@2` via CDN
 - **Backend** : Supabase Edge Functions (Deno) — point d'entrée unique `EDGE_URL = SB_URL + '/functions/v1/chat'`
 - **IA** : Claude (Anthropic) appelé côté Edge Function, jamais directement depuis le front
-- **Embeddings / RAG** : Supabase.ai gte-small (natif Edge Runtime) — 384 dims, gratuit, sans rate limit
+- **Embeddings / RAG** : Worker Python (Render free tier) — modèle `paraphrase-multilingual-MiniLM-L12-v2` (384 dims, multilingue) — appelé via `embedTexts()` dans l'Edge Function ; keep-alive UptimeRobot sur `/health` toutes les 5 min
 - **Stockage documents** : Google Drive (export via Edge Function)
 - **Déploiement** : GitHub Pages (push sur `main` → CI → `public/`) ; Netlify en fallback (`publish = "public"`)
 
@@ -22,6 +22,9 @@
 - `styles.css` — tout le CSS, variables de thème en `:root`
 - `supabase/functions/chat/` — Edge Function (Deno) — ne pas modifier sans déployer via Supabase CLI
 - `supabase/seed.sql` — schéma et données initiales
+- `worker/main.py` — Worker Python FastAPI (embeddings) — déployé sur Render free tier
+- `worker/requirements.txt` — dépendances du worker (FastAPI, sentence-transformers, torch CPU)
+- `worker/render.yaml` — config déploiement Render
 
 ## Commandes
 

@@ -45,7 +45,7 @@ Smart Bees est une agence dont les équipes travaillent sur plusieurs comptes cl
 | **Base de données** | PostgreSQL + Realtime | Supabase |
 | **IA Chat** | Claude Sonnet (`claude-sonnet-4-6`) | API Anthropic |
 | **IA Tâches** | Claude Haiku (`claude-haiku-4-5-20251001`) | API Anthropic |
-| **Embeddings** | Voyage-3 (1024 dimensions) | API Voyage AI |
+| **Embeddings** | paraphrase-multilingual-MiniLM-L12-v2 (384 dims) | Worker Python (Render) |
 | **Documents** | Google Drive API (Service Account) | Google Cloud |
 | **Icônes** | Lucide Icons (CDN) | jsDelivr |
 
@@ -77,8 +77,8 @@ Smart Bees est une agence dont les équipes travaillent sur plusieurs comptes cl
 └──────┬───────────┬──────────────┬───────────────────┘
        │           │              │
        ▼           ▼              ▼
-  Anthropic    Voyage AI    Google Drive API
-  (Claude)    (Embeddings)  (Service Account)
+  Anthropic  Worker Python  Google Drive API
+  (Claude)   (Render/CPU)   (Service Account)
        │                         │
        └──────────┬──────────────┘
                   ▼
@@ -98,7 +98,7 @@ Smart Bees est une agence dont les équipes travaillent sur plusieurs comptes cl
 1. L'utilisateur tape un message dans le chat
 2. `ui.js` analyse l'intention : action sur une tâche → Haiku, question complexe → Sonnet
 3. Un appel HTTP est fait à la Supabase Edge Function avec le message + contexte (L1/L2/L3)
-4. L'Edge Function vectorise la requête via Voyage AI, cherche les chunks similaires en DB (RAG)
+4. L'Edge Function vectorise la requête via le worker Python (Render), cherche les chunks similaires en DB (RAG)
 5. Claude génère une réponse avec les documents pertinents injectés
 6. La réponse est parsée : texte affiché + éventuelles mutations JSON de tâches appliquées
 7. Les tokens utilisés sont loggés dans `usage_logs`
@@ -238,7 +238,7 @@ La fonction `send()` est le cœur de l'application :
    - Question sur le client → **Sonnet** (plus intelligent)
    - Requête complexe → Sonnet + L3
 
-2. **Pipeline RAG** : Le message est vectorisé via Voyage AI, cherché dans `document_chunks` (similarité cosinus via pgvector), les 5 chunks les plus pertinents (> 0.55 de similarité) sont injectés dans le prompt.
+2. **Pipeline RAG** : Le message est vectorisé via le worker Python (Render), cherché dans `document_chunks` (similarité cosinus via pgvector), les 5 chunks les plus pertinents (> 0.55 de similarité) sont injectés dans le prompt.
 
 3. **Appel Claude** via `callClaude()` → POST à l'Edge Function avec le system prompt L1+L2+[L3] + historique visible + message utilisateur + éventuel fichier joint
 
@@ -317,7 +317,7 @@ L'unique Edge Function Deno (~1200 lignes). Elle est le backend de toute l'appli
 
 **`chat`** :
 - Détermine le modèle selon `message_type` (task_action → Haiku, sinon Sonnet)
-- Vectorise le message via Voyage AI et cherche les chunks similaires (pgvector RPC `match_chunks`)
+- Vectorise le message via le worker Python et cherche les chunks similaires (pgvector RPC `match_chunks`)
 - Injecte les 5 chunks les plus pertinents (seuil 0.55) dans le system prompt
 - Supporte les fichiers joints (PDF en `document`, images en `image`)
 - Retourne la réponse + `sources_used`
@@ -326,20 +326,20 @@ L'unique Edge Function Deno (~1200 lignes). Elle est le backend de toute l'appli
 **`summarize_session`** :
 - Appelle Claude Sonnet pour résumer l'historique de chat en points-clés
 - Sauvegarde le résumé dans `session_summaries`
-- Vectorise le résumé via Voyage AI et le stocke dans `document_chunks` (source_type = 'session') → devient cherchable via RAG
+- Vectorise le résumé via le worker Python et le stocke dans `document_chunks` (source_type = 'session') → devient cherchable via RAG
 
 **`index_source`** :
 - Reçoit un document (texte, CSV ou PDF en base64)
 - **Extraction PDF** : Envoie le base64 à Claude Sonnet avec type `document` pour extraire le texte
 - **Chunking** : Texte → chunks de 2000 chars avec overlap de 200 chars. CSV → blocs de 15 lignes avec header répété
-- **Vectorisation** : Batches de 128 chunks via Voyage AI avec retry sur 429
+- **Vectorisation** : Un seul appel HTTP batch vers le worker Python (élimine l'OOM 546)
 - **Déduplication** : Supprime les anciens chunks pour le même `source_id` avant réinsertion
 - **Stockage** : Insère les chunks avec embeddings dans `document_chunks`
 
 **`read_drive_folder`** :
 - Authentifie via un Service Account Google (JWT custom, sans librairie externe)
 - Parcours récursif du dossier avec pagination
-- Exporte Docs, Sheets, Présentations en texte (limité à 50k chars/fichier)
+- Exporte Docs, Sheets, Présentations en texte (limité à 20k chars/fichier)
 - Trie par type puis par date de modification
 
 **`generate_brief`** :
@@ -350,7 +350,7 @@ L'unique Edge Function Deno (~1200 lignes). Elle est le backend de toute l'appli
 **Utilitaires internes** :
 - `importPrivateKey()`, `makeGoogleJWT()`, `getGoogleAccessToken()` — Auth Service Account sans dépendances externes
 - `chunkText()`, `chunkCSV()` — Découpage intelligent des documents
-- `embedChunks()`, `embedQuery()` — Intégration Voyage AI avec retry sur 429
+- `embedTexts()`, `embedText()` — Appels HTTP batch vers le worker Python (Render)
 - `calculateCost()` — Estimation du coût par modèle (Sonnet: $0.003/$0.015 per 1K tokens, Haiku: $0.00025/$0.00125)
 
 ---
@@ -435,7 +435,7 @@ L'application garde une mémoire persistante des échanges sous forme de résum�
 
 Pipeline de recherche vectorielle sur les documents indexés :
 
-1. La requête utilisateur est vectorisée via Voyage AI (`voyage-3`, 1024 dimensions)
+1. La requête utilisateur est vectorisée via le worker Python (`paraphrase-multilingual-MiniLM-L12-v2`, 384 dims)
 2. Recherche cosinus dans `document_chunks` via la fonction RPC PostgreSQL `match_chunks()`
 3. Les 5 chunks les plus similaires (seuil ≥ 0.55) sont injectés dans le prompt
 4. Un badge "Sources utilisées" s'affiche dans l'interface avec les fichiers cités
@@ -502,7 +502,7 @@ CREATE TABLE document_chunks (
   source_name      text,
   source_id        text,                   -- ID Google Drive (stable)
   chunk_text       text,
-  embedding        vector(1024),           -- Voyage-3 embeddings
+  embedding        vector(384),            -- paraphrase-multilingual-MiniLM-L12-v2 embeddings
   last_indexed_at  timestamptz DEFAULT now()
 );
 
@@ -541,7 +541,7 @@ CREATE TABLE agency_knowledge (
 
 -- Fonction RPC : recherche vectorielle
 CREATE FUNCTION match_chunks(
-  query_embedding vector(1024),
+  query_embedding vector(384),
   match_threshold float,
   match_count     int,
   filter_client   uuid
@@ -578,7 +578,7 @@ Configurés dans le dashboard Supabase → Settings → Edge Functions :
 | Secret | Description |
 |--------|-------------|
 | `ANTHROPIC_KEY` | Clé API Anthropic (Claude) |
-| `VOYAGE_API_KEY` | Clé API Voyage AI (embeddings) |
+| `EMBEDDER_URL` | URL du worker Python d'embeddings (Render) |
 | `GOOGLE_SA_KEY` | JSON complet du Service Account Google |
 | `SUPABASE_URL` | URL du projet Supabase |
 | `SUPABASE_SERVICE_ROLE_KEY` | Clé service role (accès admin DB) |
@@ -629,7 +629,7 @@ python3 -m http.server 8000
 **Fichier `.env.local`** (pour le dev de l'Edge Function, ne pas committer) :
 ```env
 ANTHROPIC_KEY=sk-ant-...
-VOYAGE_API_KEY=pa-...
+EMBEDDER_URL=https://clientchat-embedder.onrender.com
 GOOGLE_SA_KEY={"type":"service_account",...}
 SUPABASE_URL=https://[PROJECT_ID].supabase.co
 SUPABASE_SERVICE_ROLE_KEY=eyJ...
@@ -675,24 +675,23 @@ Le schéma est géré manuellement via le dashboard Supabase ou via des migratio
 
 ## 10. Contraintes & Workarounds
 
-### Le "Problème Voyage AI"
+### Worker Python d'embeddings (Render free tier)
 
-**Constat** : Le Free Tier de Voyage AI limite à **3 requêtes/minute** et 10K tokens/minute. Il est impossible d'indexer un dossier Drive complet (ex: 98 fichiers) sans déclencher des erreurs 429, même avec une file d'attente et des délais.
+Le worker `paraphrase-multilingual-MiniLM-L12-v2` tourne sur le free tier de Render. Contrainte principale : le service dort après 15 min d'inactivité → cold start de ~30s au réveil.
 
-**Solution temporaire — Cache L2** :
-1. Le brief client auto-généré fournit le contexte global
-2. Au chargement de chaque client, les 10 fichiers Drive les plus récents sont exportés et injectés en texte brut dans le system prompt
-3. Résultat : l'IA dispose des documents "chauds" immédiatement, couvrant ~80% des cas sans RAG
+**Solution** : Configurer un monitor UptimeRobot (gratuit) sur `https://<worker>.onrender.com/health` avec un ping toutes les **5 minutes**. Sans ça, le premier embed après une pause fait timeout et rate l'indexation.
 
-Le RAG complet reste actif pour la recherche dans les sessions passées et les fichiers indexés lors des runs précédents. Seule l'indexation initiale d'un gros Drive est lente.
+### Cache L2 — Contexte sans RAG
+
+Le brief client + les 10 fichiers Drive les plus récents sont injectés directement en texte brut dans le system prompt (L2), indépendamment du RAG. Ce cache couvre ~80% des cas d'usage sans appel d'embedding.
 
 ### Limitations connues
 
 | Limitation | Impact | Contournement |
 |-----------|--------|---------------|
-| Voyage AI 3 req/min | Indexation lente des gros Drives | Cache L2 (10 docs en texte) |
-| Edge Functions timeout ~50s | Max 5 fichiers Drive ré-indexés par run | Re-runs automatiques au prochain chargement |
-| Export Drive limité à 50k chars/fichier | Gros documents tronqués | Découpage par chunks avec overlap |
+| Render free tier (cold start ~30s) | Premier embed lent après inactivité | UptimeRobot keep-alive sur `/health` toutes les 5 min |
+| Edge Functions timeout ~50s | Max 10 fichiers Drive indexés par run | Re-runs automatiques au prochain chargement |
+| Export Drive limité à 20k chars/fichier | Gros documents tronqués | Découpage par chunks avec overlap |
 | Extraction PDF via Claude | Coûte des tokens à chaque ré-indexation | Déduplication par `source_id` stable |
 | Clés frontend hardcodées | Visibles dans le code source | Clé anon publique + RLS Supabase |
 
@@ -706,9 +705,9 @@ Le RAG complet reste actif pour la recherche dans les sessions passées et les f
 - **Sync Progress UX** : Afficher un compteur persistant dans l'UI ("X/98 indexés") qui survit entre les sessions et donne de la visibilité sur l'avancement de l'indexation
 - **Notion Source** : Préparer le pipeline d'export pour l'API Notion (stub architecture, même pattern que Drive)
 
-### LATER — Déblocage APIs payantes
+### LATER — Améliorations potentielles
 
-- **Migration OpenAI Embeddings** : Passer sur `text-embedding-3-small` (~$0.02/1M tokens) pour lever les rate-limits et permettre l'indexation instantanée de gros Drives
-- **Full RAG** : Avec des embeddings sans limite, indexation complète en < 2 min et recherche sémantique sur l'intégralité des documents clients
+- **Upgrade Render** : Passer sur le plan Starter ($7/mois) pour éliminer les cold starts du worker et supprimer la dépendance UptimeRobot
+- **Full RAG** : Indexation complète en < 2 min et recherche sémantique sur l'intégralité des documents clients
 - **Agency KB auto-populée** : Détecter automatiquement les patterns cross-clients et enrichir la base de savoir sans intervention manuelle
 - **Cross-client search** : Permettre d'interroger la base globale ("Comment a-t-on géré cette situation pour un autre client ?")
