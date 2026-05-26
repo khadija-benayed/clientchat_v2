@@ -409,41 +409,32 @@ async function loadDocCache(clientObj){
 }
 
 async function refreshDocCache(clientObj, folderId, cacheKey){
+  // Lit depuis document_chunks déjà indexés — zéro appel Drive.
+  // checkDriveUpdates() tourne juste avant et garantit que les chunks sont frais.
   try {
-    const metaRes = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,
-      body:JSON.stringify({action:'list_drive_metadata',folder_id:folderId})});
-    const metaData = await metaRes.json();
-    if(!metaData.files?.length){ clientObj._docCache=[]; return; }
+    const {data} = await sb
+      .from('document_chunks')
+      .select('source_name, source_id, chunk_text')
+      .eq('client_id', clientObj.id)
+      .in('source_type', ['doc','sheet','pdf'])
+      .order('last_indexed_at', {ascending:false})
+      .order('source_name');
 
-    const toExport = metaData.files
-      .filter(f=>EXPORTABLE_MIMETYPES.includes(f.mimeType))
-      .sort((a,b)=>new Date(b.modifiedTime)-new Date(a.modifiedTime))
-      .slice(0,10);
+    if(!data?.length){ clientObj._docCache=[]; return; }
 
-    // Construire un index des docs déjà en cache : driveId → modifiedTime
-    // Permet de réutiliser le contenu existant si le fichier n'a pas changé.
-    let cached = null;
-    try { cached = JSON.parse(localStorage.getItem(cacheKey)||'null'); } catch(_){}
-    const cachedMap = {};
-    for(const d of (cached?.docs||[])) if(d.driveId) cachedMap[d.driveId]=d;
-
-    let skipped=0;
-    const results = await Promise.all(toExport.map(async f => {
-      const hit = cachedMap[f.id];
-      if(hit && hit.modifiedTime === f.modifiedTime){ skipped++; return hit; }
-      try{
-        const r=await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,
-          body:JSON.stringify({action:'export_single_file',file_id:f.id,file_name:f.name,mime_type:f.mimeType})});
-        const d=await r.json();
-        if(!d.error&&d.file?.content&&d.file.content.trim().length>10)
-          return {driveId:f.id,filename:f.name,modifiedTime:f.modifiedTime,content:d.file.content.slice(0,8000)};
-      }catch(e){ console.warn('[CC-212b] export error '+f.name+':',e.message); }
-      return null;
+    // Grouper par source_name — insertion order = source la plus récente en premier
+    const bySource = {};
+    for(const row of data){
+      if(!bySource[row.source_name]) bySource[row.source_name]={source_id:row.source_id,text:''};
+      if(bySource[row.source_name].text.length < 8000)
+        bySource[row.source_name].text += (bySource[row.source_name].text?'\n':'')+row.chunk_text;
+    }
+    const docs = Object.entries(bySource).slice(0,10).map(([name,v])=>({
+      driveId: v.source_id, filename: name, content: v.text.slice(0,8000)
     }));
-    const docs=results.filter(Boolean);
-    clientObj._docCache=docs;
+    clientObj._docCache = docs;
     try{ localStorage.setItem(cacheKey,JSON.stringify({ts:Date.now(),docs})); }catch(_){}
-    console.log('[CC-212b] Cache refreshed : '+docs.length+' fichiers ('+skipped+' réutilisés, '+(docs.length-skipped)+' re-exportés)');
+    console.log('[CC-212b] Cache refreshed from document_chunks: '+docs.length+' sources');
   }catch(e){
     console.warn('[CC-212b] refreshDocCache error:',e.message);
     clientObj._docCache=clientObj._docCache||[];

@@ -106,7 +106,7 @@ function buildL2(ctxForPrompt) {
   // ~80k chars max (~20k tokens) pour ne pas saturer la fenêtre de contexte
   if(cur?._docCache?.length){
     const MAX_CHARS = 80000;
-    let cacheBlock = '\n\n[Documents Drive récents]\n';
+    let cacheBlock = '\n\n[Documents Drive récents]\nQuand tu utilises une info de ces documents, cite le nom du fichier entre parenthèses dans ta réponse, ex : *(source : NomDuFichier)*.\n';
     let total = 0;
     for(const doc of cur._docCache){
       const chunk = doc.content.slice(0,8000); // max 8k chars par doc
@@ -1084,19 +1084,40 @@ async function regenerateBrief() {
   $('brief-content').innerHTML = '<div class="brief-empty">Génération en cours…</div>';
 
   try {
-    // Utiliser le doc cache déjà en mémoire (rechargé au selectClient)
-    // pour éviter une re-sync Drive complète inutile.
-    const docsContent = cur._docCache?.length
+    // 1. Doc cache en mémoire (rechargé au selectClient)
+    let docsContent = cur._docCache?.length
       ? cur._docCache.map(d => ({ filename: d.filename, content: d.content }))
-      : extractDocsFromContext();
-    if (!docsContent.length) {
-      // Aucun contenu disponible → lancer la sync Drive puis générer
-      await syncSource(srcs.indexOf(driveSrcs[0]));
-      // syncSource appelle generateBrief en interne
-    } else {
-      await generateBrief(docsContent);
-      renderBrief();
+      : null;
+
+    // 2. Fallback : chunks déjà indexés en base — évite toute re-sync Drive
+    if (!docsContent?.length) {
+      const {data} = await sb
+        .from('document_chunks')
+        .select('source_name, chunk_text')
+        .eq('client_id', cur.id)
+        .in('source_type', ['doc','sheet','pdf'])
+        .order('last_indexed_at', {ascending:false})
+        .order('source_name');
+      if (data?.length) {
+        const bySrc = {};
+        for (const row of data) {
+          if (!bySrc[row.source_name]) bySrc[row.source_name] = '';
+          if (bySrc[row.source_name].length < 6000)
+            bySrc[row.source_name] += (bySrc[row.source_name]?'\n':'')+row.chunk_text;
+        }
+        docsContent = Object.entries(bySrc).slice(0,15)
+          .map(([name,text]) => ({filename:name, content:text.slice(0,6000)}));
+      }
     }
+
+    // 3. Vraiment rien d'indexé → sync Drive obligatoire
+    if (!docsContent?.length) {
+      await syncSource(srcs.indexOf(driveSrcs[0]));
+      return; // syncSource appelle generateBrief en interne
+    }
+
+    await generateBrief(docsContent);
+    renderBrief();
   } catch (e) {
     console.error('regenerateBrief:', e.message);
   } finally {
@@ -1105,16 +1126,6 @@ async function regenerateBrief() {
   }
 }
 
-// Extraire les docs depuis le contexte actuel (fallback pour Régénérer sans re-sync)
-function extractDocsFromContext() {
-  const ctx = cur?.context || '';
-  // Si c'est une fiche JSON, il n'y a plus de blocs texte à extraire
-  try { JSON.parse(ctx); return []; } catch(_) {}
-  // Sinon, chercher les blocs Drive existants et les repackager
-  const driveMatch = ctx.match(/---\s*Contenu Drive[\s\S]*$/);
-  if (!driveMatch) return [];
-  return [{ filename: 'Contexte Drive', content: driveMatch[0].substring(0, 32000) }];
-}
 
 async function syncSource(idx){
   const srcs = getSources();

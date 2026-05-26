@@ -881,7 +881,7 @@ serve(async (req) => {
               .join("\n\n");
 
             systemWithRAG = systemWithRAG
-              + "\n\n[Extraits de documents pertinents]\n" + ragBlock;
+              + "\n\n[Extraits de documents pertinents]\nIMPORTANT : quand tu utilises une information issue de ces extraits, cite le nom du fichier source entre parenthèses dans ta réponse, ex : *(source : NomDuFichier)*. Si tu utilises plusieurs fichiers, cite chacun.\n\n" + ragBlock;
 
             // Construire sources_used pour le front
             sourcesUsed = (chunks || []).map((c: { source_name: string; source_type: string; chunk_text: string }) => ({
