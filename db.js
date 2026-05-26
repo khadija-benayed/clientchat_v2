@@ -318,6 +318,10 @@ async function checkDriveUpdates(clientObj) {
             mime_type: fileMeta.mimeType,
           })
         });
+        if (!exportRes.ok) {
+          console.warn(`checkDriveUpdates: export HTTP ${exportRes.status} pour "${fileMeta.name}"`);
+          continue;
+        }
         const exportData = await exportRes.json();
 
         if (exportData.error) {
@@ -345,6 +349,10 @@ async function checkDriveUpdates(clientObj) {
             content: fileContent.content,
           })
         });
+        if (!indexRes.ok) {
+          console.warn(`checkDriveUpdates: index HTTP ${indexRes.status} pour "${fileMeta.name}"`);
+          continue;
+        }
         const indexData = await indexRes.json();
         if (indexData.error) {
           console.warn(`checkDriveUpdates: index_source error pour "${fileMeta.name}":`, indexData.error);

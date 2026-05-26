@@ -1181,8 +1181,7 @@ async function syncSource(idx){
             source_type:sourceType, source_id:fileMeta.id,
             source_name:fileMeta.name, content:expD.file.content,
           })});
-          const idxD = await idxR.json();
-          if(!idxD.error) indexedCount++;
+          if(idxR.ok){ const idxD = await idxR.json(); if(!idxD.error) indexedCount++; }
         } catch(e) { console.warn('syncSource: processFile error for', fileMeta.name, e.message); }
       }
 
