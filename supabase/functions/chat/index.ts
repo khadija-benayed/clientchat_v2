@@ -356,12 +356,13 @@ serve(async (req) => {
         // Vectoriser d'abord, avant toute écriture
         const embedding = await embedText(summaryText);
 
-        // Delete-then-insert : idempotent pour les retries séquentiels, sans TOCTOU
-        // ni risque de silence sur une erreur SELECT.
-        await sbAdmin2
+        // Supprimer TOUTES les sessions précédentes du client (source_type='session'),
+        // pas seulement celle d'aujourd'hui — sinon chaque jour accumule une ligne permanente.
+        const { error: delErr } = await sbAdmin2
           .from("document_chunks")
           .delete()
-          .match({ client_id, source_name: sessionSourceName });
+          .match({ client_id, source_type: "session" });
+        if (delErr) console.error("CC-208 delete session chunks error (non bloquant):", delErr.message);
 
         const { error: insertErr } = await sbAdmin2.from("document_chunks").insert({
           client_id,
@@ -791,6 +792,15 @@ serve(async (req) => {
       const nextChunk = startChunk + MAX_CHUNKS;
 
       if (batch.length === 0) {
+        // Dernier appel après un batch exact (chunks.length % MAX_CHUNKS === 0) : écrire le log.
+        const tokensEstimated = chunks.reduce((acc, c) => acc + Math.ceil(c.length / 4), 0);
+        const { error: logError } = await sbAdmin.from("embedding_logs").insert({
+          client_id: client_id || null,
+          source_name,
+          chunks_count: chunks.length,
+          tokens_estimated: tokensEstimated,
+        });
+        if (logError) console.error("index_source: insert embedding_logs (empty batch) error:", logError.message);
         return new Response(
           JSON.stringify({ chunks_created: 0, has_more: false, total_chunks: chunks.length }),
           { status: 200, headers }
@@ -846,14 +856,15 @@ serve(async (req) => {
       // Supprimer les doublons d'un batch précédent (seulement après succès de l'insert).
       // On cible les anciennes lignes via last_indexed_at < now — les nouvelles sont immunisées.
       // Évite la perte de données qu'un delete-before-insert causerait si l'insert échouait.
-      if (startChunk > 0 && batch.length > 0) {
+      if (startChunk > 0) {
         const batchCondition = source_id
           ? { client_id: client_id || null, source_id }
           : { client_id: client_id || null, source_name };
-        await sbAdmin.from("document_chunks").delete()
+        const { error: dedupErr } = await sbAdmin.from("document_chunks").delete()
           .match(batchCondition)
           .in("chunk_text", batch)
           .lt("last_indexed_at", now);
+        if (dedupErr) console.error("index_source: dedup delete error (non bloquant):", dedupErr.message);
       }
 
       // ── 5. Logger dans embedding_logs (dernier appel uniquement) ─────────

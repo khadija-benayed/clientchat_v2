@@ -102,6 +102,12 @@ CREATE INDEX IF NOT EXISTS idx_document_chunks_source_id
   ON document_chunks (client_id, source_id)
   WHERE source_id IS NOT NULL;
 
+-- Un seul chunk de session actif par client — empêche les doublons silencieux
+-- en cas d'appels concurrents (double-clic, retry réseau).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_document_chunks_session_unique
+  ON document_chunks (client_id)
+  WHERE source_type = 'session';
+
 -- Recherche full-text sur les insights KB (filtre côté front)
 CREATE INDEX IF NOT EXISTS agency_knowledge_content_idx
   ON agency_knowledge USING gin (to_tsvector('french', content));

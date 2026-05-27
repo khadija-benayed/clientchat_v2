@@ -697,6 +697,7 @@ async function send(){
     // CC-203 — Badge sources RAG
     addSourcesBadge(assistantMsgEl, ragSources);
     if(ragRateLimited) setSyncDot('#EF9F27','KB indisponible (429)');
+    else setSyncDot('#52b788','synchronisé');
     // CC-213 — Bouton "Sauvegarder dans la KB"
     addKbButton(assistantMsgEl, replyText);
 
