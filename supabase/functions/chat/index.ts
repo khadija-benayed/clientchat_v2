@@ -790,6 +790,13 @@ serve(async (req) => {
       const hasMore = startChunk + MAX_CHUNKS < chunks.length;
       const nextChunk = startChunk + MAX_CHUNKS;
 
+      if (batch.length === 0) {
+        return new Response(
+          JSON.stringify({ chunks_created: 0, has_more: false, total_chunks: chunks.length }),
+          { status: 200, headers }
+        );
+      }
+
       // ── 2. Vectoriser (HF Inference API) ─────────────────────────────────────
       let embeddings: number[][];
       try {

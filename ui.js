@@ -398,7 +398,7 @@ async function callClaude(system,message,file=null,clientId=null,messageType='ch
   const r=await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify(payload)});
   const data=await r.json();
   if(data.error) throw new Error(data.error);
-  return { text: data.text, sources: data.sources_used || [] };
+  return { text: data.text, sources: data.sources_used || [], ragRateLimited: !!data.rag_rate_limited };
 }
 
 // CC-203 — Icônes par source_type
@@ -686,7 +686,7 @@ async function send(){
 
   try {
     const messageType = _isAction ? 'task_action' : 'chat';
-    const {text: raw, sources: ragSources}=await callClaude(sys,txt,fileToSend,cur?.id||null,messageType);
+    const {text: raw, sources: ragSources, ragRateLimited}=await callClaude(sys,txt,fileToSend,cur?.id||null,messageType);
     th.remove();
 
     const parts=raw.split('---JSON---');
@@ -696,6 +696,7 @@ async function send(){
     const assistantMsgEl = addMsg('a',replyText);
     // CC-203 — Badge sources RAG
     addSourcesBadge(assistantMsgEl, ragSources);
+    if(ragRateLimited) setSyncDot('#EF9F27','KB indisponible (429)');
     // CC-213 — Bouton "Sauvegarder dans la KB"
     addKbButton(assistantMsgEl, replyText);
 
