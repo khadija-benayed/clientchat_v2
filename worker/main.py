@@ -1,18 +1,22 @@
+import os
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 from typing import List
 
 app = FastAPI()
 
-model: SentenceTransformer = None
+model: TextEmbedding = None
+
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "fastembed_cache")
+MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 
 @app.on_event("startup")
 def load_model():
     global model
-    model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+    model = TextEmbedding(MODEL_NAME, cache_dir=CACHE_DIR)
 
 
 class EmbedRequest(BaseModel):
@@ -32,5 +36,5 @@ def embed(req: EmbedRequest):
         return {"embeddings": []}
     if model is None:
         return JSONResponse(status_code=503, content={"error": "model not loaded"})
-    embeddings = model.encode(req.texts, normalize_embeddings=True)
-    return {"embeddings": embeddings.tolist()}
+    embeddings = list(model.embed(req.texts))
+    return {"embeddings": [e.tolist() for e in embeddings]}
