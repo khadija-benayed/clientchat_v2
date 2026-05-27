@@ -790,7 +790,7 @@ serve(async (req) => {
       const hasMore = startChunk + MAX_CHUNKS < chunks.length;
       const nextChunk = startChunk + MAX_CHUNKS;
 
-      // ── 2. Vectoriser (worker Python) — batch unique, élimine le 546 ────────
+      // ── 2. Vectoriser (HF Inference API) ─────────────────────────────────────
       let embeddings: number[][];
       try {
         embeddings = await embedTexts(batch);
@@ -1008,7 +1008,7 @@ serve(async (req) => {
           }
         }
       } catch (ragErr) {
-        // RAG non bloquant — si le worker embedder est down, Claude répond quand même sans RAG
+        // RAG non bloquant — si l'HF Inference API est down, Claude répond quand même sans RAG
         console.error("RAG pipeline error (non bloquant):", (ragErr as Error).message);
       }
     }
