@@ -353,23 +353,31 @@ serve(async (req) => {
         const sessionDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
         const sessionSourceName = `Session du ${sessionDate}`;
 
-        // Supprimer un éventuel chunk existant pour cette date (idempotent)
-        await sbAdmin2
-          .from("document_chunks")
-          .delete()
-          .match({ client_id, source_name: sessionSourceName });
-
-        // Vectoriser et insérer
+        // Vectoriser d'abord, avant toute écriture
         const embedding = await embedText(summaryText);
-        const { error: insertErr } = await sbAdmin2.from("document_chunks").insert({
-          client_id,
-          source_type: "session",
-          source_name: sessionSourceName,
-          chunk_text: summaryText,
-          embedding,
-        });
-        if (insertErr) {
-          console.error("CC-208 insert session chunk error (non bloquant):", insertErr.message);
+
+        // Upsert : update si une ligne existe déjà pour ce client/date, insert sinon.
+        // Évite les doublons en cas d'appels concurrents ou de double-clic.
+        const { data: existing } = await sbAdmin2
+          .from("document_chunks")
+          .select("id")
+          .match({ client_id, source_name: sessionSourceName })
+          .limit(1);
+
+        if (existing && existing.length > 0) {
+          const { error: updErr } = await sbAdmin2.from("document_chunks")
+            .update({ chunk_text: summaryText, embedding, last_indexed_at: new Date().toISOString() })
+            .match({ client_id, source_name: sessionSourceName });
+          if (updErr) console.error("CC-208 update session chunk error (non bloquant):", updErr.message);
+        } else {
+          const { error: insertErr } = await sbAdmin2.from("document_chunks").insert({
+            client_id,
+            source_type: "session",
+            source_name: sessionSourceName,
+            chunk_text: summaryText,
+            embedding,
+          });
+          if (insertErr) console.error("CC-208 insert session chunk error (non bloquant):", insertErr.message);
         }
       } catch (idxErr) {
         // Non bloquant — le résumé est déjà sauvegardé dans session_summaries
@@ -816,6 +824,17 @@ serve(async (req) => {
       }
 
       // ── 4. Insérer dans document_chunks ──────────────────────────────────
+      // Pour les batches 2+ (startChunk > 0), supprimer les éventuels doublons issus d'un appel
+      // précédent qui aurait inséré puis timeout avant de répondre (idempotence retry).
+      if (startChunk > 0) {
+        const batchCondition = source_id
+          ? { client_id: client_id || null, source_id }
+          : { client_id: client_id || null, source_name };
+        await sbAdmin.from("document_chunks").delete()
+          .match(batchCondition)
+          .in("chunk_text", batch);
+      }
+
       const now = new Date().toISOString();
       const rows = batch.map((chunk, i) => ({
         client_id: client_id || null,
@@ -949,6 +968,7 @@ serve(async (req) => {
     // Fiche client (CC-107) reste en haut — chunks RAG ajoutés en dessous.
     let systemWithRAG = system || "";
     let sourcesUsed: { source_name: string; source_type: string; preview: string }[] = [];
+    let ragRateLimited = false;
 
     if (message && SUPABASE_URL && SUPABASE_SERVICE_KEY) {
       try {
@@ -1009,7 +1029,9 @@ serve(async (req) => {
         }
       } catch (ragErr) {
         // RAG non bloquant — si l'HF Inference API est down, Claude répond quand même sans RAG
-        console.error("RAG pipeline error (non bloquant):", (ragErr as Error).message);
+        const ragErrMsg = (ragErr as Error).message;
+        if (ragErrMsg.includes("429")) ragRateLimited = true;
+        console.error("RAG pipeline error (non bloquant):", ragErrMsg);
       }
     }
 
@@ -1087,7 +1109,7 @@ serve(async (req) => {
     }
 
     const text = data.content?.filter((c: { type: string }) => c.type === "text").map((c: { text: string }) => c.text).join("") || "";
-    return new Response(JSON.stringify({ text, sources_used: sourcesUsed }), { status: 200, headers });
+    return new Response(JSON.stringify({ text, sources_used: sourcesUsed, ...(ragRateLimited ? { rag_rate_limited: true } : {}) }), { status: 200, headers });
 
   } catch (e) {
     return new Response(JSON.stringify({ error: (e as Error).message }), { status: 500, headers });
