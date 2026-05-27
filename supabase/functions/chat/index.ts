@@ -356,29 +356,21 @@ serve(async (req) => {
         // Vectoriser d'abord, avant toute écriture
         const embedding = await embedText(summaryText);
 
-        // Upsert : update si une ligne existe déjà pour ce client/date, insert sinon.
-        // Évite les doublons en cas d'appels concurrents ou de double-clic.
-        const { data: existing } = await sbAdmin2
+        // Delete-then-insert : idempotent pour les retries séquentiels, sans TOCTOU
+        // ni risque de silence sur une erreur SELECT.
+        await sbAdmin2
           .from("document_chunks")
-          .select("id")
-          .match({ client_id, source_name: sessionSourceName })
-          .limit(1);
+          .delete()
+          .match({ client_id, source_name: sessionSourceName });
 
-        if (existing && existing.length > 0) {
-          const { error: updErr } = await sbAdmin2.from("document_chunks")
-            .update({ chunk_text: summaryText, embedding, last_indexed_at: new Date().toISOString() })
-            .match({ client_id, source_name: sessionSourceName });
-          if (updErr) console.error("CC-208 update session chunk error (non bloquant):", updErr.message);
-        } else {
-          const { error: insertErr } = await sbAdmin2.from("document_chunks").insert({
-            client_id,
-            source_type: "session",
-            source_name: sessionSourceName,
-            chunk_text: summaryText,
-            embedding,
-          });
-          if (insertErr) console.error("CC-208 insert session chunk error (non bloquant):", insertErr.message);
-        }
+        const { error: insertErr } = await sbAdmin2.from("document_chunks").insert({
+          client_id,
+          source_type: "session",
+          source_name: sessionSourceName,
+          chunk_text: summaryText,
+          embedding,
+        });
+        if (insertErr) console.error("CC-208 insert session chunk error (non bloquant):", insertErr.message);
       } catch (idxErr) {
         // Non bloquant — le résumé est déjà sauvegardé dans session_summaries
         console.error("CC-208 index session error (non bloquant):", (idxErr as Error).message);
@@ -824,17 +816,6 @@ serve(async (req) => {
       }
 
       // ── 4. Insérer dans document_chunks ──────────────────────────────────
-      // Pour les batches 2+ (startChunk > 0), supprimer les éventuels doublons issus d'un appel
-      // précédent qui aurait inséré puis timeout avant de répondre (idempotence retry).
-      if (startChunk > 0) {
-        const batchCondition = source_id
-          ? { client_id: client_id || null, source_id }
-          : { client_id: client_id || null, source_name };
-        await sbAdmin.from("document_chunks").delete()
-          .match(batchCondition)
-          .in("chunk_text", batch);
-      }
-
       const now = new Date().toISOString();
       const rows = batch.map((chunk, i) => ({
         client_id: client_id || null,
@@ -853,6 +834,19 @@ serve(async (req) => {
           JSON.stringify({ error: `Erreur insertion chunks : ${insertError.message}` }),
           { status: 500, headers }
         );
+      }
+
+      // Supprimer les doublons d'un batch précédent (seulement après succès de l'insert).
+      // On cible les anciennes lignes via last_indexed_at < now — les nouvelles sont immunisées.
+      // Évite la perte de données qu'un delete-before-insert causerait si l'insert échouait.
+      if (startChunk > 0 && batch.length > 0) {
+        const batchCondition = source_id
+          ? { client_id: client_id || null, source_id }
+          : { client_id: client_id || null, source_name };
+        await sbAdmin.from("document_chunks").delete()
+          .match(batchCondition)
+          .in("chunk_text", batch)
+          .lt("last_indexed_at", now);
       }
 
       // ── 5. Logger dans embedding_logs (dernier appel uniquement) ─────────
