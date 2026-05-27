@@ -242,22 +242,42 @@ function chunkCSV(text: string, linesPerChunk = 5): string[] {
   return chunks;
 }
 
-const EMBEDDER_URL = Deno.env.get("EMBEDDER_URL"); // ex: https://clientchat-embedder.onrender.com
+const HF_TOKEN = Deno.env.get("HF_TOKEN");
+const HF_EMBED_URL = "https://router.huggingface.co/hf-inference/pipeline/feature-extraction/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2";
+
+function normalizeVec(vec: number[]): number[] {
+  const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0));
+  return norm > 0 ? vec.map(v => v / norm) : vec;
+}
+
+function meanPool(tokenEmbeds: number[][]): number[] {
+  const dim = tokenEmbeds[0].length;
+  const sum = new Array(dim).fill(0);
+  for (const v of tokenEmbeds) for (let i = 0; i < dim; i++) sum[i] += v[i];
+  return sum.map(v => v / tokenEmbeds.length);
+}
 
 async function embedTexts(texts: string[]): Promise<number[][]> {
-  if (!EMBEDDER_URL) throw new Error("EMBEDDER_URL non configurée");
-  const res = await fetch(`${EMBEDDER_URL}/embed`, {
+  if (!HF_TOKEN) throw new Error("HF_TOKEN non configurée");
+  const res = await fetch(HF_EMBED_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ texts }),
-    signal: AbortSignal.timeout(45_000),
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${HF_TOKEN}` },
+    body: JSON.stringify({ inputs: texts }),
+    signal: AbortSignal.timeout(30_000),
   });
-  if (!res.ok) throw new Error(`Embedder HTTP ${res.status}`);
-  const data = await res.json();
-  if (!Array.isArray(data.embeddings) || data.embeddings.length !== texts.length) {
-    throw new Error(`Embedder: réponse invalide (attendu ${texts.length}, reçu ${Array.isArray(data.embeddings) ? data.embeddings.length : typeof data.embeddings})`);
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`HF Inference HTTP ${res.status}: ${err}`);
   }
-  return data.embeddings;
+  // HF peut retourner [[float...]] (sentence) ou [[[float...]]] (token-level) selon le modèle
+  const raw: number[][][] | number[][] = await res.json();
+  if (!Array.isArray(raw) || raw.length !== texts.length) {
+    throw new Error(`HF Inference: réponse invalide (attendu ${texts.length}, reçu ${Array.isArray(raw) ? raw.length : typeof raw})`);
+  }
+  return raw.map(item => {
+    const vec = Array.isArray(item[0]) ? meanPool(item as number[][]) : item as number[];
+    return normalizeVec(vec);
+  });
 }
 
 // Wrapper single-text pour les appels RAG (vectorisation de la question)
