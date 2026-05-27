@@ -19,7 +19,11 @@ let session = JSON.parse(localStorage.getItem('cc-sess') || '[]');
 
 async function callEdge(payload){
   const r = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify(payload)});
-  if(!r.ok) throw new Error('Edge HTTP '+r.status);
+  if(!r.ok){
+    let msg='Edge HTTP '+r.status;
+    try{ const d=await r.json(); if(d?.error) msg+=': '+d.error; }catch(_){}
+    throw new Error(msg);
+  }
   return r.json();
 }
 

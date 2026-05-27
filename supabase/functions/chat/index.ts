@@ -259,25 +259,37 @@ function meanPool(tokenEmbeds: number[][]): number[] {
 
 async function embedTexts(texts: string[]): Promise<number[][]> {
   if (!HF_TOKEN) throw new Error("HF_TOKEN non configurée");
-  const res = await fetch(HF_EMBED_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${HF_TOKEN}` },
-    body: JSON.stringify({ inputs: texts }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`HF Inference HTTP ${res.status}: ${err}`);
+  const MAX_RETRIES = 4;
+  let lastErr = "";
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      // Backoff exponentiel : 2s, 4s, 8s — laisse le modèle HF se réveiller ou la fenêtre 429 passer
+      await new Promise(r => setTimeout(r, 2000 * Math.pow(2, attempt - 1)));
+    }
+    const res = await fetch(HF_EMBED_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${HF_TOKEN}` },
+      body: JSON.stringify({ inputs: texts }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (res.ok) {
+      // HF peut retourner [[float...]] (sentence) ou [[[float...]]] (token-level) selon le modèle
+      const raw: number[][][] | number[][] = await res.json();
+      if (!Array.isArray(raw) || raw.length !== texts.length) {
+        throw new Error(`HF Inference: réponse invalide (attendu ${texts.length}, reçu ${Array.isArray(raw) ? raw.length : typeof raw})`);
+      }
+      return raw.map(item => {
+        const vec = Array.isArray(item[0]) ? meanPool(item as number[][]) : item as number[];
+        return normalizeVec(vec);
+      });
+    }
+    const errBody = await res.text();
+    lastErr = `HF Inference HTTP ${res.status}: ${errBody}`;
+    // Retry uniquement sur 429 (rate limit) et 503 (model loading)
+    if (res.status !== 429 && res.status !== 503) break;
+    console.warn(`embedTexts: tentative ${attempt + 1}/${MAX_RETRIES} échouée (${res.status}), retry…`);
   }
-  // HF peut retourner [[float...]] (sentence) ou [[[float...]]] (token-level) selon le modèle
-  const raw: number[][][] | number[][] = await res.json();
-  if (!Array.isArray(raw) || raw.length !== texts.length) {
-    throw new Error(`HF Inference: réponse invalide (attendu ${texts.length}, reçu ${Array.isArray(raw) ? raw.length : typeof raw})`);
-  }
-  return raw.map(item => {
-    const vec = Array.isArray(item[0]) ? meanPool(item as number[][]) : item as number[];
-    return normalizeVec(vec);
-  });
+  throw new Error(lastErr);
 }
 
 // Wrapper single-text pour les appels RAG (vectorisation de la question)
