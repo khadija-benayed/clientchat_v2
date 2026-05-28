@@ -4,8 +4,8 @@
 // ════════════════════════════════════════════════════════
 const SB_URL = 'https://erpjerfvswesipmdqxab.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVycGplcmZ2c3dlc2lwbWRxeGFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4NTQwNDEsImV4cCI6MjA5MjQzMDA0MX0.ftgCx_YzClgkNCPF5PprnPJd-y6mdl_vETtvl6pzG2U';
-const EDGE_URL = SB_URL + '/functions/v1/chat';
-const EDGE_HEADERS = {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SB_KEY};
+const BACKEND_URL = 'https://clientchat-backend-XXXXXXXXXX-ew.a.run.app'; // TODO: remplacer après `gcloud run deploy`
+const BACKEND_HEADERS = {'Content-Type': 'application/json'};
 const EXPORTABLE_MIMETYPES = [
   'application/vnd.google-apps.document',
   'application/vnd.google-apps.spreadsheet',
@@ -17,22 +17,21 @@ let cur = null, tasks = [], activeF = 'all', rtChan = null;
 
 let session = JSON.parse(localStorage.getItem('cc-sess') || '[]');
 
-async function callEdge(payload){
-  const r = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify(payload)});
+async function callBackend(payload){
+  const r = await fetch(BACKEND_URL,{method:'POST',headers:BACKEND_HEADERS,body:JSON.stringify(payload)});
   if(!r.ok){
-    let msg='Edge HTTP '+r.status;
+    let msg='Backend HTTP '+r.status;
     try{ const d=await r.json(); if(d?.error) msg+=': '+d.error; }catch(_){}
     throw new Error(msg);
   }
   return r.json();
 }
 
-// Indexe une source en plusieurs appels de MAX_CHUNKS chunks pour éviter les 546.
 async function indexSourceBatched(payload) {
   let startChunk = 0;
   let totalCreated = 0;
   while (true) {
-    const data = await callEdge({ ...payload, start_chunk: startChunk });
+    const data = await callBackend({ ...payload, start_chunk: startChunk });
     if (data.error) throw new Error(data.error);
     totalCreated += data.chunks_created;
     if (!data.has_more) break;
@@ -252,9 +251,9 @@ async function checkDriveUpdates(clientObj) {
   _indexingInProgress = true;
   try {
     // ── Étape 1 : métadonnées uniquement (id, name, mimeType, modifiedTime) ──
-    const metaRes = await fetch(EDGE_URL, {
+    const metaRes = await fetch(BACKEND_URL, {
       method: 'POST',
-      headers: EDGE_HEADERS,
+      headers: BACKEND_HEADERS,
       body: JSON.stringify({ action: 'list_drive_metadata', folder_id: clientObj.drive_folder_id })
     });
     const metaData = await metaRes.json();
@@ -330,9 +329,9 @@ async function checkDriveUpdates(clientObj) {
       const fileMeta = batch[fi];
       try {
         // 1. Exporter le contenu du fichier via son ID Drive
-        const exportRes = await fetch(EDGE_URL, {
+        const exportRes = await fetch(BACKEND_URL, {
           method: 'POST',
-          headers: EDGE_HEADERS,
+          headers: BACKEND_HEADERS,
           body: JSON.stringify({
             action: 'export_single_file',
             file_id: fileMeta.id,

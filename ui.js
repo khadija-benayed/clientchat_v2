@@ -151,9 +151,9 @@ async function saveSessionSummary(){
   if(history.length < 3) return;
   sessionSaved = true; // flag optimiste pour éviter les doubles appels
   try {
-    const r = await fetch(EDGE_URL, {
+    const r = await fetch(BACKEND_URL, {
       method: 'POST',
-      headers: EDGE_HEADERS,
+      headers: BACKEND_HEADERS,
       body: JSON.stringify({action: 'summarize_session', client_id: cur.id, history})
     });
     const data = await r.json();
@@ -284,7 +284,7 @@ async function confirmSaveToKb(){
   err.style.display='none';
   const savedBy = cur ? getMembers()[0]?.initials || '' : '';
   try {
-    const res = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({
+    const res = await fetch(BACKEND_URL,{method:'POST',headers:BACKEND_HEADERS,body:JSON.stringify({
       action:'save_to_kb', title, content,
       source_client: cur?.name || null,
       tags, saved_by: savedBy,
@@ -395,7 +395,7 @@ async function callClaude(system,message,file=null,clientId=null,messageType='ch
     while(hist.length && hist[0].role==='a') hist.shift();
     if(hist.length) payload.chat_history=hist;
   }
-  const r=await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify(payload)});
+  const r=await fetch(BACKEND_URL,{method:'POST',headers:BACKEND_HEADERS,body:JSON.stringify(payload)});
   const data=await r.json();
   if(data.error) throw new Error(data.error);
   return { text: data.text, sources: data.sources_used || [], ragRateLimited: !!data.rag_rate_limited };
@@ -1052,9 +1052,9 @@ function renderBrief() {
 async function generateBrief(docsContent) {
   if (!cur || !docsContent || !docsContent.length) return;
 
-  const r = await fetch(EDGE_URL, {
+  const r = await fetch(BACKEND_URL, {
     method: 'POST',
-    headers: EDGE_HEADERS,
+    headers: BACKEND_HEADERS,
     body: JSON.stringify({ action: 'generate_brief', client_id: cur.id, docs_content: docsContent })
   });
   const data = await r.json();
@@ -1159,7 +1159,7 @@ async function syncSource(idx){
       const folderId = s.folder_id || $('drive-in').value.trim();
       if(!folderId) throw new Error('Folder ID manquant');
       // ── Étape 1 : métadonnées de tous les fichiers (rapide, sans contenu) ──
-      const metaR = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({action:'list_drive_metadata',folder_id:folderId})});
+      const metaR = await fetch(BACKEND_URL,{method:'POST',headers:BACKEND_HEADERS,body:JSON.stringify({action:'list_drive_metadata',folder_id:folderId})});
       const metaD = await metaR.json();
       if(metaD.error) throw new Error(metaD.error);
       if(!metaD.files||!metaD.files.length) throw new Error('Aucun fichier lisible');
@@ -1181,7 +1181,7 @@ async function syncSource(idx){
       const CONCURRENCY = 1;
       async function processFile(fileMeta) {
         try {
-          const expR = await fetch(EDGE_URL,{method:'POST',headers:EDGE_HEADERS,body:JSON.stringify({action:'export_single_file',file_id:fileMeta.id,file_name:fileMeta.name,mime_type:fileMeta.mimeType})});
+          const expR = await fetch(BACKEND_URL,{method:'POST',headers:BACKEND_HEADERS,body:JSON.stringify({action:'export_single_file',file_id:fileMeta.id,file_name:fileMeta.name,mime_type:fileMeta.mimeType})});
           const expD = await expR.json();
           if(expD.error || !expD.file?.content || expD.file.content.trim().length < 10) return;
 
@@ -1284,9 +1284,9 @@ async function removeSource(idx){
   try {
     if (s.type === 'drive') {
       // Supprimer TOUS les chunks doc/sheet de ce client (ils viennent tous du Drive)
-      await fetch(EDGE_URL, {
+      await fetch(BACKEND_URL, {
         method: 'POST',
-        headers: EDGE_HEADERS,
+        headers: BACKEND_HEADERS,
         body: JSON.stringify({
           action: 'delete_source_chunks',
           client_id: cur.id,
@@ -1295,9 +1295,9 @@ async function removeSource(idx){
       });
     } else {
       // Pour un fichier PDF : source_name = file.name → match direct
-      await fetch(EDGE_URL, {
+      await fetch(BACKEND_URL, {
         method: 'POST',
-        headers: EDGE_HEADERS,
+        headers: BACKEND_HEADERS,
         body: JSON.stringify({
           action: 'delete_source_chunks',
           client_id: cur.id,
