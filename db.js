@@ -5,7 +5,8 @@
 const SB_URL = 'https://erpjerfvswesipmdqxab.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVycGplcmZ2c3dlc2lwbWRxeGFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4NTQwNDEsImV4cCI6MjA5MjQzMDA0MX0.ftgCx_YzClgkNCPF5PprnPJd-y6mdl_vETtvl6pzG2U';
 const BACKEND_URL = 'https://clientchat-v2-1004127157825.europe-west1.run.app';
-const BACKEND_HEADERS = {'Content-Type': 'application/json'};
+const BACKEND_API_KEY = 'REPLACE_WITH_YOUR_KEY';
+const BACKEND_HEADERS = {'Content-Type': 'application/json', 'X-Api-Key': BACKEND_API_KEY};
 const EXPORTABLE_MIMETYPES = [
   'application/vnd.google-apps.document',
   'application/vnd.google-apps.spreadsheet',
@@ -35,6 +36,7 @@ async function indexSourceBatched(payload) {
     if (data.error) throw new Error(data.error);
     totalCreated += data.chunks_created;
     if (!data.has_more) break;
+    if (data.next_chunk == null) break;
     startChunk = data.next_chunk;
   }
   return { chunks_created: totalCreated };
@@ -245,12 +247,7 @@ async function checkDriveUpdates(clientObj) {
   _indexingInProgress = true;
   try {
     // ── Étape 1 : métadonnées uniquement (id, name, mimeType, modifiedTime) ──
-    const metaRes = await fetch(BACKEND_URL, {
-      method: 'POST',
-      headers: BACKEND_HEADERS,
-      body: JSON.stringify({ action: 'list_drive_metadata', folder_id: clientObj.drive_folder_id })
-    });
-    const metaData = await metaRes.json();
+    const metaData = await callBackend({ action: 'list_drive_metadata', folder_id: clientObj.drive_folder_id });
     if (!metaData.files || metaData.files.length === 0) return;
 
     // ── Étape 2 : récupérer les source_id déjà indexés en base pour ce client ──

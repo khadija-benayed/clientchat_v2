@@ -148,12 +148,7 @@ async function saveSessionSummary(){
   if(history.length < 3) return;
   sessionSaved = true; // flag optimiste pour éviter les doubles appels
   try {
-    const r = await fetch(BACKEND_URL, {
-      method: 'POST',
-      headers: BACKEND_HEADERS,
-      body: JSON.stringify({action: 'summarize_session', client_id: cur.id, history})
-    });
-    const data = await r.json();
+    const data = await callBackend({action: 'summarize_session', client_id: cur.id, history});
     if(data.saved){
       showSessionSavedBadge();
       if(!cur._summaries) cur._summaries = [];
@@ -281,12 +276,11 @@ async function confirmSaveToKb(){
   err.style.display='none';
   const savedBy = cur ? getMembers()[0]?.initials || '' : '';
   try {
-    const res = await fetch(BACKEND_URL,{method:'POST',headers:BACKEND_HEADERS,body:JSON.stringify({
+    const data = await callBackend({
       action:'save_to_kb', title, content,
       source_client: cur?.name || null,
       tags, saved_by: savedBy,
-    })});
-    const data = await res.json();
+    });
     if(data.error) throw new Error(data.error);
     closeKbModal();
     if(_kbPendingBtn){ _kbPendingBtn.innerHTML='✓ KB'; _kbPendingBtn.classList.add('saved'); _kbPendingBtn.disabled=true; }
@@ -392,8 +386,7 @@ async function callClaude(system,message,file=null,clientId=null,messageType='ch
     while(hist.length && hist[0].role==='a') hist.shift();
     if(hist.length) payload.chat_history=hist;
   }
-  const r=await fetch(BACKEND_URL,{method:'POST',headers:BACKEND_HEADERS,body:JSON.stringify(payload)});
-  const data=await r.json();
+  const data = await callBackend(payload);
   if(data.error) throw new Error(data.error);
   return { text: data.text, sources: data.sources_used || [], ragRateLimited: !!data.rag_rate_limited };
 }
@@ -744,7 +737,7 @@ async function send(){
       }catch(e){console.error('JSON parse:',e);}
     }
   }catch(e){
-    if($('msgs').querySelector('.thinking')) th.remove();
+    th.remove();
     addMsg('a','Erreur : '+e.message);
   } finally {
     sendBtn.disabled = false;
@@ -1038,12 +1031,7 @@ function renderBrief() {
 async function generateBrief(docsContent) {
   if (!cur || !docsContent || !docsContent.length) return;
 
-  const r = await fetch(BACKEND_URL, {
-    method: 'POST',
-    headers: BACKEND_HEADERS,
-    body: JSON.stringify({ action: 'generate_brief', client_id: cur.id, docs_content: docsContent })
-  });
-  const data = await r.json();
+  const data = await callBackend({ action: 'generate_brief', client_id: cur.id, docs_content: docsContent });
 
   if (data.error) {
     // Afficher l'erreur dans le modal
@@ -1145,8 +1133,7 @@ async function syncSource(idx){
       const folderId = s.folder_id || $('drive-in').value.trim();
       if(!folderId) throw new Error('Folder ID manquant');
       // ── Étape 1 : métadonnées de tous les fichiers (rapide, sans contenu) ──
-      const metaR = await fetch(BACKEND_URL,{method:'POST',headers:BACKEND_HEADERS,body:JSON.stringify({action:'list_drive_metadata',folder_id:folderId})});
-      const metaD = await metaR.json();
+      const metaD = await callBackend({action:'list_drive_metadata',folder_id:folderId});
       if(metaD.error) throw new Error(metaD.error);
       if(!metaD.files||!metaD.files.length) throw new Error('Aucun fichier lisible');
 
@@ -1159,11 +1146,10 @@ async function syncSource(idx){
       let indexedCount = 0;
 
       // Pool de concurrence : traite CONCURRENCY fichiers simultanément
-      const CONCURRENCY = 1;
+      const CONCURRENCY = 3;
       async function processFile(fileMeta) {
         try {
-          const expR = await fetch(BACKEND_URL,{method:'POST',headers:BACKEND_HEADERS,body:JSON.stringify({action:'export_single_file',file_id:fileMeta.id,file_name:fileMeta.name,mime_type:fileMeta.mimeType})});
-          const expD = await expR.json();
+          const expD = await callBackend({action:'export_single_file',file_id:fileMeta.id,file_name:fileMeta.name,mime_type:fileMeta.mimeType});
           if(expD.error || !expD.file?.content || expD.file.content.trim().length < 10) return;
 
           // Collecter pour le brief (thread-safe car JS est single-threaded)
@@ -1264,25 +1250,16 @@ async function removeSource(idx){
   try {
     if (s.type === 'drive') {
       // Supprimer TOUS les chunks doc/sheet de ce client (ils viennent tous du Drive)
-      await fetch(BACKEND_URL, {
-        method: 'POST',
-        headers: BACKEND_HEADERS,
-        body: JSON.stringify({
-          action: 'delete_source_chunks',
-          client_id: cur.id,
-          source_type_filter: ['doc', 'sheet'], // supprime par type, pas par nom
-        })
+      await callBackend({
+        action: 'delete_source_chunks',
+        client_id: cur.id,
+        source_type_filter: ['doc', 'sheet'],
       });
     } else {
-      // Pour un fichier PDF : source_name = file.name → match direct
-      await fetch(BACKEND_URL, {
-        method: 'POST',
-        headers: BACKEND_HEADERS,
-        body: JSON.stringify({
-          action: 'delete_source_chunks',
-          client_id: cur.id,
-          source_name: s.name,
-        })
+      await callBackend({
+        action: 'delete_source_chunks',
+        client_id: cur.id,
+        source_name: s.name,
       });
     }
   } catch(e) {
