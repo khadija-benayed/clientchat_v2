@@ -6,6 +6,7 @@ import os
 import re
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
@@ -368,10 +369,16 @@ async def read_drive_folder(body: dict):
     all_files.sort(key=lambda f: (_type_priority(f["mimeType"]), -_parse_modified(f).timestamp()))
 
     results = []
-    for f in all_files[:200]:
-        r = export_drive_file(drive, f["id"], f["name"], f["mimeType"])
-        if r:
-            results.append({**r, "driveId": f["id"], "modifiedTime": f.get("modifiedTime", "")})
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {
+            executor.submit(export_drive_file, drive, f["id"], f["name"], f["mimeType"]): f
+            for f in all_files[:200]
+        }
+        for future in as_completed(futures):
+            r = future.result()
+            if r:
+                f = futures[future]
+                results.append({**r, "driveId": f["id"], "modifiedTime": f.get("modifiedTime", "")})
 
     return {"files": results, "sa_email": sa_email}
 
@@ -645,23 +652,17 @@ async def save_to_kb(body: dict):
         return JSONResponse({"error": "title et content requis."}, status_code=400)
 
     try:
-        res = (
-            sb.table("agency_knowledge")
-            .insert({
-                "title": title,
-                "content": kb_content,
-                "source_client": source_client or None,
-                "tags": tags or [],
-                "saved_by": saved_by or None,
-            })
-            .select("id")
-            .single()
-            .execute()
-        )
+        sb.table("agency_knowledge").insert({
+            "title": title,
+            "content": kb_content,
+            "source_client": source_client or None,
+            "tags": tags or [],
+            "saved_by": saved_by or None,
+        }).execute()
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-    return {"saved": True, "id": res.data["id"]}
+    return {"saved": True}
 
 
 # ── chat (default) ────────────────────────────────────────────────────────────
