@@ -333,7 +333,8 @@ async def summarize_session(body: dict):
 
     # CC-208 — Index summary in document_chunks (source_type='session') for semantic search
     try:
-        embedding = embed_texts([summary_text])[0]
+        loop = asyncio.get_running_loop()
+        embedding = (await loop.run_in_executor(None, embed_texts, [summary_text]))[0]
         session_source_name = f"Session du {time.strftime('%Y-%m-%d')}"
         sb.table("document_chunks").delete().match({"client_id": client_id, "source_type": "session"}).execute()
         sb.table("document_chunks").insert({
@@ -570,7 +571,8 @@ async def index_source(body: dict):
         )
 
     # Embed all at once — local model, zero timeout risk
-    embeddings = embed_texts(chunks)
+    loop = asyncio.get_running_loop()
+    embeddings = await loop.run_in_executor(None, embed_texts, chunks)
 
     # Delete old chunks before inserting (source_id stable key for Drive, source_name fallback)
     try:
@@ -802,7 +804,8 @@ async def chat(body: dict):
 
     if message:
         try:
-            query_emb = embed_texts([message])[0]
+            loop = asyncio.get_running_loop()
+            query_emb = (await loop.run_in_executor(None, embed_texts, [message]))[0]
             result = sb.rpc("match_chunks", {
                 "query_embedding": query_emb,
                 "match_count": 8,
