@@ -47,14 +47,15 @@ app.add_middleware(
 async def require_api_key(request: Request, call_next):
     if request.method == "OPTIONS" or request.url.path == "/health":
         return await call_next(request)
+    cors = {"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*"}
     if API_KEY and request.headers.get("X-Api-Key") != API_KEY:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return JSONResponse({"error": "unauthorized"}, status_code=401, headers=cors)
     try:
         return await call_next(request)
     except Exception as e:
         import traceback as tb
         print(f"Unhandled exception: {e}\n{tb.format_exc()}")
-        return JSONResponse({"error": "internal server error"}, status_code=500)
+        return JSONResponse({"error": "internal server error"}, status_code=500, headers=cors)
 
 # ── Environment variables ─────────────────────────────────────────────────────
 SUPABASE_URL = os.environ["SUPABASE_URL"]
@@ -62,6 +63,8 @@ SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 ANTHROPIC_KEY = os.environ["ANTHROPIC_KEY"]
 GOOGLE_SA_KEY = os.environ.get("GOOGLE_SA_KEY")  # JSON string
 API_KEY = os.environ.get("API_KEY", "")
+if not API_KEY:
+    print("WARNING: API_KEY not set — authentication check disabled")
 
 sb: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 claude = anthropic.Anthropic(api_key=ANTHROPIC_KEY)

@@ -1160,7 +1160,7 @@ async function syncSource(idx){
           const sourceType = fileMeta.mimeType === 'application/vnd.google-apps.spreadsheet' ? 'sheet' : 'doc';
           try {
             await indexSourceBatched({
-              action:'index_source', client_id:cur.id,
+              action:'index_source', client_id:syncClientId,
               source_type:sourceType, source_id:fileMeta.id,
               source_name:fileMeta.name, content:expD.file.content,
             });

@@ -5,7 +5,7 @@
 const SB_URL = 'https://erpjerfvswesipmdqxab.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVycGplcmZ2c3dlc2lwbWRxeGFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4NTQwNDEsImV4cCI6MjA5MjQzMDA0MX0.ftgCx_YzClgkNCPF5PprnPJd-y6mdl_vETtvl6pzG2U';
 const BACKEND_URL = 'https://clientchat-v2-1004127157825.europe-west1.run.app';
-const BACKEND_API_KEY = 'REPLACE_WITH_YOUR_KEY';
+const BACKEND_API_KEY = localStorage.getItem('cc-api-key') || '';
 const BACKEND_HEADERS = {'Content-Type': 'application/json', 'X-Api-Key': BACKEND_API_KEY};
 const EXPORTABLE_MIMETYPES = [
   'application/vnd.google-apps.document',
