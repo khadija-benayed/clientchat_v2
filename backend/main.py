@@ -49,7 +49,12 @@ async def require_api_key(request: Request, call_next):
         return await call_next(request)
     if API_KEY and request.headers.get("X-Api-Key") != API_KEY:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    return await call_next(request)
+    try:
+        return await call_next(request)
+    except Exception as e:
+        import traceback as tb
+        print(f"Unhandled exception: {e}\n{tb.format_exc()}")
+        return JSONResponse({"error": "internal server error"}, status_code=500)
 
 # ── Environment variables ─────────────────────────────────────────────────────
 SUPABASE_URL = os.environ["SUPABASE_URL"]
