@@ -1102,6 +1102,7 @@ async function regenerateBrief() {
     renderBrief();
   } catch (e) {
     console.error('regenerateBrief:', e.message);
+    $('brief-content').innerHTML = `<div class="brief-err">⚠ ${esc(e.message)}</div>`;
   } finally {
     btn.disabled = false;
     btn.textContent = '↻ Régénérer la fiche';

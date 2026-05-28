@@ -694,10 +694,15 @@ async def chat(body: dict):
 
             if chunks:
                 HIGH_THRESHOLD = 0.62
+                LOW_THRESHOLD = 0.35
                 MAX_INJECT = 6
                 MIN_INJECT = 2
                 high_q = [c for c in chunks if c["similarity"] >= HIGH_THRESHOLD]
-                to_inject = high_q[:MAX_INJECT] if len(high_q) >= MIN_INJECT else chunks[:MIN_INJECT]
+                if len(high_q) >= MIN_INJECT:
+                    to_inject = high_q[:MAX_INJECT]
+                else:
+                    low_q = [c for c in chunks if c["similarity"] >= LOW_THRESHOLD]
+                    to_inject = low_q[:MIN_INJECT]
 
                 doc_chunks = [c for c in to_inject if c["source_type"] != "session"]
                 session_chunks = [c for c in to_inject if c["source_type"] == "session"]

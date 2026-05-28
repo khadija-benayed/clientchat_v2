@@ -316,21 +316,12 @@ async function checkDriveUpdates(clientObj) {
       const fileMeta = batch[fi];
       try {
         // 1. Exporter le contenu du fichier via son ID Drive
-        const exportRes = await fetch(BACKEND_URL, {
-          method: 'POST',
-          headers: BACKEND_HEADERS,
-          body: JSON.stringify({
-            action: 'export_single_file',
-            file_id: fileMeta.id,
-            file_name: fileMeta.name,
-            mime_type: fileMeta.mimeType,
-          })
+        const exportData = await callBackend({
+          action: 'export_single_file',
+          file_id: fileMeta.id,
+          file_name: fileMeta.name,
+          mime_type: fileMeta.mimeType,
         });
-        if (!exportRes.ok) {
-          console.warn(`checkDriveUpdates: export HTTP ${exportRes.status} pour "${fileMeta.name}"`);
-          continue;
-        }
-        const exportData = await exportRes.json();
 
         if (exportData.error) {
           console.warn(`checkDriveUpdates: export échoué pour "${fileMeta.name}":`, exportData.error);
