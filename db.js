@@ -223,7 +223,6 @@ function renderSidebar(){
   });
 }
 
-// CC-209 — Notification discrète de mise à jour (disparaît après 4s)
 function showUpdateNotif(count) {
   let notif = document.getElementById('update-notif');
   if (!notif) {
@@ -240,11 +239,6 @@ function showUpdateNotif(count) {
 
 let _indexingInProgress = false;
 
-// CC-209 — Vérifier et re-indexer les docs Drive modifiés depuis la dernière indexation
-// CC-210 — checkDriveUpdates : vérification légère en 2 étapes
-// Étape 1 : list_drive_metadata (metadata only, ~100ms, 0 export Drive)
-// Étape 2 : comparer modifiedTime vs files_indexed stocké dans sources
-// Étape 3 : re-télécharger + index_source UNIQUEMENT les fichiers modifiés (max 5)
 async function checkDriveUpdates(clientObj) {
   if (!clientObj?.drive_folder_id) return;
   if (_indexingInProgress) return;
@@ -315,12 +309,8 @@ async function checkDriveUpdates(clientObj) {
     console.log(`checkDriveUpdates: ${toIndex.length} fichier(s) à indexer (${toIndex.filter(f=>f.reason==='new').length} nouveaux, ${toIndex.filter(f=>f.reason==='modified').length} modifiés).`);
     setSyncProgress(0, toIndex.length);
 
-    // ── Étape 5 : exporter + indexer fichier par fichier (anti-timeout) ──
-    // On n'utilise plus read_drive_folder (exporte tout en parallèle → timeout sur 98 fichiers).
-    // À la place : export_single_file par ID → 1 appel Edge Function par fichier, séquentiel.
-    // Limite à 8 par run pour rester bien sous les 150s de timeout Supabase.
+    // ── Étape 5 : exporter + indexer fichier par fichier (séquentiel) ──
     // Convergence garantie : le reste est traité au prochain selectClient().
-    // gte-small natif — pas de rate limit, 10 fichiers max par run pour rester sous le timeout Edge Function
     const MAX_PER_RUN = 10;
     const batch = toIndex.slice(0, MAX_PER_RUN);
     const updatedNames = [];
@@ -404,13 +394,7 @@ async function checkDriveUpdates(clientObj) {
   }
 }
 
-// CC-212 — Doc cache : lit les chunks déjà indexés dans document_chunks (Supabase)
-// Zéro appel Drive supplémentaire — pas de conflit avec checkDriveUpdates.
-// Regroupe les chunks par source_name, reconstitue le texte, garde les 10 sources les plus récentes.
 async function loadDocCache(clientObj){
-  // CC-212b — L2 cache indépendant du RAG.
-  // localStorage d'abord (instantané), Drive en arrière-plan si stale.
-  // Fonctionne même avec Voyage free tier à 0 fichier indexé.
   try {
     const raw = clientObj.sources;
     const srcs = Array.isArray(raw) ? raw : JSON.parse(raw||'[]');
@@ -425,13 +409,13 @@ async function loadDocCache(clientObj){
 
     if(cached && age < CACHE_TTL && cached.docs?.length){
       clientObj._docCache = cached.docs;
-      console.log('[CC-212b] Cache localStorage : '+cached.docs.length+' fichiers ('+Math.round(age/60000)+'min)');
+      console.log('Cache localStorage: '+cached.docs.length+' fichiers ('+Math.round(age/60000)+'min)');
       if(age > 15*60*1000) refreshDocCache(clientObj, folderId, CACHE_KEY); // refresh silencieux
       return;
     }
     await refreshDocCache(clientObj, folderId, CACHE_KEY);
   } catch(e){
-    console.warn('[CC-212b] loadDocCache error:', e.message);
+    console.warn('loadDocCache error:', e.message);
     clientObj._docCache = [];
   }
 }
@@ -463,9 +447,9 @@ async function refreshDocCache(clientObj, folderId, cacheKey){
     }));
     clientObj._docCache = docs;
     try{ localStorage.setItem(cacheKey,JSON.stringify({ts:Date.now(),docs})); }catch(_){}
-    console.log('[CC-212b] Cache refreshed from document_chunks: '+docs.length+' sources');
+    console.log('Cache refreshed from document_chunks: '+docs.length+' sources');
   }catch(e){
-    console.warn('[CC-212b] refreshDocCache error:',e.message);
+    console.warn('refreshDocCache error:',e.message);
     clientObj._docCache=clientObj._docCache||[];
   }
 }
@@ -499,7 +483,7 @@ async function selectClient(c){
   (async () => {
     await checkDriveUpdates(cur);
     await loadDocCache(cur);
-  })().catch(e => console.warn('[CC-212] update+cache pipeline error:', e.message));
+  })().catch(e => console.warn('update+cache pipeline error:', e.message));
 }
 
 async function loadTasks(){

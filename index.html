@@ -154,7 +154,6 @@
 <div class="modal-bg" id="modal-settings">
 <div class="modal">
   <h2 id="stitle">Paramètres</h2>
-  <!-- CC-102 : onglets Paramètres / Historique -->
   <div class="settings-tabs">
     <button class="stab on" id="stab-params" onclick="switchSettingsTab('params')">Paramètres</button>
     <button class="stab" id="stab-hist" onclick="switchSettingsTab('hist')">Historique sessions</button>
@@ -172,7 +171,6 @@
   </div>
   <label>Contexte client</label>
   <textarea id="ctx-ta" style="min-height:110px;font-family:'DM Mono',monospace;font-size:12px;margin-bottom:4px" placeholder="Infos clés : secteur, stack, interlocuteurs, enjeux…"></textarea>
-  <!-- CC-104 — Sources de contexte -->
   <div class="sources-section">
     <div class="sources-label">
       <span>Sources de contexte</span>
@@ -186,7 +184,6 @@
     </div>
     <button class="btn-add-member" style="margin-top:8px" onclick="openModal('modal-add-source')">+ Ajouter une source</button>
   </div>
-  <!-- CC-107 — Fiche client générée -->
   <div class="brief-section" id="brief-section">
     <div class="brief-header">
       <span class="brief-label">Fiche client générée</span>
@@ -197,9 +194,7 @@
     </div>
   </div>
 
-  <!-- champ Drive caché — conservé pour rétrocompatibilité saveSettings() -->
   <input type="text" id="drive-in" class="hide" style="display:none"/>
-  <div id="drive-status" class="hide" style="font-size:12px;color:var(--tx3);font-style:italic;margin-bottom:10px">Lecture en cours…</div>
   <div style="margin-top:24px;padding-top:16px;border-top:1px solid var(--brd)">
     <button class="btn" style="width:auto;background:var(--rbg);color:var(--red);border:1px solid var(--red)" onclick="deleteClient()">Supprimer ce client</button>
     <div class="note-txt" style="margin-top:6px">Supprime définitivement le client et toutes ses tâches. Irréversible.</div>
@@ -210,7 +205,6 @@
   </div>
   </div>
 
-  <!-- CC-102 : Panneau Historique sessions -->
   <div id="settings-panel-hist" class="hide">
     <div id="hist-loading" style="font-size:12px;color:var(--tx3);font-style:italic;padding:8px 0">Chargement…</div>
     <div id="hist-list"></div>
@@ -221,7 +215,6 @@
 </div>
 </div>
 
-<!-- CC-104 — Modal ajout source -->
 <div class="modal-bg" id="modal-add-source">
 <div class="modal" style="max-width:440px">
   <h2>Ajouter une source</h2>
@@ -237,7 +230,7 @@
       <div class="add-src-opt-icon"><i data-lucide="file-text" style="width:22px;height:22px;color:var(--sb-orange)"></i></div>
       <div>
         <div class="add-src-opt-label">Fichier PDF</div>
-        <div class="add-src-opt-sub">Uploader un PDF directement (CC-103)</div>
+        <div class="add-src-opt-sub">Uploader un PDF directement</div>
       </div>
     </div>
     <div class="add-src-opt" onclick="showAddSourceForm('notion')" style="opacity:.55;pointer-events:none">
@@ -363,6 +356,56 @@
   <div id="cal-body"></div>
   <div class="modal-foot">
     <button class="btn btn-sec" onclick="closeModal('modal-cal')">Fermer</button>
+  </div>
+</div>
+</div>
+
+<!-- Modal raccourcis clavier -->
+<div class="modal-bg" id="modal-shortcuts" onclick="if(event.target===this)closeModal('modal-shortcuts')">
+<div class="modal" style="max-width:380px">
+  <h2>Raccourcis clavier</h2>
+  <div style="display:flex;flex-direction:column;gap:10px;margin:16px 0">
+    <div style="display:flex;justify-content:space-between;font-size:13px"><span>Sidebar</span><kbd style="font-family:'DM Mono',monospace;background:var(--sur2);border:1px solid var(--brd2);border-radius:4px;padding:2px 7px">⌘B</kbd></div>
+    <div style="display:flex;justify-content:space-between;font-size:13px"><span>Mode sombre/clair</span><kbd style="font-family:'DM Mono',monospace;background:var(--sur2);border:1px solid var(--brd2);border-radius:4px;padding:2px 7px">⌘D</kbd></div>
+    <div style="display:flex;justify-content:space-between;font-size:13px"><span>Focus chat</span><kbd style="font-family:'DM Mono',monospace;background:var(--sur2);border:1px solid var(--brd2);border-radius:4px;padding:2px 7px">⌘K</kbd></div>
+    <div style="display:flex;justify-content:space-between;font-size:13px"><span>Joindre un fichier</span><kbd style="font-family:'DM Mono',monospace;background:var(--sur2);border:1px solid var(--brd2);border-radius:4px;padding:2px 7px">⌘J</kbd></div>
+    <div style="display:flex;justify-content:space-between;font-size:13px"><span>Paramètres</span><kbd style="font-family:'DM Mono',monospace;background:var(--sur2);border:1px solid var(--brd2);border-radius:4px;padding:2px 7px">⌘,</kbd></div>
+    <div style="display:flex;justify-content:space-between;font-size:13px"><span>Client précédent / suivant</span><kbd style="font-family:'DM Mono',monospace;background:var(--sur2);border:1px solid var(--brd2);border-radius:4px;padding:2px 7px">⌘[ / ⌘]</kbd></div>
+    <div style="display:flex;justify-content:space-between;font-size:13px"><span>Recherche tâches</span><kbd style="font-family:'DM Mono',monospace;background:var(--sur2);border:1px solid var(--brd2);border-radius:4px;padding:2px 7px">⌘F</kbd></div>
+    <div style="display:flex;justify-content:space-between;font-size:13px"><span>Raccourcis</span><kbd style="font-family:'DM Mono',monospace;background:var(--sur2);border:1px solid var(--brd2);border-radius:4px;padding:2px 7px">?</kbd></div>
+  </div>
+  <div class="modal-foot">
+    <button class="btn btn-sec" onclick="closeModal('modal-shortcuts')">Fermer</button>
+  </div>
+</div>
+</div>
+
+<!-- Modal KB — Sauvegarder un insight -->
+<div class="modal-bg" id="kb-modal-overlay" onclick="if(event.target===this)closeKbModal()">
+<div class="modal" style="max-width:480px">
+  <h2>Sauvegarder dans la base de savoir</h2>
+  <label>Titre</label>
+  <input type="text" id="kb-title" placeholder="Ex : Approche SEO Décathlon"/>
+  <label>Contenu</label>
+  <textarea id="kb-content" style="min-height:100px;font-family:'DM Mono',monospace;font-size:12px"></textarea>
+  <label>Tags (séparés par des virgules)</label>
+  <input type="text" id="kb-tags" placeholder="Ex : SEO, stratégie, technique"/>
+  <div id="kb-save-err" style="display:none;color:var(--red);font-size:12px;margin-top:4px"></div>
+  <div class="modal-foot">
+    <button class="btn btn-sec" onclick="closeKbModal()">Annuler</button>
+    <button class="btn" style="width:auto" onclick="confirmSaveToKb()">Sauvegarder</button>
+  </div>
+</div>
+</div>
+
+<!-- Modal KB — Navigateur de la base de savoir -->
+<div class="modal-bg" id="kb-browser-overlay" onclick="if(event.target===this)closeModal('kb-browser-overlay')">
+<div class="modal" style="max-width:600px">
+  <h2>Base de savoir</h2>
+  <input type="text" id="kb-search" placeholder="Rechercher…" oninput="renderKbBrowser()" style="margin-bottom:12px"/>
+  <div id="kb-browser-list" style="max-height:400px;overflow-y:auto"></div>
+  <div class="modal-foot">
+    <button class="btn btn-sec" onclick="closeModal('kb-browser-overlay')">Fermer</button>
   </div>
 </div>
 </div>

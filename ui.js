@@ -17,7 +17,6 @@ async function loadPreviousSummaries(clientId, limit=5){
 }
 
 
-// ── CC-211 — Détection d'intention pour prompt adaptatif ─────────────────
 // Retourne true si le message est une action tâche (verbe d'action court).
 // Court-circuit : longueur < 200 chars pour éviter les faux positifs sur
 // des messages longs qui citent une tâche en passant.
@@ -47,7 +46,6 @@ function isComplexQuery(msg) {
   return words.some(w => msg.toLowerCase().includes(w));
 }
 
-// ── CC-211 — Constructeurs L1 / L2 / L3 ──────────────────────────────────
 // buildL1 : instructions tâches, JSON schema, membres, matchContext, historique.
 // Paramètres issus du scope de send() — appelé depuis l'intérieur de send().
 function buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr }) {
@@ -89,7 +87,7 @@ function buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr }) {
     +'Ambiguïté : {"updates":[],"new_tasks":[],"delete_ids":[],"clarification":true}';
 }
 
-// buildL2 : fiche client + 3 résumés récents + doc cache CC-212.
+// buildL2 : fiche client + 3 résumés récents + doc cache.
 // Appelé quand la question porte sur le contexte client ou qu'on ne sait pas.
 function buildL2(ctxForPrompt) {
   const summaries = cur?._summaries || [];
@@ -102,8 +100,7 @@ function buildL2(ctxForPrompt) {
     });
     block += '\n\n[Sessions récentes — 3 dernières]\n' + lines.join('\n\n');
   }
-  // CC-212 — Injecter le doc cache (10 fichiers Drive récents, full text)
-  // ~80k chars max (~20k tokens) pour ne pas saturer la fenêtre de contexte
+  // Doc cache : 10 fichiers Drive récents, ~80k chars max
   if(cur?._docCache?.length){
     const MAX_CHARS = 80000;
     let cacheBlock = '\n\n[Documents Drive récents]\nQuand tu utilises une info de ces documents, cite le nom du fichier entre parenthèses dans ta réponse, ex : *(source : NomDuFichier)*.\n';
@@ -117,7 +114,7 @@ function buildL2(ctxForPrompt) {
     }
     if(total > 0){
       block += cacheBlock;
-      console.debug('[CC-212] Doc cache injecté : '+total+' chars (~'+Math.round(total/4)+' tokens)');
+      console.debug('Doc cache injecté : '+total+' chars (~'+Math.round(total/4)+' tokens)');
     }
   }
   return block;
@@ -245,7 +242,7 @@ function addThinking(){
   return d;
 }
 
-// ── CC-213 — Agency Knowledge Base ───────────────────────────────────────
+// ── Agency Knowledge Base ─────────────────────────────────────────────────
 let _kbPendingText = '';
 
 function addKbButton(msgEl, text){
@@ -401,7 +398,6 @@ async function callClaude(system,message,file=null,clientId=null,messageType='ch
   return { text: data.text, sources: data.sources_used || [], ragRateLimited: !!data.rag_rate_limited };
 }
 
-// CC-203 — Icônes par source_type
 function sourceIcon(type){
   const icons = {
     drive: '<i data-lucide="folder-open" style="width:14px;height:14px;vertical-align:-2px"></i>',
@@ -651,7 +647,7 @@ async function send(){
     matchContext = 'AUCUNE CORRESPONDANCE — clarification=true, demande de préciser.';
   }
 
-    // CC-107 — Formater le contexte client depuis la fiche JSON (ou texte libre)
+    // Formater le contexte client depuis la fiche JSON (ou texte libre)
   const ctxForPrompt = (() => {
     const brief = getBrief();
     if (!brief) return cur.context || 'Non renseigné.';
@@ -666,7 +662,7 @@ async function send(){
     return lines.join('\n');
   })();
 
-  // ── CC-211 — Prompt adaptatif 3 niveaux ──────────────────────────────────
+  // ── Prompt adaptatif 3 niveaux ───────────────────────────────────────────
   // Détecter l'intention du message pour choisir les blocs de contexte à injecter.
   const _isAction   = isTaskAction(txt);
   const _isQuestion = isClientQuestion(txt);
@@ -682,8 +678,6 @@ async function send(){
     + (_needL2 ? buildL2(ctxForPrompt) : '')
     + (_needL3 ? buildL3() : '');
 
-  console.debug(`[CC-211] intent: action=${_isAction} question=${_isQuestion} complex=${_isComplex} → L2=${_needL2} L3=${_needL3} | sys~${Math.round(sys.length/4)}tok`);
-
   try {
     const messageType = _isAction ? 'task_action' : 'chat';
     const {text: raw, sources: ragSources, ragRateLimited}=await callClaude(sys,txt,fileToSend,cur?.id||null,messageType);
@@ -694,11 +688,9 @@ async function send(){
     const jsonStr=(parts[1]||'').trim();
 
     const assistantMsgEl = addMsg('a',replyText);
-    // CC-203 — Badge sources RAG
     addSourcesBadge(assistantMsgEl, ragSources);
     if(ragRateLimited) setSyncDot('#EF9F27','KB indisponible (429)');
     else setSyncDot('#52b788','synchronisé');
-    // CC-213 — Bouton "Sauvegarder dans la KB"
     addKbButton(assistantMsgEl, replyText);
 
     if(jsonStr){
@@ -868,23 +860,17 @@ function renderTodo(hi=[]){
 async function openSettings(){
   if(!cur)return;
   $('stitle').textContent='Paramètres — '+cur.name;
-  // CC-107 — Si context est une fiche JSON, ctx-ta reste vide (la fiche est gérée séparément)
-  // Sinon, afficher uniquement le contexte manuel (sans le bloc Drive auto-généré)
   const manualCtxOnly = getBrief()
     ? ''  // fiche JSON → rien dans le textarea
     : (cur.context||'').replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
   $('ctx-ta').value=manualCtxOnly;
-  // CC-104 — Synchroniser le champ Drive caché avec la source Drive si elle existe
   const srcs = getSources();
   const driveSrc = srcs.find(s=>s.type==='drive');
   $('drive-in').value = driveSrc ? (driveSrc.folder_id||'') : (cur.drive_folder_id||'');
-  // CC-102 — Toujours ouvrir sur l'onglet Paramètres
   switchSettingsTab('params');
   renderMList();
-  // CC-104 — Migration automatique : si drive_folder_id et pas encore de source Drive
   await migrateDriveLegacy();
   renderSources();
-  // CC-107 — Afficher la fiche client si elle existe
   renderBrief();
   openModal('modal-settings');
 }
@@ -903,7 +889,7 @@ function addMember(){
 
 function remMember(i){const ms=getMembers();ms.splice(i,1);cur.members=JSON.stringify(ms);renderMList();}
 
-// ── CC-104 : Sources de contexte ──────────────────────────────────────────
+// ── Sources de contexte ───────────────────────────────────────────────────
 
 function getSources(){
   try{ return JSON.parse(cur?.sources||'[]'); }catch{ return []; }
@@ -924,7 +910,7 @@ async function migrateDriveLegacy(){
     folder_id: cur.drive_folder_id,
     status: 'ok',
     last_synced_at: cur.context ? new Date().toISOString() : null,
-    content_length: cur.context ? cur.context.length : 0  // CC-107 : fonctionne que context soit JSON ou texte
+    content_length: cur.context ? cur.context.length : 0
   });
   setSources(srcs);
   // Persister en Supabase pour ne plus repasser par la migration au prochain openSettings
@@ -934,7 +920,7 @@ async function migrateDriveLegacy(){
 function estimateTokens(){
   const srcs = getSources();
   const manualCtx = ($('ctx-ta')||{value:''}).value||'';
-  // CC-107 — si une fiche JSON est active, compter sa taille réelle
+  // si une fiche JSON est active, compter sa taille réelle
   const briefLen = getBrief() ? (cur?.context||'').length : 0;
   let total = Math.round((manualCtx.length + briefLen) / 4);
   srcs.forEach(s => { total += Math.round((s.content_length||0) / 4); });
@@ -979,7 +965,7 @@ function renderSources(){
   lucide.createIcons();
 }
 
-// ── CC-107 : Fiche client générée ─────────────────────────────────────────
+// ── Fiche client générée ──────────────────────────────────────────────────
 
 // Lire la fiche depuis cur.context (JSON structuré) ou retourner null
 function getBrief() {
@@ -1166,18 +1152,13 @@ async function syncSource(idx){
 
       const exportableFiles = metaD.files.filter(f => EXPORTABLE_MIMETYPES.includes(f.mimeType));
 
-      // ── Étape 2 : exporter + indexer tous les fichiers en parallèle (concurrence = 3) ──
-      // CONCURRENCE 3 = on traite 3 fichiers simultanément.
-      // - Plus rapide qu'un loop séquentiel (98 fichiers × 2 HTTP calls → ~3-4 min → ~1 min)
-      // - Plus sage qu'un Promise.all massif (évite timeout + rate limit Voyage AI)
-      // - Le backoff 429 dans l'edge function gère les pics sans artificiel delay côté front
+      // ── Étape 2 : exporter + indexer tous les fichiers (concurrence = 1) ──
       addMsg('a', '⏳ Indexation des documents en cours...');
       const docsForBrief = [];
       const BRIEF_LIMIT = 15;
       let indexedCount = 0;
 
-      // Pool de concurrence : traite max CONCURRENCY fichiers simultanément
-      // Réduit à 1 : l'Edge Function crash (546) si plusieurs gros fichiers s'indexent en parallèle
+      // Pool de concurrence : traite CONCURRENCY fichiers simultanément
       const CONCURRENCY = 1;
       async function processFile(fileMeta) {
         try {
@@ -1239,7 +1220,6 @@ async function syncSource(idx){
         }
       }, 15_000);
 
-      // CC-107 — Rafraîchir la fiche dans le modal si ouvert
       if ($('modal-settings').classList.contains('open')) renderBrief();
 
     } else if(s.type === 'file'){
@@ -1310,8 +1290,6 @@ async function removeSource(idx){
   }
 
   if(s.type==='drive'){
-    // CC-107 — Supprimer la source Drive invalide la fiche (générée depuis Drive)
-    // On remet context à vide (ou on conserve uniquement le contexte manuel du textarea)
     $('drive-in').value='';
     let manualCtx;
     if (getBrief()) {
@@ -1598,15 +1576,12 @@ async function deleteClient(){
 }
 
 async function saveSettings(){
-  // CC-107 — Si une fiche JSON est active, saveSettings ne touche pas à context
-  // (la fiche est gérée exclusivement par generate_brief / syncSource)
   const hasBrief = !!getBrief();
 
   // Contexte manuel = uniquement ce que l'utilisateur a tapé (sans blocs auto)
   let manualCtx = $('ctx-ta').value.trim();
   // Nettoyer l'éventuel ancien bloc Drive du textarea (ne doit jamais y être, sécurité)
   manualCtx = manualCtx.replace(/\n*---\s*Contenu Drive[\s\S]*$/,'').trim();
-  // CC-104 — Synchroniser drive-in depuis la source Drive si elle existe
   const srcs = getSources();
   const driveSrc = srcs.find(s=>s.type==='drive');
   const du = driveSrc ? (driveSrc.folder_id||'') : $('drive-in').value.trim();
@@ -1627,7 +1602,7 @@ async function saveSettings(){
   const existingDriveBlock = (cur.context||'').match(/\n*---\s*Contenu Drive[\s\S]*$/);
   if(existingDriveBlock) driveBlock = existingDriveBlock[0].trim();
 
-  // CC-106 fix — Conserver les blocs fichier existants (sinon saveSettings les écrase)
+  // Conserver les blocs fichier existants (sinon saveSettings les écrase)
   const fileBlocks = [];
   const fileBlockPattern = /---\s*Fichier\s*:[\s\S]*?(?=\n---|$)/g;
   let fm;
@@ -1646,7 +1621,6 @@ async function openModal(id){
   $(id).classList.add('open');
   // Fermer en cliquant sur le backdrop
   $(id).onclick = (e) => { if(e.target === $(id)) closeModal(id); };
-  // CC-104 — Réinitialiser le sous-modal add-source
   if(id === 'modal-add-source') {
     ['drive','file','notion'].forEach(t => {
       const f = $('add-src-form-'+t);
