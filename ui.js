@@ -736,6 +736,8 @@ async function send(){
         }
       }catch(e){console.error('JSON parse:',e);}
     }
+    const shouldSave = !sessionSaved && (sessionExchangeCount === 5 || (sessionExchangeCount > 5 && sessionExchangeCount % 10 === 0));
+    if(shouldSave) saveSessionSummary();
   }catch(e){
     th.remove();
     addMsg('a','Erreur : '+e.message);
@@ -744,8 +746,6 @@ async function send(){
     inp.disabled = false;
     inp.focus();
   }
-  const shouldSave = !sessionSaved && (sessionExchangeCount === 5 || (sessionExchangeCount > 5 && sessionExchangeCount % 10 === 0));
-  if(shouldSave) saveSessionSummary();
 }
 
 function getDueSoonCount(){
@@ -877,10 +877,25 @@ function addMember(){
   const ini=$('m-init').value.trim().toUpperCase(), name=$('m-name').value.trim();
   if(!ini)return;
   const ms=getMembers();
-  if(!ms.find(m=>m.initials===ini)){ms.push({initials:ini,name:name||ini});cur.members=JSON.stringify(ms);renderMList();$('m-init').value='';$('m-name').value='';}
+  if(!ms.find(m=>m.initials===ini)){
+    ms.push({initials:ini,name:name||ini});
+    cur.members=JSON.stringify(ms);
+    renderMList();$('m-init').value='';$('m-name').value='';
+    _persistMembers();
+  }
 }
 
-function remMember(i){const ms=getMembers();ms.splice(i,1);cur.members=JSON.stringify(ms);renderMList();}
+function remMember(i){
+  const ms=getMembers();ms.splice(i,1);
+  cur.members=JSON.stringify(ms);
+  renderMList();
+  _persistMembers();
+}
+
+function _persistMembers(){
+  addSession(cur);
+  sb.from('clients').update({members:cur.members}).eq('id',cur.id).catch(e=>console.warn('persistMembers:',e.message));
+}
 
 // ── Sources de contexte ───────────────────────────────────────────────────
 

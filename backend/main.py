@@ -53,8 +53,7 @@ async def require_api_key(request: Request, call_next):
     try:
         return await call_next(request)
     except Exception as e:
-        import traceback as tb
-        print(f"Unhandled exception: {e}\n{tb.format_exc()}")
+        print(f"Unhandled exception: {e}\n{traceback.format_exc()}")
         return JSONResponse({"error": "internal server error"}, status_code=500, headers=cors)
 
 # ── Environment variables ─────────────────────────────────────────────────────
