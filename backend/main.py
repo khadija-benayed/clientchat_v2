@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import io
 import json
@@ -13,7 +14,7 @@ from typing import Optional
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sentence_transformers import SentenceTransformer
 from supabase import create_client, Client
 import anthropic
@@ -292,6 +293,8 @@ async def dispatcher(request: Request):
         return await delete_source_chunks(body)
     if action == "save_to_kb":
         return await save_to_kb(body)
+    if action == "sync_drive":
+        return await sync_drive(body, request)
     return await chat(body)
 
 
@@ -572,10 +575,14 @@ async def index_source(body: dict):
     # Delete old chunks before inserting (source_id stable key for Drive, source_name fallback)
     try:
         del_q = sb.table("document_chunks").delete()
-        if source_id:
-            del_q.match({"client_id": client_id or None, "source_id": source_id}).execute()
+        if client_id:
+            del_q = del_q.eq("client_id", client_id)
         else:
-            del_q.match({"client_id": client_id or None, "source_name": source_name}).execute()
+            del_q = del_q.is_("client_id", "null")
+        if source_id:
+            del_q.eq("source_id", source_id).execute()
+        else:
+            del_q.eq("source_name", source_name).execute()
     except Exception as e:
         print(f"index_source: delete anciens chunks error (non bloquant): {e}")
 
@@ -663,6 +670,117 @@ async def save_to_kb(body: dict):
         return JSONResponse({"error": str(e)}, status_code=500)
 
     return {"saved": True}
+
+
+# ── sync_drive ────────────────────────────────────────────────────────────────
+async def sync_drive(body: dict, request: Request):
+    folder_id = body.get("folder_id")
+    client_id = body.get("client_id")
+
+    if not folder_id:
+        return JSONResponse({"error": "folder_id requis"}, status_code=400)
+
+    try:
+        drive, sa_email = get_drive_service()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    total_ref = [0]
+    all_files = _list_files_recursive(drive, folder_id, set(), 500, total_ref)
+
+    if not all_files:
+        return JSONResponse({"error": f"Aucun fichier trouvé. Vérifie le partage avec {sa_email}."}, status_code=404)
+
+    all_files.sort(key=lambda f: (_type_priority(f["mimeType"]), -_parse_modified(f).timestamp()))
+    files_to_process = all_files[:200]
+    total = len(files_to_process)
+
+    async def generate():
+        processed = 0
+        errors = 0
+        BATCH_SIZE = 5
+        loop = asyncio.get_running_loop()
+
+        for i in range(0, total, BATCH_SIZE):
+            batch = files_to_process[i:i + BATCH_SIZE]
+
+            results = await asyncio.gather(*[
+                loop.run_in_executor(None, export_drive_file, drive, f["id"], f["name"], f["mimeType"])
+                for f in batch
+            ])
+
+            for f, result in zip(batch, results):
+                processed += 1
+                if result is None:
+                    yield f"data: {json.dumps({'file': f['name'], 'status': 'skipped', 'progress': processed, 'total': total})}\n\n"
+                    continue
+
+                try:
+                    content = result["content"]
+
+                    # PDF : extract text via Claude (same as index_source)
+                    if content.startswith("__PDF_BASE64__"):
+                        pdf_b64 = content[len("__PDF_BASE64__"):]
+                        pdf_resp = await loop.run_in_executor(
+                            None,
+                            lambda b=pdf_b64: claude.messages.create(
+                                model="claude-sonnet-4-6",
+                                max_tokens=4000,
+                                messages=[{"role": "user", "content": [
+                                    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b}},
+                                    {"type": "text", "text": "Extrais tout le texte de ce document de manière fidèle et complète. Inclus les titres, sous-titres, tableaux (format texte), listes et corps de texte. Ne résume pas — retranscris le contenu intégral."},
+                                ]}],
+                            )
+                        )
+                        content = pdf_resp.content[0].text if pdf_resp.content else ""
+                        if not content.strip():
+                            yield f"data: {json.dumps({'file': f['name'], 'status': 'empty', 'progress': processed, 'total': total})}\n\n"
+                            continue
+
+                    is_csv = result["type"] == "csv"
+                    chunks = chunk_csv(content) if is_csv else chunk_text(content)
+
+                    if not chunks:
+                        yield f"data: {json.dumps({'file': f['name'], 'status': 'empty', 'progress': processed, 'total': total})}\n\n"
+                        continue
+
+                    embeddings = await loop.run_in_executor(None, embed_texts, chunks)
+
+                    try:
+                        del_q = sb.table("document_chunks").delete()
+                        if client_id:
+                            del_q = del_q.eq("client_id", client_id)
+                        else:
+                            del_q = del_q.is_("client_id", "null")
+                        del_q.eq("source_id", f["id"]).execute()
+                    except Exception:
+                        pass
+
+                    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    rows = [{
+                        "client_id": client_id or None,
+                        "source_type": result["type"],
+                        "source_name": f["name"],
+                        "source_id": f["id"],
+                        "chunk_text": chunk,
+                        "embedding": emb,
+                        "last_indexed_at": now,
+                    } for chunk, emb in zip(chunks, embeddings)]
+
+                    sb.table("document_chunks").insert(rows).execute()
+
+                    yield f"data: {json.dumps({'file': f['name'], 'status': 'ok', 'chunks': len(chunks), 'progress': processed, 'total': total})}\n\n"
+
+                except Exception as e:
+                    errors += 1
+                    yield f"data: {json.dumps({'file': f['name'], 'status': 'error', 'error': str(e), 'progress': processed, 'total': total})}\n\n"
+
+        yield f"data: {json.dumps({'status': 'done', 'total': total, 'errors': errors})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
 
 
 # ── chat (default) ────────────────────────────────────────────────────────────
