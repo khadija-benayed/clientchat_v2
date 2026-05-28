@@ -5,6 +5,7 @@ import math
 import os
 import re
 import time
+import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
@@ -721,6 +722,7 @@ async def chat(body: dict):
                 )
         except Exception as e:
             print(f"RAG pipeline error (non bloquant): {e}")
+            print(traceback.format_exc())
 
     # Build user content — multimodal if file attached
     system_final = system_with_rag
