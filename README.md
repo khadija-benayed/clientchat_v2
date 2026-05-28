@@ -2,8 +2,6 @@
 
 Interface interne de l'agence Smart Bees pour la gestion de projets clients. Chaque client dispose d'un espace de travail partagé combinant un **chat IA contextuel**, une **to-do collaborative en temps réel**, un accès intelligent aux **documents Google Drive**, une **mémoire des sessions**, et une **base de savoir partagée** entre tous les comptes clients.
 
-L'application est conçue pour des équipes sans accès à des APIs payantes avancées : elle fonctionne sans serveur propre, sans build step, et avec un coût marginal par usage.
-
 ---
 
 ## Table des matières
@@ -13,12 +11,14 @@ L'application est conçue pour des équipes sans accès à des APIs payantes ava
 3. [Architecture Générale](#3-architecture-générale)
 4. [Structure des fichiers](#4-structure-des-fichiers)
 5. [Fonctionnalités détaillées](#5-fonctionnalités-détaillées)
-6. [Schéma de base de données](#6-schéma-de-base-de-données)
-7. [Variables d'environnement & Secrets](#7-variables-denvironnement--secrets)
-8. [Installation locale](#8-installation-locale)
-9. [Déploiement](#9-déploiement)
-10. [Contraintes & Workarounds](#10-contraintes--workarounds)
-11. [Roadmap](#11-roadmap)
+6. [Pipeline RAG](#6-pipeline-rag)
+7. [Schéma de base de données](#7-schéma-de-base-de-données)
+8. [API Backend — Actions disponibles](#8-api-backend--actions-disponibles)
+9. [Variables d'environnement](#9-variables-denvironnement)
+10. [Installation locale](#10-installation-locale)
+11. [Déploiement](#11-déploiement)
+12. [Raccourcis clavier](#12-raccourcis-clavier)
+13. [Contraintes & Décisions techniques](#13-contraintes--décisions-techniques)
 
 ---
 
@@ -29,79 +29,59 @@ Smart Bees est une agence dont les équipes travaillent sur plusieurs comptes cl
 **Client Chat résout ça en centralisant :**
 - Les **tâches** du compte client avec statuts, priorités, assignés et deadlines
 - Le **chat IA** qui connaît le client grâce aux documents Drive et aux résumés de sessions passées
-- L'**historique des échanges** sous forme de résumés vectorisés et réinjectés automatiquement
+- L'**historique des échanges** sous forme de résumés auto-générés et réinjectés automatiquement
 - La **base de savoir agence** pour capitaliser sur les apprentissages cross-clients
-
-**Qui l'utilise :** Les membres de l'équipe Smart Bees. Chaque compte client est un espace protégé par mot de passe, accessible depuis n'importe quel navigateur sans installation.
 
 ---
 
 ## 2. Stack Technique
 
-| Couche | Technologie | Hébergement |
-|--------|------------|-------------|
-| **Frontend** | HTML / CSS / JavaScript vanilla (SPA) | GitHub Pages |
-| **Backend** | Supabase Edge Functions (Deno / TypeScript) | Supabase |
-| **Base de données** | PostgreSQL + Realtime | Supabase |
-| **IA Chat** | Claude Sonnet (`claude-sonnet-4-6`) | API Anthropic |
-| **IA Tâches** | Claude Haiku (`claude-haiku-4-5-20251001`) | API Anthropic |
-| **Embeddings** | paraphrase-multilingual-MiniLM-L12-v2 (384 dims) | HF Inference API (Hugging Face) |
-| **Documents** | Google Drive API (Service Account) | Google Cloud |
-| **Icônes** | Lucide Icons (CDN) | jsDelivr |
-
-**Pas de framework, pas de bundler.** Les fichiers HTML/CSS/JS sont servis directement depuis GitHub Pages. Aucun `npm install` requis pour faire tourner le frontend.
+| Couche | Technologie | Rôle |
+|--------|-------------|------|
+| Frontend | HTML/CSS/JS vanilla | UI, pas de framework ni bundler |
+| Icônes | Lucide (CDN) | Icônes SVG |
+| Polices | DM Sans + DM Mono (Google Fonts) | Typographie |
+| Base de données | Supabase (PostgreSQL + pgvector) | Persistance, realtime, RPC vectorielle |
+| Backend IA | Python FastAPI sur Google Cloud Run | Chat Claude, embeddings, RAG, Drive |
+| Modèle IA | Claude Sonnet 4.6 + Haiku 4.5 | Chat (Sonnet) / actions tâches et résumés (Haiku) |
+| Embeddings | sentence-transformers `paraphrase-multilingual-MiniLM-L12-v2` | Local, 384 dims, zéro API externe |
+| Documents | Google Drive API v3 (service account) | Export et listing des fichiers |
+| CI/CD | Cloud Build (`cloudbuild.yaml`) | Push `main` → build Docker → deploy Cloud Run |
+| Hébergement front | GitHub Pages | Déploiement statique automatique |
 
 ---
 
 ## 3. Architecture Générale
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                  NAVIGATEUR (GitHub Pages)          │
-│                                                     │
-│  index.html  ←  styles.css                         │
-│       │                                             │
-│  app.js   ──  db.js   ──  ui.js                    │
-│  (init)      (state/DB)   (rendu/logique UI)        │
-└──────────────────────┬──────────────────────────────┘
-                       │ HTTP (fetch)
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│           SUPABASE EDGE FUNCTION  /chat             │
-│                (Deno / TypeScript)                  │
-│                                                     │
-│  Actions : chat, summarize_session, index_source,  │
-│  read_drive_folder, list_drive_metadata,            │
-│  export_single_file, generate_brief, save_to_kb,   │
-│  check_updates, delete_source_chunks               │
-└──────┬───────────┬──────────────┬───────────────────┘
-       │           │              │
-       ▼           ▼              ▼
-  Anthropic  HF Inference   Google Drive API
-  (Claude)   API (embeds)   (Service Account)
-       │                         │
-       └──────────┬──────────────┘
-                  ▼
-┌─────────────────────────────────────────────────────┐
-│              SUPABASE POSTGRESQL                    │
-│                                                     │
-│  clients  tasks  session_summaries                 │
-│  document_chunks  usage_logs  embedding_logs        │
-│  agency_knowledge                                   │
-│                                                     │
-│  + Realtime subscriptions (tâches sync)            │
-│  + pgvector (recherche vectorielle)                │
-└─────────────────────────────────────────────────────┘
+Navigateur (HTML/CSS/JS)
+        │
+        │  POST JSON  { action: '...', ... }
+        ▼
+Cloud Run — FastAPI Python  (clientchat-v2, europe-west1)
+  ├── sentence-transformers (embeddings locaux, chargés au démarrage)
+  ├── anthropic SDK (Claude Sonnet 4.6 / Haiku 4.5)
+  ├── google-api-python-client (Drive API v3)
+  └── supabase-py (PostgreSQL, RPC match_chunks)
+        │
+        ▼
+Supabase (PostgreSQL + pgvector)
+  ├── clients, tasks, session_summaries
+  ├── document_chunks (vecteurs 384 dims)
+  ├── agency_knowledge (base de savoir)
+  └── embedding_logs, usage_logs
 ```
 
 **Flux d'un message utilisateur :**
-1. L'utilisateur tape un message dans le chat
-2. `ui.js` analyse l'intention : action sur une tâche → Haiku, question complexe → Sonnet
-3. Un appel HTTP est fait à la Supabase Edge Function avec le message + contexte (L1/L2/L3)
-4. L'Edge Function vectorise la requête via l'HF Inference API, cherche les chunks similaires en DB (RAG)
-5. Claude génère une réponse avec les documents pertinents injectés
-6. La réponse est parsée : texte affiché + éventuelles mutations JSON de tâches appliquées
-7. Les tokens utilisés sont loggés dans `usage_logs`
+1. Le front envoie `POST BACKEND_URL` avec `{ action: 'chat', system, message, client_id, ... }`
+2. Le backend encode le message en vecteur (sentence-transformers, local, ~10ms)
+3. Il lance `match_chunks` sur Supabase (cosine similarity ≥ 0.55, max 6 chunks) pour le RAG
+4. Il construit le payload Claude avec system prompt + contexte RAG + historique de session
+5. Claude répond ; le backend loggue l'usage et retourne `{ text, sources_used, cost }`
+6. Le front parse la réponse : partie conversationnelle + JSON tâches séparé par `---JSON---`
+
+**Realtime Supabase :**
+Un canal PostgreSQL change par client (`t-{client_id}`) écoute la table `tasks`. Toute modification (depuis n'importe quelle session ou onglet) déclenche `loadTasks()` sur tous les onglets ouverts sur ce client.
 
 ---
 
@@ -109,598 +89,397 @@ Smart Bees est une agence dont les équipes travaillent sur plusieurs comptes cl
 
 ```
 clientchat_v2/
-├── .github/
-│   └── workflows/
-│       └── deploy.yml          # CI/CD : déploiement auto sur GitHub Pages
-├── .claude/
-│   └── settings.local.json     # Permissions Claude Code (dev only)
-├── supabase/
-│   ├── .temp/
-│   │   └── linked-project.json # Référence projet Supabase (git-ignored)
-│   └── functions/
-│       └── chat/
-│           └── index.ts        # Edge Function principale (Deno/TS, ~1200 lignes)
-├── index.html                  # Page unique de l'application
-├── app.js                      # Initialisation, raccourcis clavier, drag-and-drop
-├── db.js                       # État global, client Supabase, auth, Drive sync
-├── ui.js                       # Tout le rendu et la logique UI
-├── styles.css                  # Système de design complet (dark/light mode)
-├── netlify.toml                # Config legacy (remplacée par GitHub Pages)
-└── README.md                   # Ce fichier
+├── index.html              # HTML — structure + chargement des scripts
+├── db.js                   # Config globale, état, Supabase, helpers, Drive sync
+├── ui.js                   # Rendu DOM, chat, todo, modals, KB, sources, prompts IA
+├── app.js                  # Init dark mode, sidebar, raccourcis clavier, DnD, boot
+├── styles.css              # Tout le CSS, variables de thème (:root)
+├── cloudbuild.yaml         # Pipeline CI/CD : build Docker → déploiement Cloud Run
+│
+├── backend/
+│   ├── main.py             # FastAPI — toutes les actions (chat, RAG, Drive, KB, brief…)
+│   ├── requirements.txt    # Dépendances Python (fastapi, sentence-transformers, torch+cpu…)
+│   └── Dockerfile          # python:3.11-slim + modèle sentence-transformers baked au build
+│
+└── supabase/
+    ├── seed.sql            # Schéma complet PostgreSQL (tables + RPC match_chunks)
+    └── functions/
+        └── chat/
+            └── index.ts    # Ancienne Edge Function Deno (archivée, non utilisée)
 ```
-
-### `index.html`
-
-L'unique page HTML de l'application. Elle contient :
-
-- **`#login`** : Écran d'accueil avec deux onglets (Rejoindre / Créer un espace client). Formulaire de mot de passe, liste dynamique des membres de l'équipe, animations hexagonales de branding.
-- **`#app`** : Application principale avec :
-  - Une sidebar (liste des clients rejoints, navigation)
-  - Un panneau chat (messages, input, badge de fichier joint)
-  - Une liste de tâches (filtres, groupes par statut, drag-and-drop)
-  - Des modales : paramètres/historique, raccourcis, éditeur de tâche, KB browser, sauvegarde KB, explorateur de sources Drive
-
-Pas de build step. Les dépendances sont chargées depuis des CDN (`@supabase/supabase-js`, `lucide`, `DM Sans`).
-
----
-
-### `app.js`
-
-Point d'entrée de l'application. Responsibilities :
-
-- **Raccourcis clavier globaux** (gérés via `keydown`) :
-  - `Cmd+K` — Focus sur l'input chat
-  - `Cmd+J` — Ouvre le sélecteur de fichier (pièce jointe)
-  - `Cmd+B` — Collapse/expand la sidebar
-  - `Cmd+D` — Bascule dark/light mode
-  - `Cmd+,` — Ouvre les paramètres
-  - `Cmd+[` / `Cmd+]` — Navigation entre les clients
-  - `Ctrl+F` — Focus sur la recherche de tâches
-  - `?` — Ouvre la modale des raccourcis
-
-- **Dark mode** : Toggleable, persiste dans `localStorage`.
-
-- **Drag-and-drop des tâches** : Réordonnancement manuel par glisser-déposer. L'ordre personnalisé est sauvegardé dans `localStorage` par client (clé `cc-task-order-{clientId}`).
-
-- **Initialisation au chargement** : Restaure l'état UI (dark mode, sidebar), connecte le client Supabase, charge la liste des clients, entre directement dans l'app si une session `cc-sess` existe en `localStorage`.
-
----
-
-### `db.js`
-
-La couche données et l'état global de l'application.
-
-**État global :**
-```js
-cur        // Objet client actif (id, name, members, context, drive_folder_id, _docCache)
-tasks      // Tableau des tâches du client actif
-session    // Tableau des espaces clients rejoints (persiste dans localStorage 'cc-sess')
-activeF    // Filtre actif sur la liste de tâches
-rtChan     // Canal Realtime Supabase (pour le sync des tâches)
-selectedFile // Fichier joint en attente d'envoi (PDF/image)
-```
-
-**Authentification :**
-- `hashPass(password)` — Hashage SHA-256 avec salt pour stocker les mots de passe
-- `joinClient(name, pass)` — Authentifie sur un espace existant, ajoute à la session locale
-- `createClient(name, pass, members)` — Crée un nouvel espace client avec liste de membres
-- `logout()` — Vide la session et recharge la page
-
-**Gestion des membres :**
-Les membres sont stockés en JSON dans `clients.members` sous la forme `[{initials, name}]`. Les fonctions `addMemberRow()`, `getMembersFromList()` et `parseMembersStr()` gèrent l'UI dynamique d'ajout/suppression de membres.
-
-**Pièces jointes :**
-- `onFileSelected()` — Charge un PDF/JPG/PNG (max 20 Mo) en base64 pour l'envoyer avec le message
-- `renderFileBadge()` / `clearFile()` — Affiche/masque le badge de fichier joint
-
-**Synchronisation Google Drive (`checkDriveUpdates`) :**
-Processus en 2 étapes déclenché à chaque ouverture d'un client :
-1. **Appel léger** (`list_drive_metadata`) : récupère uniquement id, nom, type MIME et date de modification des fichiers Drive
-2. **Comparaison** avec `document_chunks.last_indexed_at` en base
-3. **Ré-export + ré-indexation** uniquement des fichiers modifiés (max 5 par run)
-4. **Purge** des chunks orphelins (fichiers supprimés du Drive)
-
-**Cache de documents L2 (`loadDocCache` / `refreshDocCache`) :**
-Charge les 10 fichiers Drive les plus récents en texte brut dans `cur._docCache`. Ce cache est injecté directement dans le system prompt (contexte L2) à chaque message, contournant les limites de rate-limit du RAG.
-
-La fonction `refreshDocCache()` est "smart" : elle réutilise les fichiers non modifiés depuis le `localStorage`, et ne ré-exporte que les fichiers dont la date a changé.
-
-**Mémoire des sessions :**
-- `saveSessionSummary()` — Déclenché au 3e, 5e, 10e, 20e échange, ou après 10 min d'inactivité. Extrait l'historique visible et appelle l'action `summarize_session` de l'Edge Function.
-- `resetInactivityTimer()` — Remet à zéro le timer de 10 min à chaque message envoyé.
-
-**Helpers :**
-- `$()`, `show()`, `hide()` — Sélecteurs et utilitaires DOM
-- `esc()` — Échappe le HTML
-- `mStyle()` — Génère une couleur déterministe pour les avatars de membres
-- `loadTasks()`, `upsertTask()`, `delTask()` — CRUD des tâches via Supabase
-
----
-
-### `ui.js`
-
-Le fichier le plus lourd (~76 KB). Il contient tout le rendu UI et la logique métier côté client.
-
-#### Construction du contexte système (L1 / L2 / L3)
-
-Le system prompt envoyé à Claude est constitué de trois couches :
-
-- **L1** (`buildL1()`) — Contexte "opérationnel" : snapshot des tâches actuelles, liste des membres, schéma JSON pour les mutations de tâches (créer/modifier/supprimer), règles de matching des assignés
-- **L2** (`buildL2()`) — Contexte "client" : brief auto-généré du client + 3 résumés de sessions récentes + 10 fichiers Drive récents injectés en texte brut. Ce cache couvre ~80% des cas sans appeler le RAG.
-- **L3** (`buildL3()`) — Résumés de sessions plus anciens, injectés uniquement pour les requêtes complexes
-
-#### Routage intelligent des messages (`send()`)
-
-La fonction `send()` est le cœur de l'application :
-
-1. **Détection d'intention** via `isTaskAction()`, `isClientQuestion()`, `isComplexQuery()` :
-   - Action sur tâche → **Haiku** (rapide, moins cher)
-   - Question sur le client → **Sonnet** (plus intelligent)
-   - Requête complexe → Sonnet + L3
-
-2. **Pipeline RAG** : Le message est vectorisé via l'HF Inference API, cherché dans `document_chunks` (similarité cosinus via pgvector), les 5 chunks les plus pertinents (> 0.55 de similarité) sont injectés dans le prompt.
-
-3. **Appel Claude** via `callClaude()` → POST à l'Edge Function avec le system prompt L1+L2+[L3] + historique visible + message utilisateur + éventuel fichier joint
-
-4. **Parsing de la réponse** : Claude peut répondre avec un séparateur `---JSON---` pour inclure des mutations de tâches. Le texte avant est affiché dans le chat, le JSON après est appliqué immédiatement sur le tableau des tâches.
-
-5. **Affichage des sources** : `addSourcesBadge()` affiche quels fichiers Drive ou résumés de sessions ont informé la réponse.
-
-6. **Compteur de session** : Incrémenté à chaque échange ; déclenche `saveSessionSummary()` aux paliers 3/5/10/20…
-
-#### Gestion des tâches (`renderTodo()`)
-
-- **Filtres** : Tous, Bloqué, En cours, En attente, Terminé, Par assigné, Cette semaine
-- **Recherche live** sur titre / note / assigné
-- **Groupement par statut** avec badges colorés
-- **Informations affichées** : priorité (P1/P2/P3), assignés (avatars), deadline (⏳ bientôt, ⚠ dépassée, 📅 ok), blocker, note
-- **Drag-and-drop** : Réordonnancement interactif, listeners réinitialisés à chaque rendu
-- **`openTaskModal()`** : Éditeur complet d'une tâche (titre, statut, priorité, assignés, deadline, blocker, notes)
-- **`snap()`** : Sérialise l'état courant des tâches en texte lisible pour l'injection dans L1
-
-#### Base de savoir agence (`openKbBrowser()`, `addKbButton()`)
-
-- Bouton "Ajouter à la KB" sur chaque message assistant
-- Modal de sauvegarde : titre, contenu pré-rempli, tags, client source
-- Navigateur de la KB : liste paginée de tous les insights, suppression possible
-- Les insights sont stockés dans `agency_knowledge` et partagés entre tous les clients
-
-#### Paramètres et historique (`openSettings()`)
-
-Modal avec deux onglets :
-- **Paramètres** : Modifier le nom du client, le mot de passe, les membres de l'équipe
-- **Historique** : Affiche les 20 derniers résumés de sessions dans l'ordre chronologique
-
----
-
-### `styles.css`
-
-Système de design complet en CSS pur (pas de framework).
-
-**Design tokens** (variables CSS) :
-- Couleurs de marque Smart Bees : `--sb-navy`, `--sb-orange`, `--sb-coral`, `--sb-blue`
-- Couleurs sémantiques : vert (done), bleu (info), ambre (warning), rouge (error), violet (neutral)
-- Espacement, typographie, bordures, ombres
-
-**Dark mode** : Implémenté via le sélecteur `[data-theme="dark"]` sur le `<body>`. Inversion complète de la palette sans JavaScript supplémentaire.
-
-**Composants stylisés** :
-- Écran de login (animations hexagonales, onglets, formulaires)
-- Sidebar (état réduit, avatars clients, boutons d'action)
-- Panneau chat (bulles de messages, animation "thinking", badge fichier)
-- Liste de tâches (groupes, pills de statut, badges priorité, avatars, états drag-over)
-- Modales (paramètres, KB browser, éditeur de tâche, explorateur de fichiers)
-- Boutons (primary, ghost, destructive)
-
----
-
-### `supabase/functions/chat/index.ts`
-
-L'unique Edge Function Deno (~1200 lignes). Elle est le backend de toute l'application et expose plusieurs **actions** dans un seul endpoint via le champ `action` du body JSON.
-
-#### Actions disponibles
-
-| Action | Description |
-|--------|-------------|
-| `chat` | Message principal → Claude Sonnet ou Haiku + RAG + logging |
-| `summarize_session` | Résume l'historique de chat → sauvegarde + vectorise |
-| `read_drive_folder` | Liste et exporte tous les fichiers d'un dossier Drive |
-| `list_drive_metadata` | Métadonnées légères (id, nom, type, modifiedTime) sans contenu |
-| `export_single_file` | Export d'un fichier Drive par ID |
-| `generate_brief` | Génère le brief client structuré (JSON) à partir des docs |
-| `index_source` | Pipeline complet d'indexation vectorielle d'un document |
-| `check_updates` | Ré-indexe uniquement les fichiers Drive modifiés |
-| `delete_source_chunks` | Supprime les chunks d'une source de la DB |
-| `save_to_kb` | Sauvegarde un insight dans `agency_knowledge` |
-
-#### Détails des actions clés
-
-**`chat`** :
-- Détermine le modèle selon `message_type` (task_action → Haiku, sinon Sonnet)
-- Vectorise le message via l'HF Inference API et cherche les chunks similaires (pgvector RPC `match_chunks`)
-- Injecte les 5 chunks les plus pertinents (seuil 0.55) dans le system prompt
-- Supporte les fichiers joints (PDF en `document`, images en `image`)
-- Retourne la réponse + `sources_used`
-- Logge les tokens et le coût dans `usage_logs` (non-bloquant)
-
-**`summarize_session`** :
-- Appelle Claude Sonnet pour résumer l'historique de chat en points-clés
-- Sauvegarde le résumé dans `session_summaries`
-- Vectorise le résumé via l'HF Inference API et le stocke dans `document_chunks` (source_type = 'session') → devient cherchable via RAG
-
-**`index_source`** :
-- Reçoit un document (texte, CSV ou PDF en base64)
-- **Extraction PDF** : Envoie le base64 à Claude Sonnet avec type `document` pour extraire le texte
-- **Chunking** : Texte → chunks de 2000 chars avec overlap de 200 chars. CSV → blocs de 15 lignes avec header répété
-- **Vectorisation** : Un seul appel HTTP batch vers l'HF Inference API
-- **Déduplication** : Supprime les anciens chunks pour le même `source_id` avant réinsertion
-- **Stockage** : Insère les chunks avec embeddings dans `document_chunks`
-
-**`read_drive_folder`** :
-- Authentifie via un Service Account Google (JWT custom, sans librairie externe)
-- Parcours récursif du dossier avec pagination
-- Exporte Docs, Sheets, Présentations en texte (limité à 20k chars/fichier)
-- Trie par type puis par date de modification
-
-**`generate_brief`** :
-- Prend un tableau de contenus de documents
-- Prompt Claude Sonnet (~96k chars max) pour générer un JSON structuré : secteur, enjeux, KPIs, équipe, historique, notes
-- Sauvegarde dans `clients.context`
-
-**Utilitaires internes** :
-- `importPrivateKey()`, `makeGoogleJWT()`, `getGoogleAccessToken()` — Auth Service Account sans dépendances externes
-- `chunkText()`, `chunkCSV()` — Découpage intelligent des documents
-- `embedTexts()`, `embedText()` — Appels HTTP batch vers l'HF Inference API (Hugging Face)
-- `calculateCost()` — Estimation du coût par modèle (Sonnet: $0.003/$0.015 per 1K tokens, Haiku: $0.00025/$0.00125)
 
 ---
 
 ## 5. Fonctionnalités détaillées
 
-### Espaces clients
+### Chat IA contextuel
 
-Chaque "client" est un espace isolé protégé par mot de passe. Un utilisateur peut rejoindre plusieurs clients et switcher entre eux depuis la sidebar. La session est persistée dans `localStorage` sous la clé `cc-sess`.
+Le chat assemble un system prompt en **3 niveaux** selon l'intention détectée localement :
 
-**Création** : Nom + mot de passe + membres de l'équipe (initiales + nom). Les membres permettent l'assignation des tâches et la génération d'avatars colorés.
+- **L1 (toujours)** : to-do actuelle (JSON), membres de l'équipe, analyse de correspondance déterministe tâches↔message, historique des 8 derniers messages visibles
+- **L2 (question client ou message ambigu)** : fiche client (JSON structuré), 3 derniers résumés de sessions, doc cache Drive (jusqu'à 80k chars, ~20k tokens)
+- **L3 (bilan/synthèse)** : résumés de sessions plus anciens (indices 0 à N-4)
 
-**Connexion** : Le mot de passe est hashé côté client (SHA-256 + salt) avant comparaison avec la DB. Aucun token JWT n'est émis — l'accès est mémorisé localement.
-
----
-
-### Chat IA
-
-Le chat utilise **deux modèles Claude** selon l'intention détectée :
-
-- **Haiku** pour les actions rapides sur les tâches (créer, modifier, assigner, marquer comme fait). Moins cher, latence plus faible.
-- **Sonnet** pour les questions sur le client, les analyses, les résumés. Plus intelligent, accès complet au contexte.
-
-Le contexte injecté est composé de :
-1. **L1** — Tâches actuelles + membres + schéma JSON de mutation
-2. **L2** — Brief client + 3 derniers résumés de session + 10 derniers documents Drive en texte
-3. **L3** (optionnel) — Résumés de sessions plus anciens
-
-Le système peut aussi recevoir des **pièces jointes** (PDF, JPG, PNG jusqu'à 20 Mo) envoyées directement dans le message.
-
----
+Détection d'intention (JS pur, avant appel IA) :
+- `isTaskAction(msg)` → message court + verbe d'action → L1 only + modèle **Haiku** (rapide, 10× moins cher)
+- `isClientQuestion(msg)` → mot-clé contexte → L1 + L2 + modèle **Sonnet**
+- `isComplexQuery(msg)` → bilan/synthèse → L1 + L2 + L3 + modèle **Sonnet**
+- Message ambigu → L1 + L2 par défaut (pas de dégradation silencieuse)
 
 ### Gestion des tâches
 
-| Champ | Valeurs |
-|-------|---------|
-| Statut | `todo` / `inprogress` / `blocked` / `waiting` / `done` |
-| Priorité | `P1` / `P2` / `P3` |
-| Assignés | Multi-valeur (séparé par `+` ou virgule), affiché en avatars |
-| Deadline | Date ISO, affichée avec indicateurs visuels |
-| Blocker | Texte libre décrivant ce qui bloque |
-| Note | Texte libre |
+- **Statuts** : `todo`, `inprogress`, `blocked`, `waiting`, `done`
+- **Priorités** : `P1` (urgent, badge rouge), `P2` (normal), `P3` (basse)
+- **Assignation** : initiales simples (`KB`) ou multi-membres (`KB+PH`)
+- **Notes** : horodatées, ajout incrémental (jamais de remplacement), supprimables individuellement
+- **Deadlines** : badges visuels — retard (rouge), cette semaine (orange), futur (gris)
+- **Correspondance déterministe** : avant chaque appel Claude, le front calcule un score Levenshtein (≤1) pour chaque tâche et injecte le résultat (`UNIQUE / AMBIGUÏTÉ / DÉJÀ FAIT / AUCUNE`) dans le contexte — Claude suit l'analyse sans la recalculer
+- **Drag & drop** : réordonnancement avec persistance dans `localStorage`
+- **Filtres** : par statut, par membre, "cette semaine" (deadline ≤ 7j), recherche texte
+- **Calendrier** : vue mensuelle avec dots de priorité, clic sur un jour liste les tâches
 
-Les tâches se **synchronisent en temps réel** via Supabase Realtime : un changement fait sur un client est immédiatement visible pour les autres membres connectés.
+### Synchronisation Google Drive
 
-L'**ordre d'affichage** est géré par drag-and-drop et persiste par client dans `localStorage`.
+**`checkDriveUpdates`** (lancé automatiquement à chaque `selectClient`) :
+1. **Étape 1** — Liste les métadonnées du dossier Drive (sans télécharger les fichiers, ~100ms)
+2. **Étape 2** — Compare `modifiedTime` des fichiers Drive avec `last_indexed_at` des chunks en base
+3. **Étape 3** — Exporte et ré-indexe uniquement les fichiers nouveaux ou modifiés (max 10 par run)
+4. **Étape 4** — Purge les chunks "zombies" (fichier supprimé du Drive mais encore en base)
+5. Convergence garantie : les fichiers restants sont traités au prochain `selectClient()`
 
-**Mutations par IA** : Claude peut créer, modifier et supprimer des tâches en répondant avec un bloc JSON après `---JSON---`. Ce bloc est parsé et appliqué immédiatement, puis synchronisé en DB.
+**Types de fichiers supportés :**
+- Google Docs → export texte brut
+- Google Sheets → export CSV (header répété dans chaque chunk)
+- Google Slides → export texte
+- PDF natif → base64 → Claude vision (extraction native)
 
----
+### Mémoire des sessions
 
-### Google Drive
+- Après ≥ 3 échanges, un résumé est auto-généré par Claude Haiku et persisté dans `session_summaries`
+- **Triggers** : changement de client, 10 min d'inactivité, toutes les 10 réponses (auto-save)
+- Les 3 résumés les plus récents sont injectés dans L2 à chaque message pertinent
+- Les résumés plus anciens sont disponibles dans L3 (bilan/synthèse uniquement)
+- Panneau "Historique sessions" dans les Paramètres (20 derniers résumés)
 
-**Prérequis** : Un Service Account Google doit avoir accès au dossier Drive du client. L'ID du dossier est configuré dans les paramètres du client.
+### Base de savoir agence (KB)
 
-**Synchronisation** (déclenchée à l'ouverture d'un client) :
-1. Récupère les métadonnées de tous les fichiers du dossier
-2. Compare avec les timestamps `last_indexed_at` en DB
-3. Ré-indexe uniquement les fichiers modifiés (max 5 par run pour éviter les timeouts)
-4. Purge les chunks des fichiers supprimés du Drive
+- Chaque réponse de Claude affiche un bouton `+ KB` pour capturer l'insight
+- Formulaire : titre + contenu éditable + tags libres
+- Navigateur : recherche full-text (titre, contenu, tags), suppression individuelle
+- Accessible depuis la sidebar : "Base de savoir →"
+- Stockée dans `agency_knowledge` (partagée entre tous les clients)
 
-**Types de fichiers supportés** : Google Docs (exporté en texte), Google Sheets (exporté en texte), Google Slides (exporté en texte), PDF (extraction via Claude), JPEG/PNG (vision Claude)
+### Fiche client générée
 
-**Injection en contexte** : Les 10 fichiers les plus récents sont injectés directement en texte dans le system prompt L2, indépendamment du RAG.
+- Lors de la première sync Drive, Claude Sonnet génère une fiche JSON structurée :
+  `{ secteur, enjeux_principaux[], kpis[], equipe[], historique, notes }`
+- La fiche est persistée dans `clients.context` et affichée en lecture dans les Paramètres
+- Elle peut être régénérée manuellement depuis les Paramètres ("↻ Régénérer la fiche")
+- Si une fiche est active, `saveSettings()` ne touche pas à `context` (géré exclusivement par `generate_brief`)
 
----
+### Sources de contexte
 
-### Mémoire des sessions (CC-102)
-
-L'application garde une mémoire persistante des échanges sous forme de résumés :
-
-- **Déclenchement automatique** : 3e, 5e, 10e, 20e échange (et paliers suivants de 10 en 10), ou après 10 min d'inactivité
-- **Résumé** : L'historique visible est envoyé à Claude Sonnet qui génère un résumé en points-clés
-- **Stockage** : Sauvegardé dans `session_summaries` ET vectorisé dans `document_chunks` (source_type = 'session')
-- **Réinjection** : Les 3-5 résumés les plus récents sont automatiquement inclus dans L2 à la session suivante
-- **Recherche** : Les résumés plus anciens sont accessibles via RAG si une question les concerne
-- **Visibilité** : Historique consultable dans l'onglet "Historique" des paramètres du client
-
----
-
-### RAG (Retrieval-Augmented Generation)
-
-Pipeline de recherche vectorielle sur les documents indexés :
-
-1. La requête utilisateur est vectorisée via l'HF Inference API (`paraphrase-multilingual-MiniLM-L12-v2`, 384 dims)
-2. Recherche cosinus dans `document_chunks` via la fonction RPC PostgreSQL `match_chunks()`
-3. Les 5 chunks les plus similaires (seuil ≥ 0.55) sont injectés dans le prompt
-4. Un badge "Sources utilisées" s'affiche dans l'interface avec les fichiers cités
-5. Si aucun chunk pertinent : instruction à Claude de ne pas inventer et d'indiquer l'absence d'info
-
-**Fallback** : Si le RAG ne trouve rien (ou en cas d'erreur), le cache L2 (10 docs en texte) prend le relais, couvrant ~80% des cas d'usage.
+- **Google Drive** : dossier partagé avec la service account Google, indexé en RAG vectoriel
+- **Fichier PDF** : upload direct (<20 Mo), analysé par Claude vision, résumé ajouté au contexte + indexé en RAG
+- **Notion** : prévu (désactivé, UI visible mais pointer-events:none)
+- Chaque source affiche statut (ok/syncing/err), date de dernière sync, taille estimée en tokens
 
 ---
 
-### Base de savoir agence (Agency KB — CC-213)
+## 6. Pipeline RAG
 
-Espace partagé entre tous les clients pour capitaliser sur les apprentissages de l'agence.
+```
+Texte du fichier Drive
+        │
+        ▼
+chunk_text() — découpage sémantique (backend Python)
+  1. Paragraphes (double newline)
+  2. Si paragraphe > 400 chars → phrases (. ! ?)
+  3. Si phrase > 400 chars → morceaux durs
+  4. Overlap 80 chars entre chunks consécutifs
+  │
+  ▼
+embed_texts() — sentence-transformers local
+  Modèle : paraphrase-multilingual-MiniLM-L12-v2
+  Output : float32[384], normalisé L2
+  Latence : ~10ms/batch
+  │
+  ▼
+INSERT document_chunks
+  (client_id, source_type, source_name, chunk_text, embedding, source_id, last_indexed_at)
+  │
+  ▼
+[À chaque message utilisateur]
+  │
+  ▼
+embed_texts([message]) → vecteur requête
+  │
+  ▼
+match_chunks RPC (pgvector cosine similarity)
+  WHERE similarity >= 0.55   (MIN_THRESHOLD)
+  ORDER BY similarity DESC
+  LIMIT 6                     (MAX_INJECT)
+  MIN_INJECT = 2 (si < 2 résultats → pas d'injection, évite le bruit)
+  HIGH_THRESHOLD = 0.62 (chunks haute confiance → priorité dans le prompt)
+  │
+  ▼
+Injection dans system prompt Claude + sources_used retournés au front
+```
 
-- **Sauvegarde manuelle** : Bouton "Ajouter à la KB" sur chaque réponse de l'IA
-- **Champs** : Titre, contenu, tags, client source, auteur
-- **Navigateur** : Modal accessible depuis la sidebar listant tous les insights enregistrés
-- **Partage** : Les insights sont visibles sur tous les espaces clients
+**Chunking CSV spécifique :**
+- Header répété en tête de chaque chunk (5 lignes de données par chunk)
+- Permet à Claude de comprendre les colonnes même sur un chunk isolé
 
 ---
 
-## 6. Schéma de base de données
+## 7. Schéma de base de données
 
 ```sql
--- Espaces clients
-CREATE TABLE clients (
-  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  name            text NOT NULL,
-  password_hash   text NOT NULL,
-  members         text,                    -- JSON: [{initials, name}]
-  context         jsonb,                   -- Brief auto-généré
-  drive_folder_id text,                    -- ID du dossier Google Drive
-  created_at      timestamptz DEFAULT now(),
-  updated_at      timestamptz DEFAULT now()
-);
+-- Espaces projets
+clients (
+  id               uuid PK,
+  name             text,
+  password_hash    text,        -- SHA-256(password + 'cc2026')
+  context          text,        -- JSON fiche client OU texte libre
+  drive_folder_id  text,
+  members          text,        -- JSON [{initials, name}]
+  sources          jsonb        -- [{type, name, folder_id, status, last_synced_at, content_length}]
+)
 
--- Tâches
-CREATE TABLE tasks (
-  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  client_id   uuid REFERENCES clients(id) ON DELETE CASCADE,
-  title       text NOT NULL,
-  prio        text DEFAULT 'P2',           -- P1 | P2 | P3
-  status      text DEFAULT 'todo',         -- todo | inprogress | blocked | waiting | done
-  assignee    text,                        -- Initiales séparées par +
+-- To-do par client (Realtime activé)
+tasks (
+  id          serial PK,
+  client_id   uuid FK → clients,
+  title       text,
+  prio        text,             -- 'P1' | 'P2' | 'P3'
+  status      text,             -- 'todo' | 'inprogress' | 'blocked' | 'waiting' | 'done'
+  assignee    text,             -- 'KB' ou 'KB+PH'
   blocker     text,
-  note        text,
+  note        text,             -- notes horodatées, \n-séparées
   due_date    date,
-  created_at  timestamptz DEFAULT now(),
-  updated_at  timestamptz DEFAULT now()
-);
+  updated_at  timestamptz
+)
 
--- Résumés de sessions (CC-102)
-CREATE TABLE session_summaries (
-  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  client_id    uuid REFERENCES clients(id) ON DELETE CASCADE,
-  summary_text text NOT NULL,
-  created_at   timestamptz DEFAULT now()
-);
+-- Résumés de sessions auto-générés
+session_summaries (
+  id            uuid PK,
+  client_id     uuid FK → clients,
+  summary_text  text,
+  created_at    timestamptz
+)
 
 -- Chunks vectorisés (RAG)
-CREATE TABLE document_chunks (
-  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  client_id        uuid REFERENCES clients(id) ON DELETE CASCADE,
-  source_type      text,                   -- doc | sheet | pdf | session
+document_chunks (
+  id               uuid PK,
+  client_id        uuid FK → clients,  -- NULL = base agence
+  source_type      text,               -- 'doc' | 'sheet' | 'pdf' | 'file' | 'session'
   source_name      text,
-  source_id        text,                   -- ID Google Drive (stable)
   chunk_text       text,
-  embedding        vector(384),            -- paraphrase-multilingual-MiniLM-L12-v2 embeddings
-  last_indexed_at  timestamptz DEFAULT now()
-);
+  embedding        vector(384),        -- paraphrase-multilingual-MiniLM-L12-v2
+  source_id        text,               -- Google Drive file ID (résistant au renommage)
+  last_indexed_at  timestamptz
+)
 
--- Suivi des coûts API (CC-211)
-CREATE TABLE usage_logs (
-  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  client_id     uuid REFERENCES clients(id) ON DELETE SET NULL,
-  model         text NOT NULL,
-  message_type  text NOT NULL,
-  tokens_input  int,
-  tokens_output int,
-  cost_usd      numeric(10,6),
-  created_at    timestamptz DEFAULT now()
-);
+-- Insights cross-clients
+agency_knowledge (
+  id             uuid PK,
+  title          text,
+  content        text,
+  source_client  text,
+  tags           text[],
+  saved_by       text,
+  created_at     timestamptz
+)
+```
 
--- Logs d'indexation
-CREATE TABLE embedding_logs (
-  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  client_id        uuid REFERENCES clients(id) ON DELETE CASCADE,
-  source_name      text,
-  chunks_count     int,
-  tokens_estimated int,
-  created_at       timestamptz DEFAULT now()
-);
-
--- Base de savoir agence (CC-213)
-CREATE TABLE agency_knowledge (
-  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  title         text NOT NULL,
-  content       text NOT NULL,
-  source_client text,
-  tags          text[],
-  saved_by      text,
-  created_at    timestamptz DEFAULT now()
-);
-
--- Fonction RPC : recherche vectorielle
-CREATE FUNCTION match_chunks(
+**RPC Supabase :**
+```sql
+match_chunks(
   query_embedding vector(384),
   match_threshold float,
   match_count     int,
-  filter_client   uuid
+  p_client_id     uuid
 )
-RETURNS TABLE (
-  id          uuid,
-  chunk_text  text,
-  source_name text,
-  source_type text,
-  similarity  float
-)
-LANGUAGE plpgsql AS $$
-BEGIN
-  RETURN QUERY
-  SELECT dc.id, dc.chunk_text, dc.source_name, dc.source_type,
-         1 - (dc.embedding <=> query_embedding) AS similarity
-  FROM document_chunks dc
-  WHERE dc.client_id = filter_client
-    AND 1 - (dc.embedding <=> query_embedding) > match_threshold
-  ORDER BY similarity DESC
-  LIMIT match_count;
-END;
-$$;
+RETURNS TABLE (id, source_name, source_type, chunk_text, similarity)
 ```
 
 ---
 
-## 7. Variables d'environnement & Secrets
+## 8. API Backend — Actions disponibles
 
-### Secrets Supabase (Edge Function)
+Toutes les requêtes : `POST https://clientchat-v2-1004127157825.europe-west1.run.app`  
+Body : `Content-Type: application/json` + `{ "action": "...", ... }`
 
-Configurés dans le dashboard Supabase → Settings → Edge Functions :
-
-| Secret | Description |
-|--------|-------------|
-| `ANTHROPIC_KEY` | Clé API Anthropic (Claude) |
-| `HF_TOKEN` | Token Hugging Face (embeddings via Inference API) |
-| `GOOGLE_SA_KEY` | JSON complet du Service Account Google |
-| `SUPABASE_URL` | URL du projet Supabase |
-| `SUPABASE_SERVICE_ROLE_KEY` | Clé service role (accès admin DB) |
-
-### Variables frontend (hardcodées dans `db.js`)
-
-Le frontend est public (GitHub Pages), les valeurs suivantes sont donc des clés **publiques** par nature :
-
-```js
-const SB_URL  = "https://[PROJECT_ID].supabase.co";
-const SB_KEY  = "[SUPABASE_ANON_KEY]";          // Clé publique, protégée par RLS
-const EDGE_URL = `${SB_URL}/functions/v1/chat`;
-```
-
-> La sécurité des données repose sur les **Row Level Security (RLS)** de Supabase et le hashage des mots de passe, pas sur la confidentialité de la clé anon.
+| Action | Paramètres principaux | Réponse |
+|--------|----------------------|---------|
+| `chat` | `system`, `message`, `client_id`, `file?`, `chat_history?`, `message_type` | `{ text, sources_used, rag_rate_limited, cost }` |
+| `task_action` | `system`, `message`, `chat_history?` | `{ text, cost }` |
+| `index_source` | `client_id`, `source_type`, `source_name`, `content`, `source_id?`, `start_chunk?` | `{ chunks_created, has_more, next_chunk }` |
+| `list_drive_metadata` | `folder_id` | `{ files: [{id, name, mimeType, modifiedTime}] }` |
+| `export_single_file` | `file_id`, `file_name`, `mime_type` | `{ file: { filename, content } }` |
+| `save_to_kb` | `title`, `content`, `tags?`, `source_client?`, `saved_by?` | `{ saved: true, id }` |
+| `summarize_session` | `client_id`, `history` | `{ saved: true, summary }` |
+| `generate_brief` | `client_id`, `docs_content` | `{ brief: {...}, saved: bool }` |
+| `delete_source_chunks` | `client_id`, `source_type_filter?` ou `source_name?` | `{ deleted: N }` |
+| `health` | — | `{ status: "ok" }` |
 
 ---
 
-## 8. Installation locale
+## 9. Variables d'environnement
 
-### Prérequis
+### Backend (Cloud Run — jamais exposées au frontend)
 
-- [Supabase CLI](https://supabase.com/docs/guides/cli) (`brew install supabase/tap/supabase`)
-- Un projet Supabase existant avec le schéma ci-dessus
-- Python 3 (ou tout autre serveur HTTP statique)
+| Variable | Description |
+|----------|-------------|
+| `SUPABASE_URL` | URL projet Supabase (`https://xxx.supabase.co`) |
+| `SUPABASE_SERVICE_KEY` | Clé `service_role` Supabase (accès complet, côté serveur uniquement) |
+| `ANTHROPIC_KEY` | Clé API Anthropic (`sk-ant-...`) |
+| `GOOGLE_SA_KEY` | JSON complet de la service account Google Drive (stringifié) |
 
-### Étapes
+### Frontend (`db.js` — valeurs publiques dans le code)
+
+| Constante | Description |
+|-----------|-------------|
+| `SB_URL` | URL Supabase publique |
+| `SB_KEY` | Clé `anon` Supabase (lecture publique) |
+| `BACKEND_URL` | URL Cloud Run du backend FastAPI |
+
+---
+
+## 10. Installation locale
+
+### Frontend
 
 ```bash
-# 1. Cloner le repo
-git clone https://github.com/[ORG]/clientchat_v2.git
-cd clientchat_v2
-
-# 2. Lier au projet Supabase
-supabase link --project-ref [PROJECT_ID]
-
-# 3. Configurer les variables frontend
-# Éditer db.js : remplacer SB_URL et SB_KEY par les valeurs de votre projet
-
-# 4. Déployer l'Edge Function en local (optionnel)
-supabase functions serve chat --env-file .env.local
-
-# 5. Servir le frontend
-python3 -m http.server 8000
-# Ouvrir http://localhost:8000
+# Aucun serveur requis — ouvrir directement dans le navigateur
+open index.html
 ```
 
-**Fichier `.env.local`** (pour le dev de l'Edge Function, ne pas committer) :
-```env
-ANTHROPIC_KEY=sk-ant-...
-HF_TOKEN=hf_...
-GOOGLE_SA_KEY={"type":"service_account",...}
-SUPABASE_URL=https://[PROJECT_ID].supabase.co
-SUPABASE_SERVICE_ROLE_KEY=eyJ...
-```
+Le frontend pointe sur `BACKEND_URL` (Cloud Run) et `SB_URL` (Supabase) définis dans `db.js`. Aucune variable d'environnement locale nécessaire.
 
----
-
-## 9. Déploiement
-
-### Frontend — GitHub Pages
-
-Le workflow `.github/workflows/deploy.yml` se déclenche automatiquement à chaque push sur `main`. Il copie les fichiers statiques dans `public/` et les publie sur GitHub Pages.
-
-```yaml
-# Résumé du workflow
-on: push (main)
-steps:
-  - Checkout
-  - Copy HTML/CSS/JS to public/
-  - Deploy to GitHub Pages
-```
-
-> Netlify a été remplacé par GitHub Pages pour corriger des erreurs 403 sur les Edge Functions.
-
-### Backend — Supabase Edge Function
+### Backend (dev local)
 
 ```bash
-# Déploiement de l'Edge Function
-supabase functions deploy chat --project-ref [PROJECT_ID]
+cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 
-# Vérifier les secrets configurés
-supabase secrets list --project-ref [PROJECT_ID]
+export SUPABASE_URL=https://erpjerfvswesipmdqxab.supabase.co
+export SUPABASE_SERVICE_KEY=eyJ...
+export ANTHROPIC_KEY=sk-ant-...
+export GOOGLE_SA_KEY='{"type":"service_account",...}'
 
-# Configurer un secret manquant
-supabase secrets set ANTHROPIC_KEY=sk-ant-... --project-ref [PROJECT_ID]
+uvicorn main:app --reload --port 8080
+# → http://localhost:8080/health
 ```
 
-### Base de données
-
-Le schéma est géré manuellement via le dashboard Supabase ou via des migrations SQL. Il n'y a pas de système de migrations automatisé dans ce repo.
+Pour tester avec le frontend local, remplacer temporairement `BACKEND_URL` dans `db.js` par `http://localhost:8080`.
 
 ---
 
-## 10. Contraintes & Workarounds
+## 11. Déploiement
 
-### Cache L2 — Contexte sans RAG
+### Frontend
 
-Le brief client + les 10 fichiers Drive les plus récents sont injectés directement en texte brut dans le system prompt (L2), indépendamment du RAG. Ce cache couvre ~80% des cas d'usage sans appel d'embedding.
+```bash
+git push origin main
+# → GitHub Actions détecte le push
+# → Déploie automatiquement sur GitHub Pages
+# → Live en ~30s sur https://khadija-benayed.github.io/clientchat_v2/
+```
 
-### Limitations connues
+### Backend (Cloud Run — automatique)
 
-| Limitation | Impact | Contournement |
-|-----------|--------|---------------|
-| HF Inference API free tier | Rate limit 1000 req/jour | Suffisant pour l'usage agence ; upgrade HF Pro si besoin |
-| Edge Functions timeout ~50s | Max 10 fichiers Drive indexés par run | Re-runs automatiques au prochain chargement |
-| Export Drive limité à 20k chars/fichier | Gros documents tronqués | Découpage par chunks avec overlap |
-| Extraction PDF via Claude | Coûte des tokens à chaque ré-indexation | Déduplication par `source_id` stable |
-| Clés frontend hardcodées | Visibles dans le code source | Clé anon publique + RLS Supabase |
+```bash
+git push origin main
+# → Cloud Build trigger détecte le push
+# → docker build -t gcr.io/arctic-rite-497707-s6/clientchat-v2 ./backend
+# → Push image vers GCR
+# → gcloud run deploy clientchat-v2 --region europe-west1
+# → Nouvelle révision active en ~3-5 min
+```
+
+**Setup initial (une seule fois) :**
+
+```bash
+# 1. Configurer le trigger Cloud Build
+# Console GCP → Cloud Build → Triggers → Connecter repo GitHub → pointer sur cloudbuild.yaml
+
+# 2. Donner les droits à Cloud Build
+# IAM → [PROJECT_NUMBER]@cloudbuild.gserviceaccount.com → ajouter rôle "Cloud Run Admin"
+
+# 3. Configurer les variables d'env sur Cloud Run
+gcloud run services update clientchat-v2 \
+  --region europe-west1 \
+  --set-env-vars "SUPABASE_URL=...,SUPABASE_SERVICE_KEY=...,ANTHROPIC_KEY=...,GOOGLE_SA_KEY=..."
+```
+
+**Infra Cloud Run :**
+- Service : `clientchat-v2` | Projet : `arctic-rite-497707-s6`
+- Région : `europe-west1` | Image : `gcr.io/arctic-rite-497707-s6/clientchat-v2`
+- Mémoire : 1 Gi | CPU : 1 | Min instances : 0 | Max instances : 3
+- Tier gratuit : 2M requêtes/mois, 360k vCPU·s, 180k GB·s — largement suffisant pour un usage agence
+
+### Supabase
+
+```bash
+# Schéma initial — exécuter dans l'éditeur SQL Supabase
+# ou : supabase db push (nécessite Supabase CLI + accès projet)
+cat supabase/seed.sql
+```
 
 ---
 
-## 11. Roadmap
+## 12. Raccourcis clavier
 
-### NEXT — Optimisations (sans coût supplémentaire)
+| Raccourci | Action |
+|-----------|--------|
+| `⌘B` | Afficher/masquer la sidebar |
+| `⌘D` | Basculer mode sombre/clair |
+| `⌘K` | Focus sur le champ de message |
+| `⌘J` | Ouvrir le sélecteur de fichier (joindre PDF/image) |
+| `⌘,` | Ouvrir les Paramètres |
+| `⌘[` / `⌘]` | Client précédent / suivant |
+| `⌘F` | Focus sur la recherche tâches |
+| `?` | Ouvrir la liste des raccourcis clavier |
 
-- **Fix Sync Reliability** : Stabiliser la synchronisation Drive en arrière-plan (gestion des timeouts et des retries sur les gros dossiers)
-- **Sync Progress UX** : Afficher un compteur persistant dans l'UI ("X/98 indexés") qui survit entre les sessions et donne de la visibilité sur l'avancement de l'indexation
-- **Notion Source** : Préparer le pipeline d'export pour l'API Notion (stub architecture, même pattern que Drive)
+---
 
-### LATER — Améliorations potentielles
+## 13. Contraintes & Décisions techniques
 
-- **Full RAG** : Indexation complète en < 2 min et recherche sémantique sur l'intégralité des documents clients
-- **Agency KB auto-populée** : Détecter automatiquement les patterns cross-clients et enrichir la base de savoir sans intervention manuelle
-- **Cross-client search** : Permettre d'interroger la base globale ("Comment a-t-on géré cette situation pour un autre client ?")
+### Pourquoi FastAPI sur Cloud Run et non Supabase Edge Functions ?
+
+L'ancienne architecture utilisait une Edge Function Deno qui appelait l'API HF Inference pour les embeddings. Deux problèmes bloquants :
+- **Timeouts et 502** : l'API HF Inference gratuite a des rate limits agressifs → erreurs constantes sur les documents lourds
+- **Limite Supabase Edge** : timeout max 150s, insuffisant pour indexer 98 fichiers Drive
+
+La migration vers Cloud Run + sentence-transformers locaux résout les deux :
+- Embeddings calculés localement (~10ms/batch) → zéro API externe, zéro timeout
+- Modèle baked dans l'image Docker → cold start ~2s seulement
+- Tier gratuit Cloud Run : 2M req/mois, coût marginal nul pour un usage agence
+
+### Pourquoi `paraphrase-multilingual-MiniLM-L12-v2` ?
+
+- Multilingue (français natif), 384 dimensions, léger (~120 MB dans l'image)
+- Compatible avec le schéma `vector(384)` déjà en production dans Supabase
+- Même dimensionnalité que l'ancienne config → pas de migration des embeddings existants
+
+### Pourquoi pas de build step / bundler côté front ?
+
+Le frontend est intentionnellement vanilla pour minimiser la surface de maintenance. Pas de pipeline CI/CD front à gérer, déploiement sur GitHub Pages immédiat (push → live en 30s).
+
+### Authentification simplifiée
+
+Pas de JWT côté client — les espaces sont protégés par un hash SHA-256 du mot de passe partagé (sel `cc2026`). Adapté à un usage interne agence sans données PII sensibles.
+
+### Persistance locale
+
+`localStorage` avec préfixe `cc-` :
+| Clé | Valeur |
+|-----|--------|
+| `cc-sess` | Sessions clients actives (JSON array) |
+| `cc-dark` | Préférence thème (`'1'` = sombre) |
+| `cc-sb-collapsed` | État sidebar (`'1'` = réduite) |
+| `cc-todo-w` | Largeur panneau todo en pixels |
+| `cc-task-order-{clientId}` | Ordre des tâches après DnD |
+| `cc-doccache-{clientId}` | Cache docs Drive (TTL 30 min) |
