@@ -1148,81 +1148,83 @@ async function syncSource(idx){
     if(s.type === 'drive'){
       const folderId = s.folder_id || $('drive-in').value.trim();
       if(!folderId) throw new Error('Folder ID manquant');
-      // ── Étape 1 : métadonnées de tous les fichiers (rapide, sans contenu) ──
-      const metaD = await callBackend({action:'list_drive_metadata',folder_id:folderId});
-      if(metaD.error) throw new Error(metaD.error);
-      if(!metaD.files||!metaD.files.length) throw new Error('Aucun fichier lisible');
 
-      const exportableFiles = metaD.files.filter(f => EXPORTABLE_MIMETYPES.includes(f.mimeType));
+      addMsg('a', '⏳ Synchronisation Drive en cours…');
+      setSyncDot('#EF9F27', 'sync Drive…');
 
-      // ── Étape 2 : exporter + indexer tous les fichiers (concurrence = 1) ──
-      addMsg('a', '⏳ Indexation des documents en cours...');
-      const docsForBrief = [];
-      const BRIEF_LIMIT = 15;
-      let indexedCount = 0;
-
-      // Pool de concurrence : traite CONCURRENCY fichiers simultanément
-      const CONCURRENCY = 3;
-      async function processFile(fileMeta) {
-        try {
-          const expD = await callBackend({action:'export_single_file',file_id:fileMeta.id,file_name:fileMeta.name,mime_type:fileMeta.mimeType});
-          if(expD.error || !expD.file?.content || expD.file.content.trim().length < 10) return;
-
-          // Collecter pour le brief (thread-safe car JS est single-threaded)
-          if(docsForBrief.length < BRIEF_LIMIT) {
-            docsForBrief.push({ filename: expD.file.filename, content: expD.file.content.substring(0, 6000) });
-          }
-
-          const sourceType = fileMeta.mimeType === 'application/vnd.google-apps.spreadsheet' ? 'sheet' : 'doc';
-          try {
-            await indexSourceBatched({
-              action:'index_source', client_id:syncClientId,
-              source_type:sourceType, source_id:fileMeta.id,
-              source_name:fileMeta.name, content:expD.file.content,
-            });
-            indexedCount++;
-          } catch(idxErr) { console.warn('syncSource: index_source error for', fileMeta.name, idxErr.message); }
-        } catch(e) { console.warn('syncSource: processFile error for', fileMeta.name, e.message); }
+      // ── Stream SSE : le backend gère export + chunk + embed + insert ──
+      const resp = await fetch(BACKEND_URL, {
+        method: 'POST',
+        headers: BACKEND_HEADERS,
+        body: JSON.stringify({action:'sync_drive', folder_id:folderId, client_id:syncClientId}),
+      });
+      if(!resp.ok){
+        const d = await resp.json().catch(()=>({}));
+        throw new Error(d.error || 'Backend HTTP '+resp.status);
       }
 
-      // Exécuter en vagues de CONCURRENCY fichiers
-      for(let i = 0; i < exportableFiles.length; i += CONCURRENCY) {
-        await Promise.all(exportableFiles.slice(i, i + CONCURRENCY).map(f => processFile(f)));
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let syncTotal = 0, syncErrors = 0;
+      outer: while(true){
+        const {done, value} = await reader.read();
+        if(done) break;
+        const text = decoder.decode(value, {stream:true});
+        for(const line of text.split('\n')){
+          if(!line.startsWith('data: ')) continue;
+          let ev; try{ ev = JSON.parse(line.slice(6)); }catch(_){ continue; }
+          if(ev.status === 'done'){ syncTotal = ev.total; syncErrors = ev.errors; break outer; }
+          if(ev.progress != null) setSyncProgress(ev.progress, ev.total);
+        }
       }
+      setSyncProgress(null, null);
 
-      addMsg('a', `✓ ${indexedCount} document(s) indexé(s) sur ${exportableFiles.length} pour la recherche profonde.`);
-
+      const indexedCount = syncTotal - syncErrors;
       s.status = 'ok';
       s.last_synced_at = new Date().toISOString();
       s.folder_id = folderId;
       s.content_length = indexedCount;
-
-      // Sauvegarder l'état Drive immédiatement
       srcs[idx] = s;
       setSources(srcs);
       await sb.from('clients').update({drive_folder_id:folderId, sources:cur.sources, members:cur.members}).eq('id',cur.id);
       cur.drive_folder_id = folderId; addSession(cur);
-      addMsg('a', '✓ Drive synchronisé — génération de la fiche dans 15s…');
+      addMsg('a', `✓ ${indexedCount} document(s) indexé(s)${syncErrors ? ` (${syncErrors} erreur(s))` : ''}.`);
 
-      // ── Génération différée de la fiche client ──
-      // 15s suffisent maintenant que l'indexation est parallèle et non-bloquante.
-      setTimeout(async () => {
-        if (!docsForBrief.length) return;
-        if (cur?.id !== syncClientId) return; // user switched clients during sync
+      // ── Génération de la fiche depuis les chunks déjà en base ──
+      if(cur?.id === syncClientId){
         try {
-          addMsg('a', '⏳ Génération de la fiche client en cours…');
-          const brief = await generateBrief(docsForBrief);
-          if (brief) {
-            addMsg('a', '✓ Fiche client générée avec succès.');
-            if ($('modal-settings').classList.contains('open')) renderBrief();
+          const {data: chunkRows} = await sb
+            .from('document_chunks')
+            .select('source_name, chunk_text')
+            .eq('client_id', syncClientId)
+            .in('source_type', ['doc','sheet','pdf'])
+            .order('last_indexed_at', {ascending:false})
+            .order('source_name');
+          if(chunkRows?.length){
+            const bySrc = {};
+            for(const row of chunkRows){
+              if(!bySrc[row.source_name]) bySrc[row.source_name] = '';
+              if(bySrc[row.source_name].length < 6000)
+                bySrc[row.source_name] += (bySrc[row.source_name]?'\n':'')+row.chunk_text;
+            }
+            const docsForBrief = Object.entries(bySrc).slice(0,15)
+              .map(([name,text]) => ({filename:name, content:text.slice(0,6000)}));
+            if(docsForBrief.length){
+              addMsg('a', '⏳ Génération de la fiche client en cours…');
+              const brief = await generateBrief(docsForBrief);
+              if(brief){
+                addMsg('a', '✓ Fiche client générée avec succès.');
+                if($('modal-settings').classList.contains('open')) renderBrief();
+              }
+            }
           }
-        } catch(briefErr) {
-          console.error('generate_brief delayed failed:', briefErr.message);
+        } catch(briefErr){
+          console.error('generateBrief after sync_drive:', briefErr.message);
           addMsg('a', '⚠ Génération de la fiche échouée : '+briefErr.message+'. Réessaie via "Régénérer la fiche".');
         }
-      }, 15_000);
+      }
 
-      if ($('modal-settings').classList.contains('open')) renderBrief();
+      if($('modal-settings').classList.contains('open')) renderBrief();
 
     } else if(s.type === 'file'){
       // Fichier PDF déjà analysé à l'ajout, la re-sync n'a pas de sens sans nouveau fichier
