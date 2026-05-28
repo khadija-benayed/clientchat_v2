@@ -16,6 +16,8 @@ steps:
       - 'europe-west1'
       - '--platform'
       - 'managed'
+      - '--set-secrets'
+      - 'SUPABASE_URL=SUPABASE_URL:latest,SUPABASE_SERVICE_KEY=SUPABASE_SERVICE_KEY:latest,ANTHROPIC_KEY=ANTHROPIC_KEY:latest,GOOGLE_SA_KEY=GOOGLE_SA_KEY:latest'
 
 images:
   - 'gcr.io/$PROJECT_ID/clientchat-v2'
