@@ -1,17 +1,12 @@
 steps:
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/clientchat-v2', './backend']
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
     args:
-      - 'run'
-      - 'deploy'
-      - 'clientchat-v2'
-      - '--image'
-      - 'gcr.io/$PROJECT_ID/clientchat-v2'
-      - '--region'
-      - 'europe-west1'
-      - '--platform'
-      - 'managed'
+      - 'build'
+      - '-t'
+      - 'gcr.io/arctic-rite-497707-s6/clientchat-v2:$COMMIT_SHA'
+      - '-t'
+      - 'gcr.io/arctic-rite-497707-s6/clientchat-v2:latest'
+      - 'backend'
 images:
-  - 'gcr.io/$PROJECT_ID/clientchat-v2'
+  - 'gcr.io/arctic-rite-497707-s6/clientchat-v2:latest'
+  - 'gcr.io/arctic-rite-497707-s6/clientchat-v2:$COMMIT_SHA'
