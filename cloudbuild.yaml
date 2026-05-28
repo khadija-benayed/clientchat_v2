@@ -16,3 +16,6 @@ steps:
       - 'managed'
 images:
   - 'gcr.io/$PROJECT_ID/clientchat-v2'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
