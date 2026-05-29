@@ -1165,7 +1165,7 @@ async function syncSource(idx, {resume = false, retried = false, incremental = t
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
-      let syncOk = 0, syncCached = 0, syncErrors = 0, syncTotal = 0, syncDone = false;
+      let syncOk = 0, syncCached = 0, syncErrors = 0, syncPurged = 0, syncTotal = 0, syncDone = false;
       outer: while(true){
         const {done, value} = await reader.read();
         if(done) break;
@@ -1177,6 +1177,7 @@ async function syncSource(idx, {resume = false, retried = false, incremental = t
           if(ev.status === 'done'){
             syncTotal = ev.total; syncErrors = ev.errors ?? syncErrors;
             syncOk = ev.ok ?? syncOk; syncCached = ev.cached ?? syncCached;
+            syncPurged = ev.purged ?? 0;
             syncDone = true; break outer;
           }
           if(ev.status === 'ok') syncOk++;
@@ -1204,7 +1205,8 @@ async function syncSource(idx, {resume = false, retried = false, incremental = t
       await sb.from('clients').update({drive_folder_id:folderId, sources:cur.sources, members:cur.members}).eq('id',cur.id);
       cur.drive_folder_id = folderId; addSession(cur);
       const cachedNote = syncCached > 0 ? `, ${syncCached} déjà indexé(s)` : '';
-      addMsg('a', `✓ ${indexedCount} document(s) indexé(s)${cachedNote}${syncErrors ? ` (${syncErrors} erreur(s))` : ''}.`);
+      const purgedNote = syncPurged > 0 ? `, ${syncPurged} supprimé(s) de la base` : '';
+      addMsg('a', `✓ ${indexedCount} document(s) indexé(s)${cachedNote}${purgedNote}${syncErrors ? ` (${syncErrors} erreur(s))` : ''}.`);
 
       // ── Génération de la fiche depuis les chunks déjà en base ──
       if(cur?.id === syncClientId){

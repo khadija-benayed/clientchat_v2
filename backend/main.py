@@ -758,10 +758,10 @@ async def sync_drive(body: dict, request: Request):
     files_to_process = all_files[:200]
     total = len(files_to_process)
 
-    # Preload indexed state for resume and/or incremental (single query)
-    existing_ids: set = set()           # resume: skip if already in DB at all
+    # Preload indexed state — always needed for ghost cleanup, also for resume/incremental
+    existing_ids: set = set()           # source_ids currently in DB
     indexed_at: dict = {}               # incremental: {source_id: last_indexed datetime}
-    if (resume or incremental) and client_id:
+    if client_id:
         try:
             res = sb.table("document_chunks").select("source_id, last_indexed_at").eq("client_id", client_id).execute()
             for r in (res.data or []):
@@ -779,10 +779,22 @@ async def sync_drive(body: dict, request: Request):
         except Exception as e:
             print(f"sync_drive state preload error (non bloquant): {e}")
 
+    # Purge chunks for files deleted from Drive (source_id in DB but not in Drive)
+    drive_ids = {f["id"] for f in all_files}
+    ghost_ids = existing_ids - drive_ids
+    purged_count = 0
+    if ghost_ids and client_id:
+        try:
+            sb.table("document_chunks").delete().eq("client_id", client_id).in_("source_id", list(ghost_ids)).execute()
+            purged_count = len(ghost_ids)
+            print(f"sync_drive: purged {purged_count} deleted Drive file(s) from DB")
+        except Exception as e:
+            print(f"sync_drive: ghost cleanup error (non bloquant): {e}")
+
     state_key = f"{client_id}|{folder_id}"
     _sync_state[state_key] = {
         "total": total, "processed": 0, "ok": 0,
-        "cached": 0, "skipped": 0, "errors": 0, "done": False,
+        "cached": 0, "skipped": 0, "errors": 0, "purged": purged_count, "done": False,
     }
 
     async def generate():
@@ -897,7 +909,7 @@ async def sync_drive(body: dict, request: Request):
                     yield f"data: {json.dumps({'file': f['name'], 'status': 'error', 'error': str(e), 'progress': processed, 'total': total})}\n\n"
 
         _sync_state[state_key]["done"] = True
-        yield f"data: {json.dumps({'status': 'done', 'total': total, 'ok': ok, 'cached': cached, 'errors': errors})}\n\n"
+        yield f"data: {json.dumps({'status': 'done', 'total': total, 'ok': ok, 'cached': cached, 'errors': errors, 'purged': purged_count})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers={
         "Cache-Control": "no-cache",
