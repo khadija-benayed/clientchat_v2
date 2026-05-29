@@ -11,7 +11,7 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI, Request
@@ -306,7 +306,7 @@ def _parse_modified(f: dict) -> datetime:
     try:
         return datetime.fromisoformat(f.get("modifiedTime", "").replace("Z", "+00:00"))
     except Exception:
-        return datetime.min.replace(tzinfo=None)
+        return datetime.min.replace(tzinfo=timezone.utc)
 
 
 # ── Local file extraction ──────────────────────────────────────────────────────
@@ -738,6 +738,7 @@ async def sync_drive(body: dict, request: Request):
     folder_id = body.get("folder_id")
     client_id = body.get("client_id")
     resume = body.get("resume", False)
+    incremental = body.get("incremental", False)
 
     if not folder_id:
         return JSONResponse({"error": "folder_id requis"}, status_code=400)
@@ -757,14 +758,26 @@ async def sync_drive(body: dict, request: Request):
     files_to_process = all_files[:200]
     total = len(files_to_process)
 
-    # Resume: fetch already-indexed source_ids to skip them
-    existing_ids: set = set()
-    if resume and client_id:
+    # Preload indexed state for resume and/or incremental (single query)
+    existing_ids: set = set()           # resume: skip if already in DB at all
+    indexed_at: dict = {}               # incremental: {source_id: last_indexed datetime}
+    if (resume or incremental) and client_id:
         try:
-            res = sb.table("document_chunks").select("source_id").eq("client_id", client_id).execute()
-            existing_ids = {r["source_id"] for r in (res.data or []) if r.get("source_id")}
+            res = sb.table("document_chunks").select("source_id, last_indexed_at").eq("client_id", client_id).execute()
+            for r in (res.data or []):
+                sid, lat = r.get("source_id"), r.get("last_indexed_at")
+                if not sid:
+                    continue
+                existing_ids.add(sid)
+                if lat:
+                    try:
+                        dt = datetime.fromisoformat(lat.replace("Z", "+00:00"))
+                        if sid not in indexed_at or dt > indexed_at[sid]:
+                            indexed_at[sid] = dt
+                    except Exception:
+                        pass
         except Exception as e:
-            print(f"sync_drive resume preload error (non bloquant): {e}")
+            print(f"sync_drive state preload error (non bloquant): {e}")
 
     state_key = f"{client_id}|{folder_id}"
     _sync_state[state_key] = {
@@ -788,14 +801,22 @@ async def sync_drive(body: dict, request: Request):
         for i in range(0, total, BATCH_SIZE):
             batch = files_to_process[i:i + BATCH_SIZE]
 
-            # Emit cached events immediately — no download needed
-            for f in [f for f in batch if f["id"] in existing_ids]:
+            # Decide which files to skip (cached) vs download
+            def _is_cached(f: dict) -> bool:
+                fid = f["id"]
+                if resume and fid in existing_ids:
+                    return True
+                if incremental and fid in indexed_at:
+                    return _parse_modified(f) <= indexed_at[fid]
+                return False
+
+            for f in [f for f in batch if _is_cached(f)]:
                 processed += 1
                 cached += 1
                 _upd()
                 yield f"data: {json.dumps({'file': f['name'], 'status': 'cached', 'progress': processed, 'total': total})}\n\n"
 
-            to_fetch = [f for f in batch if f["id"] not in existing_ids]
+            to_fetch = [f for f in batch if not _is_cached(f)]
             if not to_fetch:
                 continue
 

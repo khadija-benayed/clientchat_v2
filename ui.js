@@ -1125,7 +1125,7 @@ async function regenerateBrief() {
 }
 
 
-async function syncSource(idx, {resume = false, retried = false} = {}){
+async function syncSource(idx, {resume = false, retried = false, incremental = true} = {}){
   if (_indexingInProgress) {
     addMsg('a', '⏳ Une indexation est déjà en cours, réessaie dans quelques secondes.');
     return;
@@ -1156,7 +1156,7 @@ async function syncSource(idx, {resume = false, retried = false} = {}){
       const resp = await fetch(BACKEND_URL, {
         method: 'POST',
         headers: BACKEND_HEADERS,
-        body: JSON.stringify({action:'sync_drive', folder_id:folderId, client_id:syncClientId, resume}),
+        body: JSON.stringify({action:'sync_drive', folder_id:folderId, client_id:syncClientId, resume, incremental}),
       });
       if(!resp.ok){
         const d = await resp.json().catch(()=>({}));
@@ -1191,7 +1191,7 @@ async function syncSource(idx, {resume = false, retried = false} = {}){
       if(!syncDone && !retried && (syncOk + syncCached) > 0){
         addMsg('a', `⚡ Connexion interrompue (${syncOk} indexé(s)). Reprise automatique…`);
         _indexingInProgress = false;
-        return syncSource(idx, {resume: true, retried: true});
+        return syncSource(idx, {resume: true, retried: true, incremental: false});
       }
 
       const indexedCount = syncOk + syncCached;
