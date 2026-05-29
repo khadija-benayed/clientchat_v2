@@ -844,25 +844,27 @@ async def sync_drive(body: dict, request: Request):
                 continue
 
             # Parallel download with heartbeats every 5 s + 90 s hard timeout per batch
-            MAX_BATCH_WAIT = 90
+            # Per-file timeout (150 s each) — each file has its own budget.
+            # A slow file (large scanned PDF + Claude Vision) gets its full time
+            # without blocking or penalising the others in the batch.
+            MAX_FILE_WAIT = 150
             futs = [
                 asyncio.ensure_future(loop.run_in_executor(
                     None, export_drive_file, f["id"], f["name"], f["mimeType"]
                 ))
                 for f in to_fetch
             ]
+            deadlines = {fut: loop.time() + MAX_FILE_WAIT for fut in futs}
             timed_out_ids: set = set()
-            wait_start = loop.time()
             pending = set(futs)
             while pending:
-                elapsed = loop.time() - wait_start
-                if elapsed >= MAX_BATCH_WAIT:
-                    for i, fut in enumerate(futs):
-                        if not fut.done():
-                            fut.cancel()
-                            timed_out_ids.add(to_fetch[i]["id"])
-                    break
-                done_set, pending = await asyncio.wait(pending, timeout=min(5.0, MAX_BATCH_WAIT - elapsed))
+                done_set, pending = await asyncio.wait(pending, timeout=5.0)
+                now = loop.time()
+                for i, fut in enumerate(futs):
+                    if fut in pending and now >= deadlines[fut]:
+                        fut.cancel()
+                        pending.discard(fut)
+                        timed_out_ids.add(to_fetch[i]["id"])
                 if pending:
                     yield f"data: {json.dumps({'status': 'heartbeat', 'progress': processed, 'total': total})}\n\n"
 
