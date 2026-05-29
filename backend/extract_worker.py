@@ -39,46 +39,43 @@ def main():
                     parts.append(t.strip())
             text = "\n\n".join(parts)
 
-            if len(text) <= 100:
-                if len(file_bytes) < 100_000:
-                    # Truly empty PDF (tiny file, no text) — nothing to index
-                    text = ""
-                else:
-                    # Large file, near-zero text → likely scanned — fallback to Claude Vision
-                    try:
-                        import os
-                        import anthropic
-                        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_KEY"])
-                        resp = client.messages.create(
-                            model="claude-haiku-4-5-20251001",
-                            max_tokens=4096,
-                            messages=[{
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "document",
-                                        "source": {
-                                            "type": "base64",
-                                            "media_type": "application/pdf",
-                                            "data": base64.b64encode(file_bytes).decode(),
-                                        },
+            if len(text) <= 100 and len(file_bytes) >= 100_000:
+                # Large file + little text → likely scanned → Claude Vision fallback
+                # Small file + little text → return the short text as-is (cover page, etc.)
+                try:
+                    import os
+                    import anthropic
+                    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_KEY"])
+                    resp = client.messages.create(
+                        model="claude-haiku-4-5-20251001",
+                        max_tokens=4096,
+                        messages=[{
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "document",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "application/pdf",
+                                        "data": base64.b64encode(file_bytes).decode(),
                                     },
-                                    {
-                                        "type": "text",
-                                        "text": (
-                                            "Extrais tout le texte de ce document de manière fidèle et complète. "
-                                            "Inclus les titres, sous-titres, tableaux (format texte), listes et corps de texte. "
-                                            "Ne résume pas — retranscris le contenu intégral."
-                                        ),
-                                    },
-                                ],
-                            }],
-                        )
-                        vision_text = resp.content[0].text if resp.content else ""
-                        if vision_text.strip():
-                            text = vision_text
-                    except Exception:
-                        pass  # Claude indisponible — on garde le résultat pypdf
+                                },
+                                {
+                                    "type": "text",
+                                    "text": (
+                                        "Extrais tout le texte de ce document de manière fidèle et complète. "
+                                        "Inclus les titres, sous-titres, tableaux (format texte), listes et corps de texte. "
+                                        "Ne résume pas — retranscris le contenu intégral."
+                                    ),
+                                },
+                            ],
+                        }],
+                    )
+                    vision_text = resp.content[0].text if resp.content else ""
+                    if vision_text.strip():
+                        text = vision_text
+                except Exception:
+                    pass  # Claude indisponible — on garde le résultat pypdf
 
         elif mime_type in (
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

@@ -206,6 +206,8 @@ def export_drive_file(file_id: str, file_name: str, mime_type: str) -> Optional[
         if mime_type == "application/vnd.google-apps.spreadsheet":
             req = drive.files().export_media(fileId=file_id, mimeType="text/csv")
             content = _download_bytes(req).decode("utf-8", errors="replace")[:20_000]
+            if not content.strip():
+                print(f"Sheet export empty for {file_name}: len={len(content)}, preview={repr(content[:100])}")
             return {"filename": file_name, "type": "csv", "content": content}
 
         if mime_type in ("application/vnd.google-apps.document", "application/vnd.google-apps.presentation"):
@@ -832,12 +834,8 @@ async def sync_drive(body: dict, request: Request):
                 fid = f["id"]
                 if resume and fid in existing_ids:
                     return True
-                if incremental:
-                    if fid in indexed_at:
-                        return _parse_modified(f) <= indexed_at[fid]
-                    if fid in existing_ids:
-                        # last_indexed_at NULL in DB (old rows) — file is indexed, treat as cached
-                        return True
+                if incremental and fid in indexed_at:
+                    return _parse_modified(f) <= indexed_at[fid]
                 return False
 
             for f in [f for f in batch if _is_cached(f)]:
