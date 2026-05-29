@@ -738,7 +738,7 @@ async def sync_drive(body: dict, request: Request):
     folder_id = body.get("folder_id")
     client_id = body.get("client_id")
     resume = body.get("resume", False)
-    incremental = body.get("incremental", False)
+    incremental = body.get("incremental", True)  # default True — frontend may omit it (cache)
 
     if not folder_id:
         return JSONResponse({"error": "folder_id requis"}, status_code=400)
@@ -790,6 +790,9 @@ async def sync_drive(body: dict, request: Request):
         except Exception as e:
             print(f"sync_drive state preload error (non bloquant): {e}")
 
+    mode = "resume" if resume else ("incremental" if incremental else "full")
+    print(f"sync_drive: mode={mode} total={len(files_to_process)} existing={len(existing_ids)} indexed_at={len(indexed_at)}")
+
     # Purge chunks for files deleted from Drive (source_id in DB but not in Drive)
     drive_ids = {f["id"] for f in all_files}
     ghost_ids = existing_ids - drive_ids
@@ -829,8 +832,12 @@ async def sync_drive(body: dict, request: Request):
                 fid = f["id"]
                 if resume and fid in existing_ids:
                     return True
-                if incremental and fid in indexed_at:
-                    return _parse_modified(f) <= indexed_at[fid]
+                if incremental:
+                    if fid in indexed_at:
+                        return _parse_modified(f) <= indexed_at[fid]
+                    if fid in existing_ids:
+                        # last_indexed_at NULL in DB (old rows) — file is indexed, treat as cached
+                        return True
                 return False
 
             for f in [f for f in batch if _is_cached(f)]:
