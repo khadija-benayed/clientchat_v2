@@ -24,8 +24,16 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
+# Disable HuggingFace tokenizer's internal Rust thread pool — it conflicts with
+# Python's ThreadPoolExecutor and corrupts glibc heap (SIGABRT / free() crash).
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 # ── Model loading ─────────────────────────────────────────────────────────────
 model: Optional[SentenceTransformer] = None
+
+# Single-worker executor: model.encode() must never run in two threads at once.
+# Using the default pool allows concurrent chat + sync_drive → heap corruption.
+_EMBED_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 
 
 @asynccontextmanager
@@ -399,7 +407,7 @@ async def summarize_session(body: dict):
     # CC-208 — Index summary in document_chunks (source_type='session') for semantic search
     try:
         loop = asyncio.get_running_loop()
-        embedding = (await loop.run_in_executor(None, embed_texts, [summary_text]))[0]
+        embedding = (await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, [summary_text]))[0]
         session_source_name = f"Session du {time.strftime('%Y-%m-%d')}"
         sb.table("document_chunks").delete().match({"client_id": client_id, "source_type": "session"}).execute()
         sb.table("document_chunks").insert({
@@ -620,7 +628,7 @@ async def index_source(body: dict):
 
     # Embed all at once — local model, zero timeout risk
     loop = asyncio.get_running_loop()
-    embeddings = await loop.run_in_executor(None, embed_texts, chunks)
+    embeddings = await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, chunks)
 
     # Delete old chunks before inserting (source_id stable key for Drive, source_name fallback)
     try:
@@ -779,7 +787,7 @@ async def sync_drive(body: dict, request: Request):
                         yield f"data: {json.dumps({'file': f['name'], 'status': 'empty', 'progress': processed, 'total': total})}\n\n"
                         continue
 
-                    embeddings = await loop.run_in_executor(None, embed_texts, chunks)
+                    embeddings = await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, chunks)
 
                     try:
                         del_q = sb.table("document_chunks").delete()
@@ -838,7 +846,7 @@ async def chat(body: dict):
     if message:
         try:
             loop = asyncio.get_running_loop()
-            query_emb = (await loop.run_in_executor(None, embed_texts, [message]))[0]
+            query_emb = (await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, [message]))[0]
             result = sb.rpc("match_chunks", {
                 "query_embedding": query_emb,
                 "match_count": 8,
