@@ -5,6 +5,8 @@ import json
 import math
 import os
 import re
+import subprocess
+import sys
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -198,32 +200,22 @@ def export_drive_file(drive, file_id: str, file_name: str, mime_type: str) -> Op
             content = _download_bytes(req).decode("utf-8", errors="replace")[:20_000]
             return {"filename": file_name, "type": "txt", "content": content}
 
-        # PDF → local extraction (text + tables)
+        # PDF → subprocess-isolated extraction
         if mime_type == "application/pdf":
             raw = _download_bytes(drive.files().get_media(fileId=file_id))
-            content = extract_pdf_text(raw)
+            content = safe_extract(raw, mime_type)
             if not content.strip():
                 return None
             return {"filename": file_name, "type": "pdf", "content": content[:50_000]}
 
-        # Office / plain text formats
+        # Office / plain text → subprocess-isolated extraction
         if mime_type in _OFFICE_MIME:
             ext = _OFFICE_MIME[mime_type]
             raw = _download_bytes(drive.files().get_media(fileId=file_id))
-            if ext == "docx":
-                content = extract_docx_text(raw)
-                type_label = "doc"
-            elif ext == "xlsx":
-                content = extract_xlsx_text(raw)
-                type_label = "sheet"
-            elif ext == "pptx":
-                content = extract_pptx_text(raw)
-                type_label = "ppt"
-            else:  # txt / csv
-                content = raw.decode("utf-8", errors="replace")
-                type_label = ext
+            content = safe_extract(raw, mime_type)
             if not content.strip():
                 return None
+            type_label = {"docx": "doc", "xlsx": "sheet", "pptx": "ppt"}.get(ext, ext)
             return {"filename": file_name, "type": type_label, "content": content[:20_000]}
 
         return None
@@ -314,81 +306,29 @@ def _download_bytes(req) -> bytes:
     return buf.getvalue()
 
 
-def extract_pdf_text(pdf_bytes: bytes) -> str:
-    """Text from PDF bytes via pypdf (pure Python, no C extensions)."""
-    import pypdf
-    parts = []
+_WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "extract_worker.py")
+
+
+def safe_extract(file_bytes: bytes, mime_type: str) -> str:
+    """Run file extraction in an isolated subprocess.
+
+    Any native crash (SIGABRT, SIGSEGV) in the child does NOT kill the server.
+    Returns empty string on crash, timeout, or unsupported type.
+    """
     try:
-        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
-        for page in reader.pages:
-            try:
-                text = page.extract_text(extraction_mode="layout") or ""
-            except Exception:
-                text = page.extract_text() or ""
-            if text.strip():
-                parts.append(text.strip())
+        result = subprocess.run(
+            [sys.executable, _WORKER, mime_type],
+            input=base64.b64encode(file_bytes),
+            capture_output=True,
+            timeout=60,
+        )
+        return result.stdout.decode("utf-8", errors="replace") if result.returncode == 0 else ""
+    except subprocess.TimeoutExpired:
+        print(f"safe_extract timeout for {mime_type}")
+        return ""
     except Exception as e:
-        print(f"extract_pdf_text error: {e}")
-    return "\n\n".join(parts)
-
-
-def extract_docx_text(file_bytes: bytes) -> str:
-    """Text from .docx via stdlib zipfile + xml.etree (no lxml, no C extensions)."""
-    import zipfile
-    import xml.etree.ElementTree as ET
-    W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-    parts = []
-    try:
-        with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
-            if "word/document.xml" not in z.namelist():
-                return ""
-            root = ET.fromstring(z.read("word/document.xml"))
-            for para in root.iter(f"{{{W}}}p"):
-                line = "".join(t.text or "" for t in para.iter(f"{{{W}}}t")).strip()
-                if line:
-                    parts.append(line)
-    except Exception as e:
-        print(f"extract_docx_text error: {e}")
-    return "\n".join(parts)
-
-
-def extract_xlsx_text(file_bytes: bytes) -> str:
-    """Text from .xlsx via openpyxl (pure Python, no lxml required)."""
-    import openpyxl
-    parts = []
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
-        for sheet in wb.worksheets:
-            parts.append(f"[Feuille : {sheet.title}]")
-            for row in sheet.iter_rows(values_only=True):
-                cells = [str(c) if c is not None else "" for c in row]
-                if any(c.strip() for c in cells):
-                    parts.append(" | ".join(cells))
-        wb.close()
-    except Exception as e:
-        print(f"extract_xlsx_text error: {e}")
-    return "\n".join(parts)
-
-
-def extract_pptx_text(file_bytes: bytes) -> str:
-    """Text from .pptx via stdlib zipfile + xml.etree (no lxml, no C extensions)."""
-    import zipfile
-    import xml.etree.ElementTree as ET
-    A = "http://schemas.openxmlformats.org/drawingml/2006/main"
-    parts = []
-    try:
-        with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
-            slides = sorted(n for n in z.namelist() if n.startswith("ppt/slides/slide") and n.endswith(".xml"))
-            for i, slide_path in enumerate(slides, 1):
-                parts.append(f"[Slide {i}]")
-                root = ET.fromstring(z.read(slide_path))
-                for para in root.iter(f"{{{A}}}p"):
-                    line = "".join(t.text or "" for t in para.iter(f"{{{A}}}t")).strip()
-                    if line:
-                        parts.append(line)
-    except Exception as e:
-        print(f"extract_pptx_text error: {e}")
-    return "\n".join(parts)
+        print(f"safe_extract error: {e}")
+        return ""
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -656,13 +596,15 @@ async def index_source(body: dict):
 
     text_content = content
 
-    # PDF base64 → extract text locally via pdfplumber
+    # PDF base64 → subprocess-isolated extraction
     if text_content.startswith("__PDF_BASE64__"):
         pdf_b64 = text_content[len("__PDF_BASE64__"):]
         try:
             pdf_bytes_data = base64.b64decode(pdf_b64)
             loop = asyncio.get_running_loop()
-            text_content = await loop.run_in_executor(None, extract_pdf_text, pdf_bytes_data)
+            text_content = await loop.run_in_executor(
+                None, safe_extract, pdf_bytes_data, "application/pdf"
+            )
             if not text_content.strip():
                 raise ValueError("Extraction PDF vide — aucun texte détecté")
         except Exception as e:
