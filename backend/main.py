@@ -795,9 +795,12 @@ async def sync_drive(body: dict, request: Request):
     mode = "resume" if resume else ("incremental" if incremental else "full")
     print(f"sync_drive: mode={mode} total={len(files_to_process)} existing={len(existing_ids)} indexed_at={len(indexed_at)}")
 
-    # Purge chunks for files deleted from Drive (source_id in DB but not in Drive)
+    # Purge chunks for files deleted from Drive (source_id in DB but not in Drive).
+    # Only safe when the Drive listing is complete — if it was capped at 500 files,
+    # files beyond the cap would appear as ghosts and be incorrectly deleted.
     drive_ids = {f["id"] for f in all_files}
-    ghost_ids = existing_ids - drive_ids
+    listing_complete = len(all_files) < 500
+    ghost_ids = (existing_ids - drive_ids) if listing_complete else set()
     purged_count = 0
     if ghost_ids and client_id:
         try:

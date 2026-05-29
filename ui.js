@@ -1092,7 +1092,7 @@ async function regenerateBrief() {
         .from('document_chunks')
         .select('source_name, chunk_text')
         .eq('client_id', cur.id)
-        .in('source_type', ['doc','sheet','pdf'])
+        .in('source_type', ['doc','sheet','pdf','txt','csv','ppt'])
         .order('last_indexed_at', {ascending:false})
         .order('source_name');
       if (data?.length) {
@@ -1215,7 +1215,7 @@ async function syncSource(idx, {resume = false, retried = false, incremental = t
             .from('document_chunks')
             .select('source_name, chunk_text')
             .eq('client_id', syncClientId)
-            .in('source_type', ['doc','sheet','pdf'])
+            .in('source_type', ['doc','sheet','pdf','txt','csv','ppt'])
             .order('last_indexed_at', {ascending:false})
             .order('source_name');
           if(chunkRows?.length){
@@ -1289,7 +1289,7 @@ async function removeSource(idx){
       await callBackend({
         action: 'delete_source_chunks',
         client_id: cur.id,
-        source_type_filter: ['doc', 'sheet'],
+        source_type_filter: ['doc', 'sheet', 'txt', 'csv', 'pdf', 'ppt'],
       });
     } else {
       await callBackend({
