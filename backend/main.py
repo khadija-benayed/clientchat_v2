@@ -330,7 +330,7 @@ def safe_extract(file_bytes: bytes, mime_type: str) -> str:
             [sys.executable, _WORKER, mime_type],
             input=base64.b64encode(file_bytes),
             capture_output=True,
-            timeout=60,
+            timeout=120,
         )
         return result.stdout.decode("utf-8", errors="replace") if result.returncode == 0 else ""
     except subprocess.TimeoutExpired:
