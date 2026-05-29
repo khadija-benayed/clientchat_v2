@@ -169,40 +169,65 @@ def get_drive_service() -> tuple:
     return drive, sa_info.get("client_email", "")
 
 
+_OFFICE_MIME = {
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/msword": "docx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "application/vnd.ms-excel": "xlsx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+    "text/plain": "txt",
+    "text/csv": "csv",
+}
+
+
 def export_drive_file(drive, file_id: str, file_name: str, mime_type: str) -> Optional[dict]:
     """
-    Exports a Drive file to text/csv/pdf.
-    PDFs are returned as __PDF_BASE64__<b64> for Claude extraction downstream.
+    Downloads and extracts a Drive file to plain text.
+    Supports: Google Workspace (Sheets/Docs/Slides), PDF, Word, Excel, PowerPoint, plain text/CSV.
     Returns None for unsupported types (images, videos, etc.).
     """
     try:
+        # Google Workspace → export as text
         if mime_type == "application/vnd.google-apps.spreadsheet":
             req = drive.files().export_media(fileId=file_id, mimeType="text/csv")
-            export_type, is_binary = "csv", False
-        elif mime_type in (
-            "application/vnd.google-apps.document",
-            "application/vnd.google-apps.presentation",
-        ):
+            content = _download_bytes(req).decode("utf-8", errors="replace")[:20_000]
+            return {"filename": file_name, "type": "csv", "content": content}
+
+        if mime_type in ("application/vnd.google-apps.document", "application/vnd.google-apps.presentation"):
             req = drive.files().export_media(fileId=file_id, mimeType="text/plain")
-            export_type, is_binary = "txt", False
-        elif mime_type == "application/pdf":
-            req = drive.files().get_media(fileId=file_id)
-            export_type, is_binary = "pdf", True
-        else:
-            return None
+            content = _download_bytes(req).decode("utf-8", errors="replace")[:20_000]
+            return {"filename": file_name, "type": "txt", "content": content}
 
-        buf = io.BytesIO()
-        downloader = MediaIoBaseDownload(buf, req)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
+        # PDF → local extraction (text + tables)
+        if mime_type == "application/pdf":
+            raw = _download_bytes(drive.files().get_media(fileId=file_id))
+            content = extract_pdf_text(raw)
+            if not content.strip():
+                return None
+            return {"filename": file_name, "type": "pdf", "content": content[:50_000]}
 
-        if is_binary:
-            content = "__PDF_BASE64__" + base64.b64encode(buf.getvalue()).decode()
-        else:
-            content = buf.getvalue().decode("utf-8", errors="replace")[:20_000]
+        # Office / plain text formats
+        if mime_type in _OFFICE_MIME:
+            ext = _OFFICE_MIME[mime_type]
+            raw = _download_bytes(drive.files().get_media(fileId=file_id))
+            if ext == "docx":
+                content = extract_docx_text(raw)
+                type_label = "doc"
+            elif ext == "xlsx":
+                content = extract_xlsx_text(raw)
+                type_label = "sheet"
+            elif ext == "pptx":
+                content = extract_pptx_text(raw)
+                type_label = "ppt"
+            else:  # txt / csv
+                content = raw.decode("utf-8", errors="replace")
+                type_label = ext
+            if not content.strip():
+                return None
+            return {"filename": file_name, "type": type_label, "content": content[:20_000]}
 
-        return {"filename": file_name, "type": export_type, "content": content}
+        return None
+
     except Exception as e:
         print(f"Export error for {file_name}: {e}")
         return None
@@ -248,11 +273,24 @@ def _list_files_recursive(
 
 
 def _type_priority(mime_type: str) -> int:
-    if mime_type == "application/vnd.google-apps.spreadsheet":
+    if mime_type in (
+        "application/vnd.google-apps.spreadsheet",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+        "text/csv",
+    ):
         return 0
-    if mime_type == "application/vnd.google-apps.document":
+    if mime_type in (
+        "application/vnd.google-apps.document",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
+        "text/plain",
+    ):
         return 1
-    if mime_type == "application/vnd.google-apps.presentation":
+    if mime_type in (
+        "application/vnd.google-apps.presentation",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ):
         return 2
     if mime_type == "application/pdf":
         return 3
@@ -264,6 +302,81 @@ def _parse_modified(f: dict) -> datetime:
         return datetime.fromisoformat(f.get("modifiedTime", "").replace("Z", "+00:00"))
     except Exception:
         return datetime.min.replace(tzinfo=None)
+
+
+# ── Local file extraction ──────────────────────────────────────────────────────
+def _download_bytes(req) -> bytes:
+    buf = io.BytesIO()
+    downloader = MediaIoBaseDownload(buf, req)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    return buf.getvalue()
+
+
+def extract_pdf_text(pdf_bytes: bytes) -> str:
+    """Text + tables from PDF bytes via pdfplumber (no API call, no OCR)."""
+    import pdfplumber
+    parts = []
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page in pdf.pages:
+                page_parts = []
+                text = page.extract_text(x_tolerance=3, y_tolerance=3) or ""
+                if text.strip():
+                    page_parts.append(text.strip())
+                for table in page.extract_tables():
+                    rows = [
+                        " | ".join(str(c or "").strip() for c in row)
+                        for row in table if any(c and str(c).strip() for c in row)
+                    ]
+                    if rows:
+                        page_parts.append("\n".join(rows))
+                if page_parts:
+                    parts.append("\n\n".join(page_parts))
+    except Exception as e:
+        print(f"extract_pdf_text error: {e}")
+    return "\n\n".join(parts)
+
+
+def extract_docx_text(file_bytes: bytes) -> str:
+    from docx import Document
+    doc = Document(io.BytesIO(file_bytes))
+    parts = [p.text for p in doc.paragraphs if p.text.strip()]
+    for table in doc.tables:
+        for row in table.rows:
+            line = " | ".join(c.text.strip() for c in row.cells)
+            if line.strip():
+                parts.append(line)
+    return "\n".join(parts)
+
+
+def extract_xlsx_text(file_bytes: bytes) -> str:
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+    parts = []
+    for sheet in wb.worksheets:
+        parts.append(f"[Feuille : {sheet.title}]")
+        for row in sheet.iter_rows(values_only=True):
+            cells = [str(c) if c is not None else "" for c in row]
+            if any(c.strip() for c in cells):
+                parts.append(" | ".join(cells))
+    wb.close()
+    return "\n".join(parts)
+
+
+def extract_pptx_text(file_bytes: bytes) -> str:
+    from pptx import Presentation
+    prs = Presentation(io.BytesIO(file_bytes))
+    parts = []
+    for i, slide in enumerate(prs.slides, 1):
+        parts.append(f"[Slide {i}]")
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for para in shape.text_frame.paragraphs:
+                    if para.text.strip():
+                        parts.append(para.text)
+    return "\n".join(parts)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -531,34 +644,15 @@ async def index_source(body: dict):
 
     text_content = content
 
-    # PDF base64 → extract text via Claude (native PDF support)
+    # PDF base64 → extract text locally via pdfplumber
     if text_content.startswith("__PDF_BASE64__"):
         pdf_b64 = text_content[len("__PDF_BASE64__"):]
         try:
-            pdf_response = claude.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=4000,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "document",
-                            "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64},
-                        },
-                        {
-                            "type": "text",
-                            "text": (
-                                "Extrais tout le texte de ce document de manière fidèle et complète. "
-                                "Inclus les titres, sous-titres, tableaux (format texte), listes et corps de texte. "
-                                "Ne résume pas — retranscris le contenu intégral."
-                            ),
-                        },
-                    ],
-                }],
-            )
-            text_content = pdf_response.content[0].text if pdf_response.content else ""
+            pdf_bytes_data = base64.b64decode(pdf_b64)
+            loop = asyncio.get_running_loop()
+            text_content = await loop.run_in_executor(None, extract_pdf_text, pdf_bytes_data)
             if not text_content.strip():
-                raise ValueError("Extraction PDF vide")
+                raise ValueError("Extraction PDF vide — aucun texte détecté")
         except Exception as e:
             return JSONResponse({"error": f"Extraction PDF échouée : {e}"}, status_code=502)
 
@@ -714,30 +808,15 @@ async def sync_drive(body: dict, request: Request):
             for f, result in zip(batch, results):
                 processed += 1
                 if result is None:
-                    yield f"data: {json.dumps({'file': f['name'], 'status': 'skipped', 'progress': processed, 'total': total})}\n\n"
+                    yield f"data: {json.dumps({'file': f['name'], 'mimeType': f['mimeType'], 'status': 'skipped', 'progress': processed, 'total': total})}\n\n"
                     continue
 
                 try:
                     content = result["content"]
 
-                    # PDF : extract text via Claude (same as index_source)
-                    if content.startswith("__PDF_BASE64__"):
-                        pdf_b64 = content[len("__PDF_BASE64__"):]
-                        pdf_resp = await loop.run_in_executor(
-                            None,
-                            lambda b=pdf_b64: claude.messages.create(
-                                model="claude-sonnet-4-6",
-                                max_tokens=4000,
-                                messages=[{"role": "user", "content": [
-                                    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b}},
-                                    {"type": "text", "text": "Extrais tout le texte de ce document de manière fidèle et complète. Inclus les titres, sous-titres, tableaux (format texte), listes et corps de texte. Ne résume pas — retranscris le contenu intégral."},
-                                ]}],
-                            )
-                        )
-                        content = pdf_resp.content[0].text if pdf_resp.content else ""
-                        if not content.strip():
-                            yield f"data: {json.dumps({'file': f['name'], 'status': 'empty', 'progress': processed, 'total': total})}\n\n"
-                            continue
+                    if not content.strip():
+                        yield f"data: {json.dumps({'file': f['name'], 'status': 'empty', 'progress': processed, 'total': total})}\n\n"
+                        continue
 
                     is_csv = result["type"] == "csv"
                     chunks = chunk_csv(content) if is_csv else chunk_text(content)
