@@ -190,13 +190,15 @@ _OFFICE_MIME = {
 }
 
 
-def export_drive_file(drive, file_id: str, file_name: str, mime_type: str) -> Optional[dict]:
+def export_drive_file(file_id: str, file_name: str, mime_type: str) -> Optional[dict]:
     """
     Downloads and extracts a Drive file to plain text.
-    Supports: Google Workspace (Sheets/Docs/Slides), PDF, Word, Excel, PowerPoint, plain text/CSV.
+    Creates its own Drive service — safe for concurrent calls from multiple threads.
     Returns None for unsupported types (images, videos, etc.).
     """
     try:
+        drive, _ = get_drive_service()
+
         # Google Workspace → export as text
         if mime_type == "application/vnd.google-apps.spreadsheet":
             req = drive.files().export_media(fileId=file_id, mimeType="text/csv")
@@ -448,7 +450,7 @@ async def read_drive_folder(body: dict):
     results = []
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = {
-            executor.submit(export_drive_file, drive, f["id"], f["name"], f["mimeType"]): f
+            executor.submit(export_drive_file, f["id"], f["name"], f["mimeType"]): f
             for f in all_files[:200]
         }
         for future in as_completed(futures):
@@ -496,12 +498,7 @@ async def export_single_file(body: dict):
     if not file_id or not mime_type:
         return JSONResponse({"error": "file_id et mime_type requis"}, status_code=400)
 
-    try:
-        drive, _ = get_drive_service()
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-    result = export_drive_file(drive, file_id, file_name, mime_type)
+    result = export_drive_file(file_id, file_name, mime_type)
     if not result:
         return JSONResponse(
             {"error": f"Type de fichier non supporté ou export échoué : {mime_type}"},
@@ -763,7 +760,7 @@ async def sync_drive(body: dict, request: Request):
             batch = files_to_process[i:i + BATCH_SIZE]
 
             results = await asyncio.gather(*[
-                loop.run_in_executor(None, export_drive_file, drive, f["id"], f["name"], f["mimeType"])
+                loop.run_in_executor(None, export_drive_file, f["id"], f["name"], f["mimeType"])
                 for f in batch
             ])
 
