@@ -1125,7 +1125,7 @@ async function regenerateBrief() {
 }
 
 
-async function syncSource(idx){
+async function syncSource(idx, {resume = false, retried = false} = {}){
   if (_indexingInProgress) {
     addMsg('a', '⏳ Une indexation est déjà en cours, réessaie dans quelques secondes.');
     return;
@@ -1156,7 +1156,7 @@ async function syncSource(idx){
       const resp = await fetch(BACKEND_URL, {
         method: 'POST',
         headers: BACKEND_HEADERS,
-        body: JSON.stringify({action:'sync_drive', folder_id:folderId, client_id:syncClientId}),
+        body: JSON.stringify({action:'sync_drive', folder_id:folderId, client_id:syncClientId, resume}),
       });
       if(!resp.ok){
         const d = await resp.json().catch(()=>({}));
@@ -1165,7 +1165,7 @@ async function syncSource(idx){
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
-      let syncTotal = 0, syncErrors = 0;
+      let syncOk = 0, syncCached = 0, syncErrors = 0, syncTotal = 0, syncDone = false;
       outer: while(true){
         const {done, value} = await reader.read();
         if(done) break;
@@ -1173,13 +1173,28 @@ async function syncSource(idx){
         for(const line of text.split('\n')){
           if(!line.startsWith('data: ')) continue;
           let ev; try{ ev = JSON.parse(line.slice(6)); }catch(_){ continue; }
-          if(ev.status === 'done'){ syncTotal = ev.total; syncErrors = ev.errors; break outer; }
+          if(ev.status === 'heartbeat') continue;
+          if(ev.status === 'done'){
+            syncTotal = ev.total; syncErrors = ev.errors ?? syncErrors;
+            syncOk = ev.ok ?? syncOk; syncCached = ev.cached ?? syncCached;
+            syncDone = true; break outer;
+          }
+          if(ev.status === 'ok') syncOk++;
+          if(ev.status === 'cached') syncCached++;
+          if(ev.status === 'error') syncErrors++;
           if(ev.progress != null) setSyncProgress(ev.progress, ev.total);
         }
       }
       setSyncProgress(null, null);
 
-      const indexedCount = syncTotal - syncErrors;
+      // Connexion coupée avant done — reprise automatique une fois si on a du progrès
+      if(!syncDone && !retried && (syncOk + syncCached) > 0){
+        addMsg('a', `⚡ Connexion interrompue (${syncOk} indexé(s)). Reprise automatique…`);
+        _indexingInProgress = false;
+        return syncSource(idx, {resume: true, retried: true});
+      }
+
+      const indexedCount = syncOk + syncCached;
       s.status = 'ok';
       s.last_synced_at = new Date().toISOString();
       s.folder_id = folderId;
@@ -1188,7 +1203,8 @@ async function syncSource(idx){
       setSources(srcs);
       await sb.from('clients').update({drive_folder_id:folderId, sources:cur.sources, members:cur.members}).eq('id',cur.id);
       cur.drive_folder_id = folderId; addSession(cur);
-      addMsg('a', `✓ ${indexedCount} document(s) indexé(s)${syncErrors ? ` (${syncErrors} erreur(s))` : ''}.`);
+      const cachedNote = syncCached > 0 ? `, ${syncCached} déjà indexé(s)` : '';
+      addMsg('a', `✓ ${indexedCount} document(s) indexé(s)${cachedNote}${syncErrors ? ` (${syncErrors} erreur(s))` : ''}.`);
 
       // ── Génération de la fiche depuis les chunks déjà en base ──
       if(cur?.id === syncClientId){

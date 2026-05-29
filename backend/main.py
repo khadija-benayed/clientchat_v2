@@ -35,6 +35,9 @@ model: Optional[SentenceTransformer] = None
 # Using the default pool allows concurrent chat + sync_drive → heap corruption.
 _EMBED_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 
+# In-memory sync state — lets the frontend poll progress after an SSE drop.
+_sync_state: dict = {}  # key: f"{client_id}|{folder_id}"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -370,6 +373,9 @@ async def dispatcher(request: Request):
         return await save_to_kb(body)
     if action == "sync_drive":
         return await sync_drive(body, request)
+    if action == "sync_state":
+        key = f"{body.get('client_id')}|{body.get('folder_id')}"
+        return _sync_state.get(key) or JSONResponse({"error": "aucun sync en cours ou récent"}, status_code=404)
     return await chat(body)
 
 
@@ -731,6 +737,7 @@ async def save_to_kb(body: dict):
 async def sync_drive(body: dict, request: Request):
     folder_id = body.get("folder_id")
     client_id = body.get("client_id")
+    resume = body.get("resume", False)
 
     if not folder_id:
         return JSONResponse({"error": "folder_id requis"}, status_code=400)
@@ -750,40 +757,91 @@ async def sync_drive(body: dict, request: Request):
     files_to_process = all_files[:200]
     total = len(files_to_process)
 
+    # Resume: fetch already-indexed source_ids to skip them
+    existing_ids: set = set()
+    if resume and client_id:
+        try:
+            res = sb.table("document_chunks").select("source_id").eq("client_id", client_id).execute()
+            existing_ids = {r["source_id"] for r in (res.data or []) if r.get("source_id")}
+        except Exception as e:
+            print(f"sync_drive resume preload error (non bloquant): {e}")
+
+    state_key = f"{client_id}|{folder_id}"
+    _sync_state[state_key] = {
+        "total": total, "processed": 0, "ok": 0,
+        "cached": 0, "skipped": 0, "errors": 0, "done": False,
+    }
+
     async def generate():
         processed = 0
+        ok = 0
+        cached = 0
+        skipped = 0
         errors = 0
         BATCH_SIZE = 5
         loop = asyncio.get_running_loop()
 
+        def _upd(**kw):
+            _sync_state[state_key].update({"processed": processed, "ok": ok,
+                                           "cached": cached, "errors": errors, **kw})
+
         for i in range(0, total, BATCH_SIZE):
             batch = files_to_process[i:i + BATCH_SIZE]
 
-            results = await asyncio.gather(*[
-                loop.run_in_executor(None, export_drive_file, f["id"], f["name"], f["mimeType"])
-                for f in batch
-            ])
-
-            for f, result in zip(batch, results):
+            # Emit cached events immediately — no download needed
+            for f in [f for f in batch if f["id"] in existing_ids]:
                 processed += 1
+                cached += 1
+                _upd()
+                yield f"data: {json.dumps({'file': f['name'], 'status': 'cached', 'progress': processed, 'total': total})}\n\n"
+
+            to_fetch = [f for f in batch if f["id"] not in existing_ids]
+            if not to_fetch:
+                continue
+
+            # Parallel download with heartbeats every 5 s — prevents QUIC/idle reset
+            futs = [
+                asyncio.ensure_future(loop.run_in_executor(
+                    None, export_drive_file, f["id"], f["name"], f["mimeType"]
+                ))
+                for f in to_fetch
+            ]
+            pending = set(futs)
+            while pending:
+                done_set, pending = await asyncio.wait(pending, timeout=5.0)
+                if pending:
+                    yield f"data: {json.dumps({'status': 'heartbeat', 'progress': processed, 'total': total})}\n\n"
+
+            results = []
+            for fut in futs:
+                try:
+                    results.append(fut.result())
+                except Exception:
+                    results.append(None)
+
+            for f, result in zip(to_fetch, results):
+                processed += 1
+                _upd()
+
                 if result is None:
+                    skipped += 1
                     yield f"data: {json.dumps({'file': f['name'], 'mimeType': f['mimeType'], 'status': 'skipped', 'progress': processed, 'total': total})}\n\n"
                     continue
 
                 try:
                     content = result["content"]
-
                     if not content.strip():
                         yield f"data: {json.dumps({'file': f['name'], 'status': 'empty', 'progress': processed, 'total': total})}\n\n"
                         continue
 
                     is_csv = result["type"] == "csv"
                     chunks = chunk_csv(content) if is_csv else chunk_text(content)
-
                     if not chunks:
                         yield f"data: {json.dumps({'file': f['name'], 'status': 'empty', 'progress': processed, 'total': total})}\n\n"
                         continue
 
+                    # Heartbeat before embedding — embedding can take 5-30 s on large docs
+                    yield f"data: {json.dumps({'status': 'heartbeat', 'progress': processed, 'total': total})}\n\n"
                     embeddings = await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, chunks)
 
                     try:
@@ -808,14 +866,17 @@ async def sync_drive(body: dict, request: Request):
                     } for chunk, emb in zip(chunks, embeddings)]
 
                     sb.table("document_chunks").insert(rows).execute()
-
+                    ok += 1
+                    _upd()
                     yield f"data: {json.dumps({'file': f['name'], 'status': 'ok', 'chunks': len(chunks), 'progress': processed, 'total': total})}\n\n"
 
                 except Exception as e:
                     errors += 1
+                    _upd()
                     yield f"data: {json.dumps({'file': f['name'], 'status': 'error', 'error': str(e), 'progress': processed, 'total': total})}\n\n"
 
-        yield f"data: {json.dumps({'status': 'done', 'total': total, 'errors': errors})}\n\n"
+        _sync_state[state_key]["done"] = True
+        yield f"data: {json.dumps({'status': 'done', 'total': total, 'ok': ok, 'cached': cached, 'errors': errors})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers={
         "Cache-Control": "no-cache",
