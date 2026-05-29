@@ -315,67 +315,79 @@ def _download_bytes(req) -> bytes:
 
 
 def extract_pdf_text(pdf_bytes: bytes) -> str:
-    """Text + tables from PDF bytes via pdfplumber (no API call, no OCR)."""
-    import pdfplumber
+    """Text from PDF bytes via pypdf (pure Python, no C extensions)."""
+    import pypdf
     parts = []
     try:
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            for page in pdf.pages:
-                page_parts = []
-                text = page.extract_text(x_tolerance=3, y_tolerance=3) or ""
-                if text.strip():
-                    page_parts.append(text.strip())
-                for table in page.extract_tables():
-                    rows = [
-                        " | ".join(str(c or "").strip() for c in row)
-                        for row in table if any(c and str(c).strip() for c in row)
-                    ]
-                    if rows:
-                        page_parts.append("\n".join(rows))
-                if page_parts:
-                    parts.append("\n\n".join(page_parts))
+        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+        for page in reader.pages:
+            try:
+                text = page.extract_text(extraction_mode="layout") or ""
+            except Exception:
+                text = page.extract_text() or ""
+            if text.strip():
+                parts.append(text.strip())
     except Exception as e:
         print(f"extract_pdf_text error: {e}")
     return "\n\n".join(parts)
 
 
 def extract_docx_text(file_bytes: bytes) -> str:
-    from docx import Document
-    doc = Document(io.BytesIO(file_bytes))
-    parts = [p.text for p in doc.paragraphs if p.text.strip()]
-    for table in doc.tables:
-        for row in table.rows:
-            line = " | ".join(c.text.strip() for c in row.cells)
-            if line.strip():
-                parts.append(line)
+    """Text from .docx via stdlib zipfile + xml.etree (no lxml, no C extensions)."""
+    import zipfile
+    import xml.etree.ElementTree as ET
+    W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    parts = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
+            if "word/document.xml" not in z.namelist():
+                return ""
+            root = ET.fromstring(z.read("word/document.xml"))
+            for para in root.iter(f"{{{W}}}p"):
+                line = "".join(t.text or "" for t in para.iter(f"{{{W}}}t")).strip()
+                if line:
+                    parts.append(line)
+    except Exception as e:
+        print(f"extract_docx_text error: {e}")
     return "\n".join(parts)
 
 
 def extract_xlsx_text(file_bytes: bytes) -> str:
+    """Text from .xlsx via openpyxl (pure Python, no lxml required)."""
     import openpyxl
-    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
     parts = []
-    for sheet in wb.worksheets:
-        parts.append(f"[Feuille : {sheet.title}]")
-        for row in sheet.iter_rows(values_only=True):
-            cells = [str(c) if c is not None else "" for c in row]
-            if any(c.strip() for c in cells):
-                parts.append(" | ".join(cells))
-    wb.close()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+        for sheet in wb.worksheets:
+            parts.append(f"[Feuille : {sheet.title}]")
+            for row in sheet.iter_rows(values_only=True):
+                cells = [str(c) if c is not None else "" for c in row]
+                if any(c.strip() for c in cells):
+                    parts.append(" | ".join(cells))
+        wb.close()
+    except Exception as e:
+        print(f"extract_xlsx_text error: {e}")
     return "\n".join(parts)
 
 
 def extract_pptx_text(file_bytes: bytes) -> str:
-    from pptx import Presentation
-    prs = Presentation(io.BytesIO(file_bytes))
+    """Text from .pptx via stdlib zipfile + xml.etree (no lxml, no C extensions)."""
+    import zipfile
+    import xml.etree.ElementTree as ET
+    A = "http://schemas.openxmlformats.org/drawingml/2006/main"
     parts = []
-    for i, slide in enumerate(prs.slides, 1):
-        parts.append(f"[Slide {i}]")
-        for shape in slide.shapes:
-            if shape.has_text_frame:
-                for para in shape.text_frame.paragraphs:
-                    if para.text.strip():
-                        parts.append(para.text)
+    try:
+        with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
+            slides = sorted(n for n in z.namelist() if n.startswith("ppt/slides/slide") and n.endswith(".xml"))
+            for i, slide_path in enumerate(slides, 1):
+                parts.append(f"[Slide {i}]")
+                root = ET.fromstring(z.read(slide_path))
+                for para in root.iter(f"{{{A}}}p"):
+                    line = "".join(t.text or "" for t in para.iter(f"{{{A}}}t")).strip()
+                    if line:
+                        parts.append(line)
+    except Exception as e:
+        print(f"extract_pptx_text error: {e}")
     return "\n".join(parts)
 
 
