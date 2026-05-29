@@ -1182,7 +1182,7 @@ async function syncSource(idx, {resume = false, retried = false, incremental = t
           }
           if(ev.status === 'ok') syncOk++;
           if(ev.status === 'cached') syncCached++;
-          if(ev.status === 'error') syncErrors++;
+          if(ev.status === 'error' || ev.status === 'timeout') syncErrors++;
           if(ev.progress != null) setSyncProgress(ev.progress, ev.total);
         }
       }

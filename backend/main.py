@@ -758,24 +758,35 @@ async def sync_drive(body: dict, request: Request):
     files_to_process = all_files[:200]
     total = len(files_to_process)
 
-    # Preload indexed state — always needed for ghost cleanup, also for resume/incremental
+    # Preload indexed state — paginated to bypass PostgREST 1000-row default
     existing_ids: set = set()           # source_ids currently in DB
     indexed_at: dict = {}               # incremental: {source_id: last_indexed datetime}
     if client_id:
         try:
-            res = sb.table("document_chunks").select("source_id, last_indexed_at").eq("client_id", client_id).execute()
-            for r in (res.data or []):
-                sid, lat = r.get("source_id"), r.get("last_indexed_at")
-                if not sid:
-                    continue
-                existing_ids.add(sid)
-                if lat:
-                    try:
-                        dt = datetime.fromisoformat(lat.replace("Z", "+00:00"))
-                        if sid not in indexed_at or dt > indexed_at[sid]:
-                            indexed_at[sid] = dt
-                    except Exception:
-                        pass
+            PAGE = 1000
+            offset = 0
+            while True:
+                res = (sb.table("document_chunks")
+                       .select("source_id, last_indexed_at")
+                       .eq("client_id", client_id)
+                       .range(offset, offset + PAGE - 1)
+                       .execute())
+                rows = res.data or []
+                for r in rows:
+                    sid, lat = r.get("source_id"), r.get("last_indexed_at")
+                    if not sid:
+                        continue
+                    existing_ids.add(sid)
+                    if lat:
+                        try:
+                            dt = datetime.fromisoformat(lat.replace("Z", "+00:00"))
+                            if sid not in indexed_at or dt > indexed_at[sid]:
+                                indexed_at[sid] = dt
+                        except Exception:
+                            pass
+                if len(rows) < PAGE:
+                    break
+                offset += PAGE
         except Exception as e:
             print(f"sync_drive state preload error (non bloquant): {e}")
 
@@ -832,29 +843,45 @@ async def sync_drive(body: dict, request: Request):
             if not to_fetch:
                 continue
 
-            # Parallel download with heartbeats every 5 s — prevents QUIC/idle reset
+            # Parallel download with heartbeats every 5 s + 90 s hard timeout per batch
+            MAX_BATCH_WAIT = 90
             futs = [
                 asyncio.ensure_future(loop.run_in_executor(
                     None, export_drive_file, f["id"], f["name"], f["mimeType"]
                 ))
                 for f in to_fetch
             ]
+            timed_out_ids: set = set()
+            wait_start = loop.time()
             pending = set(futs)
             while pending:
-                done_set, pending = await asyncio.wait(pending, timeout=5.0)
+                elapsed = loop.time() - wait_start
+                if elapsed >= MAX_BATCH_WAIT:
+                    for i, fut in enumerate(futs):
+                        if not fut.done():
+                            fut.cancel()
+                            timed_out_ids.add(to_fetch[i]["id"])
+                    break
+                done_set, pending = await asyncio.wait(pending, timeout=min(5.0, MAX_BATCH_WAIT - elapsed))
                 if pending:
                     yield f"data: {json.dumps({'status': 'heartbeat', 'progress': processed, 'total': total})}\n\n"
 
             results = []
             for fut in futs:
                 try:
-                    results.append(fut.result())
+                    results.append(None if fut.cancelled() else fut.result())
                 except Exception:
                     results.append(None)
 
             for f, result in zip(to_fetch, results):
                 processed += 1
                 _upd()
+
+                if f["id"] in timed_out_ids:
+                    errors += 1
+                    _upd()
+                    yield f"data: {json.dumps({'file': f['name'], 'status': 'timeout', 'progress': processed, 'total': total})}\n\n"
+                    continue
 
                 if result is None:
                     skipped += 1
@@ -873,9 +900,15 @@ async def sync_drive(body: dict, request: Request):
                         yield f"data: {json.dumps({'file': f['name'], 'status': 'empty', 'progress': processed, 'total': total})}\n\n"
                         continue
 
-                    # Heartbeat before embedding — embedding can take 5-30 s on large docs
-                    yield f"data: {json.dumps({'status': 'heartbeat', 'progress': processed, 'total': total})}\n\n"
-                    embeddings = await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, chunks)
+                    # Heartbeat during embedding (same pattern as downloads)
+                    embed_task = asyncio.ensure_future(
+                        loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, chunks)
+                    )
+                    while not embed_task.done():
+                        await asyncio.wait({embed_task}, timeout=5.0)
+                        if not embed_task.done():
+                            yield f"data: {json.dumps({'status': 'heartbeat', 'progress': processed, 'total': total})}\n\n"
+                    embeddings = embed_task.result()
 
                     try:
                         del_q = sb.table("document_chunks").delete()
