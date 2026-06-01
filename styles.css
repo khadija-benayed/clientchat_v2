@@ -843,3 +843,63 @@ select {
 [data-theme="dark"] .ws-hex-bl { opacity: .32; }
 [data-theme="dark"] .ws-hex-r  { opacity: .28; }
 
+/* ── Client Members (section Accès dans settings) ───────────────────────── */
+.members-access-section {
+  margin-top: 22px; padding-top: 18px;
+  border-top: 1px solid var(--brd);
+}
+.section-divider-label {
+  font-size: 11px; font-weight: 700; color: var(--tx3);
+  text-transform: uppercase; letter-spacing: .06em;
+  margin-bottom: 10px;
+}
+.cm-list { display: flex; flex-direction: column; gap: 5px; margin-bottom: 8px; min-height: 20px; }
+.cm-empty { font-size: 12px; color: var(--tx3); font-style: italic; padding: 4px 0; }
+.cm-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px; border-radius: var(--rs);
+  background: var(--sur2); transition: background .12s;
+}
+.cm-row:hover { background: var(--sur3); }
+.cm-avatar {
+  width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+}
+.cm-info { flex: 1; min-width: 0; }
+.cm-name  { font-size: 13px; font-weight: 500; color: var(--tx); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cm-email { font-size: 11px; color: var(--tx3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cm-role-badge {
+  font-size: 10px; font-weight: 700; padding: 2px 7px;
+  border-radius: 10px; flex-shrink: 0; letter-spacing: .03em;
+  text-transform: uppercase;
+}
+.cm-role-badge.owner  { background: rgba(248,155,28,.15); color: #c07a00; }
+.cm-role-badge.member { background: rgba(0,119,155,.10);  color: var(--sb-blue-md); }
+[data-theme="dark"] .cm-role-badge.owner { color: var(--sb-orange); }
+.cm-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; margin-left: 2px; }
+.cm-role-btn {
+  font-size: 11px; padding: 3px 8px; border-radius: var(--rs);
+  border: 1px solid var(--brd2); background: transparent;
+  color: var(--tx3); cursor: pointer; font-family: 'DM Sans', sans-serif;
+  white-space: nowrap; transition: background .12s, color .12s, border-color .12s;
+}
+.cm-role-btn:hover { background: var(--sur); color: var(--tx); border-color: var(--sb-orange); }
+.cm-remove-btn {
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 1px solid var(--brd2); background: transparent;
+  color: var(--tx3); cursor: pointer; font-size: 16px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; transition: background .12s, color .12s, border-color .12s;
+}
+.cm-remove-btn:hover { background: var(--rbg); color: var(--red); border-color: rgba(220,53,69,.35); }
+.cm-add-row {
+  display: flex; gap: 8px; align-items: center; margin-top: 8px;
+}
+.cm-add-row select {
+  flex: 1; font-family: 'DM Sans', sans-serif; font-size: 13px;
+  padding: 7px 10px; border: 1px solid var(--brd2); border-radius: var(--rs);
+  background: var(--sur); color: var(--tx); min-width: 0;
+}
+.cm-add-row .btn-sec { width: auto; padding: 7px 14px; flex-shrink: 0; }
+

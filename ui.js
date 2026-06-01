@@ -917,6 +917,150 @@ function renderTodo(hi=[]){
   if(hadFocus) newSearch.focus();
 }
 
+// ── Client Members ────────────────────────────────────────────────────────────
+function _cmInitials(fullName, email) {
+  const src = fullName || email || '?';
+  const parts = src.trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  return src.slice(0, 2).toUpperCase();
+}
+
+async function renderClientMembers() {
+  const list = $('cm-list');
+  const addRow = $('cm-add-row');
+  const errEl = $('cm-err');
+  if (!list) return;
+
+  list.innerHTML = '<div class="cm-empty">Chargement…</div>';
+  hide('cm-err');
+
+  let data;
+  try {
+    data = await callBackend({action: 'get_client_members', client_id: cur.id});
+  } catch(e) {
+    list.innerHTML = '<div class="cm-empty" style="color:var(--red)">Erreur de chargement.</div>';
+    return;
+  }
+  if (data.error) {
+    list.innerHTML = '<div class="cm-empty" style="color:var(--red)">' + esc(data.error) + '</div>';
+    return;
+  }
+
+  list.innerHTML = '';
+  if (!data.members || !data.members.length) {
+    list.innerHTML = '<div class="cm-empty">Aucun membre assigné.</div>';
+  } else {
+    data.members.forEach(m => {
+      const ini = _cmInitials(m.full_name, m.email);
+      const st = mStyle(ini);
+      const displayName = esc(m.full_name || m.email || 'Utilisateur');
+      const displayEmail = esc(m.email || '');
+
+      const row = document.createElement('div');
+      row.className = 'cm-row';
+      row.innerHTML =
+        `<div class="cm-avatar" style="background:${st.bg};color:${st.c}">${esc(ini)}</div>` +
+        `<div class="cm-info"><div class="cm-name">${displayName}</div><div class="cm-email">${displayEmail}</div></div>` +
+        `<span class="cm-role-badge ${m.role}">${m.role === 'owner' ? 'owner' : 'membre'}</span>`;
+
+      if (data.is_owner) {
+        const actions = document.createElement('div');
+        actions.className = 'cm-actions';
+
+        const roleBtn = document.createElement('button');
+        roleBtn.className = 'cm-role-btn';
+        if (m.role === 'owner') {
+          roleBtn.textContent = '→ membre';
+          roleBtn.title = 'Rétrograder en membre';
+          roleBtn.addEventListener('click', () => setClientMemberRole(m.member_id, 'member'));
+        } else {
+          roleBtn.textContent = '→ owner';
+          roleBtn.title = 'Promouvoir en owner';
+          roleBtn.addEventListener('click', () => setClientMemberRole(m.member_id, 'owner'));
+        }
+
+        const remBtn = document.createElement('button');
+        remBtn.className = 'cm-remove-btn';
+        remBtn.title = 'Retirer ce membre';
+        remBtn.textContent = '×';
+        remBtn.addEventListener('click', () => removeClientMember(m.member_id, m.full_name || m.email));
+
+        actions.appendChild(roleBtn);
+        actions.appendChild(remBtn);
+        row.appendChild(actions);
+      }
+
+      list.appendChild(row);
+    });
+  }
+
+  // Add row — visible seulement pour les owners
+  if (data.is_owner) {
+    const sel = $('cm-add-select');
+    sel.innerHTML = '';
+    const avail = data.available || [];
+    if (!avail.length) {
+      sel.innerHTML = '<option value="">Tous les membres sont assignés</option>';
+      sel.disabled = true;
+    } else {
+      sel.disabled = false;
+      sel.innerHTML = '<option value="">— Sélectionner un membre —</option>';
+      avail.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.full_name || m.email;
+        sel.appendChild(opt);
+      });
+    }
+    show('cm-add-row');
+  } else {
+    hide('cm-add-row');
+  }
+}
+
+async function addClientMember() {
+  const sel = $('cm-add-select');
+  const memberId = sel.value;
+  const errEl = $('cm-err');
+  hide('cm-err');
+  if (!memberId) { showErr('cm-err', 'Sélectionne un membre à ajouter.'); return; }
+
+  const btn = $('cm-add-btn');
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const data = await callBackend({action: 'add_client_member', client_id: cur.id, member_id: memberId, role: 'member'});
+    if (data.error) { showErr('cm-err', data.error); return; }
+    await renderClientMembers();
+  } catch(e) {
+    showErr('cm-err', e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Ajouter';
+  }
+}
+
+async function removeClientMember(memberId, name) {
+  if (!window.confirm('Retirer "' + (name || 'ce membre') + '" de l\'espace ?')) return;
+  hide('cm-err');
+  try {
+    const data = await callBackend({action: 'remove_client_member', client_id: cur.id, member_id: memberId});
+    if (data.error) { showErr('cm-err', data.error); return; }
+    await renderClientMembers();
+  } catch(e) {
+    showErr('cm-err', e.message);
+  }
+}
+
+async function setClientMemberRole(memberId, newRole) {
+  hide('cm-err');
+  try {
+    const data = await callBackend({action: 'set_member_role', client_id: cur.id, member_id: memberId, role: newRole});
+    if (data.error) { showErr('cm-err', data.error); return; }
+    await renderClientMembers();
+  } catch(e) {
+    showErr('cm-err', e.message);
+  }
+}
+
 async function openSettings(){
   if(!cur)return;
   $('stitle').textContent='Paramètres — '+cur.name;
@@ -932,6 +1076,7 @@ async function openSettings(){
   await migrateDriveLegacy();
   renderSources();
   renderBrief();
+  renderClientMembers(); // async, non-bloquant — se peuple en arrière-plan
   openModal('modal-settings');
 }
 

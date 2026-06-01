@@ -186,6 +186,18 @@
     <input type="text" id="m-name" placeholder="Prénom + Nom (Khadija Ben Ayed)"/>
     <button class="btn btn-sec" onclick="addMember()">Ajouter</button>
   </div>
+
+  <!-- Accès membres (client_members + team_members) -->
+  <div class="members-access-section">
+    <div class="section-divider-label">Accès à cet espace</div>
+    <div class="cm-list" id="cm-list"><div class="cm-empty">Chargement…</div></div>
+    <div class="cm-add-row hide" id="cm-add-row">
+      <select id="cm-add-select"></select>
+      <button class="btn btn-sec" id="cm-add-btn" onclick="addClientMember()">Ajouter</button>
+    </div>
+    <div id="cm-err" class="err hide"></div>
+  </div>
+
   <label>Contexte client</label>
   <textarea id="ctx-ta" style="min-height:110px;font-family:'DM Mono',monospace;font-size:12px;margin-bottom:4px" placeholder="Infos clés : secteur, stack, interlocuteurs, enjeux…"></textarea>
   <div class="sources-section">

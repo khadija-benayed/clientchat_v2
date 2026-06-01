@@ -469,6 +469,14 @@ async def dispatcher(request: Request):
         return await delete_source_chunks(body)
     if action == "save_to_kb":
         return await save_to_kb(body)
+    if action == "get_client_members":
+        return await get_client_members(body, user_id)
+    if action == "add_client_member":
+        return await add_client_member(body, user_id)
+    if action == "remove_client_member":
+        return await remove_client_member(body, user_id)
+    if action == "set_member_role":
+        return await set_member_role(body, user_id)
     if action == "sync_drive":
         return await sync_drive(body, request)
     if action == "sync_state":
@@ -857,6 +865,142 @@ async def save_to_kb(body: dict):
         return JSONResponse({"error": str(e)}, status_code=500)
 
     return {"saved": True}
+
+
+# ── client_members helpers ────────────────────────────────────────────────────
+def _is_owner(user_id: Optional[str], client_id: str) -> bool:
+    """Returns True if user_id is an owner of client_id. API-key callers (user_id=None) bypass."""
+    if not user_id:
+        return True
+    r = sb.table("client_members").select("role").eq("client_id", client_id).eq("member_id", user_id).maybe_single().execute()
+    return bool(r.data and r.data.get("role") == "owner")
+
+
+def _count_owners(client_id: str) -> int:
+    r = sb.table("client_members").select("id", count="exact").eq("client_id", client_id).eq("role", "owner").execute()
+    return r.count or 0
+
+
+# ── get_client_members ────────────────────────────────────────────────────────
+async def get_client_members(body: dict, user_id: Optional[str]):
+    client_id = body.get("client_id")
+    if not client_id:
+        return JSONResponse({"error": "client_id requis"}, status_code=400)
+
+    try:
+        rows = (
+            sb.table("client_members")
+            .select("member_id, role, team_members(id, email, full_name)")
+            .eq("client_id", client_id)
+            .execute()
+        )
+        existing_ids: set = set()
+        members = []
+        for row in (rows.data or []):
+            tm = row.get("team_members") or {}
+            members.append({
+                "member_id": row["member_id"],
+                "role": row["role"],
+                "email": tm.get("email", ""),
+                "full_name": tm.get("full_name", ""),
+            })
+            existing_ids.add(row["member_id"])
+
+        all_tm = sb.table("team_members").select("id, email, full_name").execute()
+        available = [
+            {"id": m["id"], "email": m.get("email", ""), "full_name": m.get("full_name", "")}
+            for m in (all_tm.data or [])
+            if m["id"] not in existing_ids
+        ]
+
+        return {
+            "members": members,
+            "available": available,
+            "is_owner": _is_owner(user_id, client_id),
+        }
+    except Exception as e:
+        print(f"get_client_members error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ── add_client_member ─────────────────────────────────────────────────────────
+async def add_client_member(body: dict, user_id: Optional[str]):
+    client_id = body.get("client_id")
+    member_id = body.get("member_id")
+    role = body.get("role", "member")
+
+    if not client_id or not member_id:
+        return JSONResponse({"error": "client_id et member_id requis"}, status_code=400)
+    if role not in ("owner", "member"):
+        return JSONResponse({"error": "role invalide"}, status_code=400)
+    if not _is_owner(user_id, client_id):
+        return JSONResponse({"error": "Seul un owner peut ajouter des membres"}, status_code=403)
+
+    try:
+        sb.table("client_members").upsert(
+            {"client_id": client_id, "member_id": member_id, "role": role},
+            on_conflict="client_id,member_id",
+        ).execute()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    return {"added": True}
+
+
+# ── remove_client_member ──────────────────────────────────────────────────────
+async def remove_client_member(body: dict, user_id: Optional[str]):
+    client_id = body.get("client_id")
+    member_id = body.get("member_id")
+
+    if not client_id or not member_id:
+        return JSONResponse({"error": "client_id et member_id requis"}, status_code=400)
+    if not _is_owner(user_id, client_id):
+        return JSONResponse({"error": "Seul un owner peut retirer des membres"}, status_code=403)
+
+    # Guard: don't remove last owner
+    target = (
+        sb.table("client_members").select("role")
+        .eq("client_id", client_id).eq("member_id", member_id)
+        .maybe_single().execute()
+    )
+    if target.data and target.data.get("role") == "owner" and _count_owners(client_id) <= 1:
+        return JSONResponse({"error": "Impossible de retirer le dernier owner"}, status_code=400)
+
+    try:
+        sb.table("client_members").delete().eq("client_id", client_id).eq("member_id", member_id).execute()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    return {"removed": True}
+
+
+# ── set_member_role ───────────────────────────────────────────────────────────
+async def set_member_role(body: dict, user_id: Optional[str]):
+    client_id = body.get("client_id")
+    member_id = body.get("member_id")
+    role = body.get("role")
+
+    if not client_id or not member_id or role not in ("owner", "member"):
+        return JSONResponse({"error": "client_id, member_id et role (owner|member) requis"}, status_code=400)
+    if not _is_owner(user_id, client_id):
+        return JSONResponse({"error": "Seul un owner peut modifier les rôles"}, status_code=403)
+
+    # Guard: don't demote last owner
+    if role == "member":
+        current = (
+            sb.table("client_members").select("role")
+            .eq("client_id", client_id).eq("member_id", member_id)
+            .maybe_single().execute()
+        )
+        if current.data and current.data.get("role") == "owner" and _count_owners(client_id) <= 1:
+            return JSONResponse({"error": "Impossible de rétrograder le dernier owner"}, status_code=400)
+
+    try:
+        sb.table("client_members").update({"role": role}).eq("client_id", client_id).eq("member_id", member_id).execute()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    return {"updated": True}
 
 
 # ── sync_drive ────────────────────────────────────────────────────────────────
