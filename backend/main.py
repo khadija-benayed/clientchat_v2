@@ -105,7 +105,9 @@ async def auth_middleware(request: Request, call_next):
 # ── Environment variables ─────────────────────────────────────────────────────
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
-GOOGLE_API_KEY = os.environ["GOOGLE_API_KEY"]
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+if not GOOGLE_API_KEY:
+    print("WARNING: GOOGLE_API_KEY not set — Gemini calls will fail")
 GOOGLE_SA_KEY = os.environ.get("GOOGLE_SA_KEY")  # JSON string
 API_KEY = os.environ.get("API_KEY", "")
 if not API_KEY:
