@@ -204,25 +204,22 @@ function initLoginScene() {
   const flSvg = document.getElementById('ln-flower-svg');
   if (flSvg) {
     const fr = 9, fd = fr * 1.73;
-    // Points d'un hexagone centré en (0,0)
-    const localPts = Array.from({length:6}, (_, k) => {
-      const ka = Math.PI/3*k + Math.PI/6;
-      return `${(fr*Math.cos(ka)).toFixed(1)},${(fr*Math.sin(ka)).toFixed(1)}`;
-    }).join(' ');
     let fh = '';
     for (let i = 0; i < 6; i++) {
       const a = Math.PI/3*i + Math.PI/6;
-      const fcx = (Math.cos(a)*fd).toFixed(1), fcy = (Math.sin(a)*fd).toFixed(1);
-      const delay = (i * .065).toFixed(3);
-      // Le <g> translate le système de coordonnées au centre du pétale :
-      // scale(0) sur le <g> scale depuis ce centre, pas depuis (0,0) du SVG
-      fh += `<g transform="translate(${fcx},${fcy})" style="animation:lnHexIn .4s ${delay}s cubic-bezier(.34,1.56,.64,1) both">
-        <polygon points="${localPts}" fill="rgba(194,226,245,.18)" stroke="rgba(194,226,245,.4)" stroke-width=".8"/>
-      </g>`;
+      const pts = Array.from({length:6}, (_, k) => {
+        const ka = Math.PI/3*k + Math.PI/6;
+        return `${(Math.cos(a)*fd + fr*Math.cos(ka)).toFixed(1)},${(Math.sin(a)*fd + fr*Math.sin(ka)).toFixed(1)}`;
+      }).join(' ');
+      fh += `<polygon points="${pts}" fill="rgba(194,226,245,.18)" stroke="rgba(194,226,245,.4)" stroke-width=".8"
+        style="animation:lnHexIn .45s ${(i*.065).toFixed(3)}s cubic-bezier(.34,1.56,.64,1) both"/>`;
     }
-    fh += `<g style="animation:lnHexIn .4s .39s cubic-bezier(.34,1.56,.64,1) both">
-      <polygon points="${localPts}" fill="#F89B1C" opacity=".95"/>
-    </g>`;
+    const cp = Array.from({length:6}, (_, k) => {
+      const ka = Math.PI/3*k + Math.PI/6;
+      return `${(fr*Math.cos(ka)).toFixed(1)},${(fr*Math.sin(ka)).toFixed(1)}`;
+    }).join(' ');
+    fh += `<polygon points="${cp}" fill="#F89B1C" opacity=".95"
+      style="animation:lnHexIn .45s .39s cubic-bezier(.34,1.56,.64,1) both"/>`;
     flSvg.innerHTML = fh;
     if (!document.getElementById('ln-kf')) {
       const s = document.createElement('style'); s.id = 'ln-kf';
@@ -257,10 +254,10 @@ function initLoginScene() {
   let excited = false;
   let wingPhase = 0;
 
-  const BM = 70; // border margin px
+  const BM = 50; // border margin px
   function pickTarget() {
     targetX = BM + Math.random() * (W - BM * 2);
-    targetY = H * .06 + Math.random() * H * .30; // haut 6%–36% de l'écran
+    targetY = BM + Math.random() * (H - BM * 2);
     targetAge = 1400 + Math.random() * 2200;
   }
   pickTarget();
@@ -299,15 +296,14 @@ function initLoginScene() {
     const spd = Math.sqrt(vx * vx + vy * vy);
     const maxSpd = excited ? 8 : 5;
     if (spd > maxSpd) { vx = vx / spd * maxSpd; vy = vy / spd * maxSpd; }
-    // Bounds — réfléchir la vélocité pour éviter de coller aux murs
-    const maxY = H * .42;
+    // Bounds — réfléchir la vélocité aux quatre murs
     const nx = bx + vx, ny = by + vy;
-    if (nx < BM)       { vx =  Math.abs(vx) * .45; pickTarget(); }
-    else if (nx > W - BM) { vx = -Math.abs(vx) * .45; pickTarget(); }
-    if (ny < 40)       { vy =  Math.abs(vy) * .45; pickTarget(); }
-    else if (ny > maxY)   { vy = -Math.abs(vy) * .45; pickTarget(); }
+    if (nx < BM)        { vx =  Math.abs(vx) * .45; pickTarget(); }
+    else if (nx > W - BM)  { vx = -Math.abs(vx) * .45; pickTarget(); }
+    if (ny < BM)        { vy =  Math.abs(vy) * .45; pickTarget(); }
+    else if (ny > H - BM)  { vy = -Math.abs(vy) * .45; pickTarget(); }
     bx = Math.max(BM, Math.min(W - BM, nx));
-    by = Math.max(40, Math.min(maxY, ny));
+    by = Math.max(BM, Math.min(H - BM, ny));
 
     // Position bee element
     bee.style.transform = `translate(${(bx - 22).toFixed(1)}px,${(by - 22).toFixed(1)}px)`;

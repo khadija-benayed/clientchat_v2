@@ -140,7 +140,7 @@ body {
 
 /* Abeille libre */
 .ln-bee {
-  position: absolute; z-index: 8; pointer-events: none;
+  position: absolute; top: 0; left: 0; z-index: 8; pointer-events: none;
   will-change: transform; opacity: 0;
   transition: opacity .6s 1s;
 }
