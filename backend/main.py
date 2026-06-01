@@ -1,3 +1,4 @@
+# LLM chat/résumés : Gemini | PDF Vision : Claude Haiku (extract_worker.py)
 import asyncio
 import base64
 import io
@@ -21,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from sentence_transformers import SentenceTransformer
 from supabase import create_client, Client
-import anthropic
+import google.generativeai as genai
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -104,27 +105,37 @@ async def auth_middleware(request: Request, call_next):
 # ── Environment variables ─────────────────────────────────────────────────────
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
-ANTHROPIC_KEY = os.environ["ANTHROPIC_KEY"]
+GOOGLE_API_KEY = os.environ["GOOGLE_API_KEY"]
 GOOGLE_SA_KEY = os.environ.get("GOOGLE_SA_KEY")  # JSON string
 API_KEY = os.environ.get("API_KEY", "")
 if not API_KEY:
     print("WARNING: API_KEY not set — authentication check disabled")
 
 sb: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-claude = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+genai.configure(api_key=GOOGLE_API_KEY)
+
+# ── Gemini model IDs ──────────────────────────────────────────────────────────
+GEMINI_FLASH = "gemini-2.0-flash"
+GEMINI_PRO = "gemini-1.5-pro"
 
 # ── Cost calculation ──────────────────────────────────────────────────────────
-_RATES: dict[str, tuple[float, float]] = {
-    "claude-sonnet-4-6": (0.000003, 0.000015),
-    "claude-haiku-4-5-20251001": (0.00000025, 0.00000125),
+GEMINI_PRICING: dict[str, dict[str, float]] = {
+    GEMINI_FLASH: {
+        "input": 0.075 / 1_000_000,
+        "output": 0.30 / 1_000_000,
+    },
+    GEMINI_PRO: {
+        "input": 1.25 / 1_000_000,
+        "output": 5.00 / 1_000_000,
+    },
 }
 
 
 def calculate_cost(model_id: str, usage: Optional[dict]) -> float:
     if not usage:
         return 0.0
-    in_rate, out_rate = _RATES.get(model_id, _RATES["claude-sonnet-4-6"])
-    return usage.get("input_tokens", 0) * in_rate + usage.get("output_tokens", 0) * out_rate
+    rates = GEMINI_PRICING.get(model_id, GEMINI_PRICING[GEMINI_FLASH])
+    return usage.get("input_tokens", 0) * rates["input"] + usage.get("output_tokens", 0) * rates["output"]
 
 
 # ── Embedding (local, zero timeout) ──────────────────────────────────────────
@@ -570,20 +581,23 @@ async def summarize_session(body: dict):
         for m in history
     )
 
-    response = claude.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=600,
-        system="Tu es un assistant qui résume des sessions de travail de manière factuelle et concise. Tu reçois un historique de conversation et tu produis un résumé structuré.",
-        messages=[{
-            "role": "user",
-            "content": (
-                "Résume cette session en 5 points max : décisions prises, infos importantes, "
-                "actions à faire. Format : liste à tirets, sois factuel et concis. Ne mets pas de titre.\n\n"
-                "Session :\n" + history_text
+    try:
+        gemini = genai.GenerativeModel(
+            model_name=GEMINI_FLASH,
+            system_instruction=(
+                "Tu es un assistant qui résume des sessions de travail de manière factuelle et concise. "
+                "Tu reçois un historique de conversation et tu produis un résumé structuré."
             ),
-        }],
-    )
-    summary_text = response.content[0].text if response.content else ""
+            generation_config={"max_output_tokens": 600},
+        )
+        response = gemini.generate_content(
+            "Résume cette session en 5 points max : décisions prises, infos importantes, "
+            "actions à faire. Format : liste à tirets, sois factuel et concis. Ne mets pas de titre.\n\n"
+            "Session :\n" + history_text
+        )
+        summary_text = response.text
+    except Exception as e:
+        return JSONResponse({"error": f"Erreur IA (résumé) : {e}"}, status_code=502)
 
     try:
         sb.table("session_summaries").insert({"client_id": client_id, "summary_text": summary_text}).execute()
@@ -702,7 +716,7 @@ async def generate_brief(body: dict):
             {"error": "client_id et docs_content (array non vide) requis"}, status_code=400
         )
 
-    TOKEN_BUDGET = 96_000  # ~24k tokens — fits 15-20 docs in Sonnet 4.6 200k window
+    TOKEN_BUDGET = 96_000  # ~24k tokens — fits 15-20 docs in Gemini Pro 1M window
     total_chars = 0
     doc_blocks = []
     for doc in docs_content:
@@ -725,21 +739,25 @@ async def generate_brief(body: dict):
         "Documents :\n\n" + docs_text
     )
 
-    response = claude.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1000,
-        messages=[{"role": "user", "content": brief_prompt}],
-    )
-    raw_text = response.content[0].text if response.content else ""
+    try:
+        gemini = genai.GenerativeModel(
+            model_name=GEMINI_PRO,
+            generation_config={"max_output_tokens": 1000},
+        )
+        response = gemini.generate_content(brief_prompt)
+        raw_text = response.text
+    except Exception as e:
+        return JSONResponse({"error": f"Erreur IA (brief) : {e}"}, status_code=502)
+
     cleaned = re.sub(r"^```(?:json)?\s*", "", raw_text, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s*```\s*$", "", cleaned).strip()
 
     try:
         brief = json.loads(cleaned)
     except Exception:
-        print(f"generate_brief: JSON invalide reçu de Claude : {raw_text[:200]}")
+        print(f"generate_brief: JSON invalide reçu de Gemini : {raw_text[:200]}")
         return JSONResponse(
-            {"error": "Génération échouée — Claude n'a pas retourné un JSON valide. Réessaie."},
+            {"error": "Génération échouée — Gemini n'a pas retourné un JSON valide. Réessaie."},
             status_code=422,
         )
 
@@ -1303,24 +1321,25 @@ async def sync_drive(body: dict, request: Request):
 
 
 # ── summarize_with_llm ───────────────────────────────────────────────────────
-# NOTE: Function intentionally isolated to facilitate a future swap from
-# Anthropic/Haiku to Gemini Flash when the migration occurs — only this
-# function needs to change, not the caller.
 def summarize_with_llm(text: str) -> str:
-    """Summarize email thread text. Returns 'SKIP' if no business info found."""
-    response = claude.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=400,
-        system=(
-            "Tu es un assistant qui extrait les informations métier d'échanges email.\n"
-            "Extrait UNIQUEMENT : décisions prises, chiffres clés, engagements pris, points bloquants, actions à faire.\n"
-            "Format : liste à tirets, 5 points max, sois factuel.\n"
-            "Ne mentionne jamais les noms des expéditeurs ni les adresses email.\n"
-            "Si le thread ne contient aucune information métier pertinente, réponds uniquement : SKIP"
-        ),
-        messages=[{"role": "user", "content": text}],
-    )
-    return response.content[0].text.strip() if response.content else "SKIP"
+    """Summarize email thread text via Gemini Flash. Returns 'SKIP' if no business info found."""
+    try:
+        gemini = genai.GenerativeModel(
+            model_name=GEMINI_FLASH,
+            system_instruction=(
+                "Tu es un assistant qui extrait les informations métier d'échanges email.\n"
+                "Extrait UNIQUEMENT : décisions prises, chiffres clés, engagements pris, points bloquants, actions à faire.\n"
+                "Format : liste à tirets, 5 points max, sois factuel.\n"
+                "Ne mentionne jamais les noms des expéditeurs ni les adresses email.\n"
+                "Si le thread ne contient aucune information métier pertinente, réponds uniquement : SKIP"
+            ),
+            generation_config={"max_output_tokens": 400},
+        )
+        response = gemini.generate_content(text)
+        return response.text.strip() if response.candidates else "SKIP"
+    except Exception as e:
+        print(f"summarize_with_llm error: {e}")
+        return "SKIP"
 
 
 # ── sync_emails ───────────────────────────────────────────────────────────────
@@ -1452,7 +1471,7 @@ async def sync_emails(body: dict, request: Request):
                     yield f"data: {json.dumps({'thread_id': thread_id, 'subject': subject, 'status': 'skipped', 'progress': processed, 'total': total})}\n\n"
                     continue
 
-                # Résumer via LLM avec heartbeat (fonction isolée pour swap futur Gemini)
+                # Résumer via Gemini Flash avec heartbeat
                 summarize_task = asyncio.ensure_future(
                     loop.run_in_executor(None, summarize_with_llm, thread_text)
                 )
@@ -1525,8 +1544,8 @@ async def chat(body: dict, user_id: Optional[str] = None):
     file_data = body.get("file")
     message_type = body.get("message_type", "chat")
 
-    # task_action → Haiku + 1500 tokens; chat → Sonnet + 5000 tokens
-    chat_model = "claude-haiku-4-5-20251001" if message_type == "task_action" else "claude-sonnet-4-6"
+    # Both task_action and chat use Gemini Flash; only generate_brief uses Pro
+    chat_model = GEMINI_FLASH
     max_tokens = 1500 if message_type == "task_action" else 5000
 
     # RAG pipeline
@@ -1598,7 +1617,17 @@ async def chat(body: dict, user_id: Optional[str] = None):
             print(f"RAG pipeline error (non bloquant): {e}")
             print(traceback.format_exc())
 
-    # Build user content — multimodal if file attached
+    # Build history for Gemini — "u"→"user", "a"→"model"; must start with user
+    raw_hist = list(chat_history)
+    while raw_hist and raw_hist[0]["role"] == "a":
+        raw_hist.pop(0)
+
+    history_contents = [
+        {"role": "user" if m["role"] == "u" else "model", "parts": [m["text"]]}
+        for m in raw_hist
+    ]
+
+    # Build current user message parts — multimodal if file attached
     system_final = system_with_rag
     if file_data and file_data.get("data") and file_data.get("mediaType"):
         allowed_types = ["application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp"]
@@ -1611,35 +1640,31 @@ async def chat(body: dict, user_id: Optional[str] = None):
             "\n\nL'utilisateur t'a partagé un fichier. Extrais les informations clés : "
             "type de document, points importants, données chiffrées, actions suggérées."
         )
-        file_block = (
-            {"type": "document", "source": {"type": "base64", "media_type": file_data["mediaType"], "data": file_data["data"]}}
-            if file_data["mediaType"] == "application/pdf"
-            else {"type": "image", "source": {"type": "base64", "media_type": file_data["mediaType"], "data": file_data["data"]}}
-        )
-        user_content = [file_block, {"type": "text", "text": message or "Analyse ce fichier."}]
+        current_parts = [
+            {"inline_data": {"mime_type": file_data["mediaType"], "data": file_data["data"]}},
+            message or "Analyse ce fichier.",
+        ]
     else:
-        user_content = message
+        current_parts = [message]
 
-    # Build multi-turn messages — history must start with user
-    raw_hist = list(chat_history)
-    while raw_hist and raw_hist[0]["role"] == "a":
-        raw_hist.pop(0)
+    contents = history_contents + [{"role": "user", "parts": current_parts}]
 
-    messages_for_claude = [
-        {"role": "user" if m["role"] == "u" else "assistant", "content": m["text"]}
-        for m in raw_hist
-    ] + [{"role": "user", "content": user_content}]
+    try:
+        gemini = genai.GenerativeModel(
+            model_name=chat_model,
+            system_instruction=system_final,
+            generation_config={"max_output_tokens": max_tokens},
+        )
+        response = gemini.generate_content(contents)
+        text = response.text
+    except Exception as e:
+        print(f"chat Gemini error: {e}")
+        return JSONResponse({"error": f"Erreur IA : {e}"}, status_code=502)
 
-    response = claude.messages.create(
-        model=chat_model,
-        max_tokens=max_tokens,
-        system=system_final,
-        messages=messages_for_claude,
-    )
-
+    usage_meta = response.usage_metadata
     usage = {
-        "input_tokens": response.usage.input_tokens,
-        "output_tokens": response.usage.output_tokens,
+        "input_tokens": usage_meta.prompt_token_count if usage_meta else 0,
+        "output_tokens": usage_meta.candidates_token_count if usage_meta else 0,
     }
 
     # Log usage — non-blocking
@@ -1658,5 +1683,4 @@ async def chat(body: dict, user_id: Optional[str] = None):
     except Exception as e:
         print(f"usage_logs insert error (non bloquant): {e}")
 
-    text = response.content[0].text if response.content else ""
     return {"text": text, "sources_used": sources_used}
