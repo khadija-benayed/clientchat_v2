@@ -7,8 +7,10 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import traceback
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -50,11 +52,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+ALLOWED_ORIGIN = "https://khadija-benayed.github.io"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[ALLOWED_ORIGIN],
+    allow_methods=["POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Api-Key"],
 )
 
 
@@ -62,9 +66,12 @@ app.add_middleware(
 async def require_api_key(request: Request, call_next):
     if request.method == "OPTIONS" or request.url.path == "/health":
         return await call_next(request)
-    cors = {"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*"}
+    cors = {"Access-Control-Allow-Origin": ALLOWED_ORIGIN, "Access-Control-Allow-Headers": "Content-Type, X-Api-Key"}
     if API_KEY and request.headers.get("X-Api-Key") != API_KEY:
         return JSONResponse({"error": "unauthorized"}, status_code=401, headers=cors)
+    ip = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(ip):
+        return JSONResponse({"error": "rate limit exceeded"}, status_code=429, headers=cors)
     try:
         return await call_next(request)
     except Exception as e:
@@ -103,6 +110,38 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         raise RuntimeError("Model not loaded")
     embeddings = model.encode(texts, normalize_embeddings=True)
     return embeddings.tolist()
+
+
+# ── Supabase retry ───────────────────────────────────────────────────────────
+def _sb_insert(table: str, rows: list, max_attempts: int = 3) -> None:
+    """Insert rows with up to max_attempts retries on transient network errors."""
+    for attempt in range(max_attempts):
+        try:
+            sb.table(table).insert(rows).execute()
+            return
+        except Exception:
+            if attempt < max_attempts - 1:
+                time.sleep(attempt + 1)  # 1s, 2s
+            else:
+                raise
+
+
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+_rate_lock = threading.Lock()
+_rate_buckets: dict = defaultdict(list)
+RATE_LIMIT = 60  # requests per minute per IP
+
+
+def _check_rate_limit(key: str) -> bool:
+    now = time.time()
+    cutoff = now - 60
+    with _rate_lock:
+        bucket = [t for t in _rate_buckets[key] if t > cutoff]
+        if len(bucket) >= RATE_LIMIT:
+            return False
+        bucket.append(now)
+        _rate_buckets[key] = bucket
+        return True
 
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
@@ -154,17 +193,30 @@ def chunk_text(text: str, max_chars: int = 400, overlap: int = 80) -> list[str]:
     return chunks if chunks else [normalized[:max_chars]]
 
 
-def chunk_csv(text: str, lines_per_chunk: int = 5) -> list[str]:
-    """Chunks CSV by row groups, repeating the header in every chunk."""
-    lines = text.split("\n")
+def chunk_csv(text: str, max_chars: int = 500) -> list[str]:
+    """
+    Chunks CSV with header repeated, capped at max_chars to fit MiniLM's 128-token limit.
+    Wide sheets (many columns) → fewer rows per chunk; narrow sheets → more rows per chunk.
+    """
+    lines = [l for l in text.split("\n") if l.strip()]
     if len(lines) <= 1:
-        return [lines[0]] if lines[0] else []
-    header = lines[0]
+        return lines
+    header = lines[0][:max_chars - 50]  # truncate pathologically wide headers
+    budget = max(50, max_chars - len(header) - 1)
     chunks: list[str] = []
-    for i in range(1, len(lines), lines_per_chunk):
-        block = [l for l in lines[i : i + lines_per_chunk] if l.strip()]
-        if block:
-            chunks.append(header + "\n" + "\n".join(block))
+    current_rows: list[str] = []
+    current_len = 0
+    for line in lines[1:]:
+        row = line if len(line) <= budget else line[:budget]
+        row_len = len(row) + 1
+        if current_rows and current_len + row_len > budget:
+            chunks.append(header + "\n" + "\n".join(current_rows))
+            current_rows = []
+            current_len = 0
+        current_rows.append(row)
+        current_len += row_len
+    if current_rows:
+        chunks.append(header + "\n" + "\n".join(current_rows))
     return chunks
 
 
@@ -204,10 +256,28 @@ def export_drive_file(file_id: str, file_name: str, mime_type: str) -> Optional[
 
         # Google Workspace → export as text
         if mime_type == "application/vnd.google-apps.spreadsheet":
-            req = drive.files().export_media(fileId=file_id, mimeType="text/csv")
-            content = _download_bytes(req).decode("utf-8", errors="replace")[:20_000]
+            import io
+            import openpyxl
+            req = drive.files().export_media(
+                fileId=file_id,
+                mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            raw = _download_bytes(req)
+            wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+            parts = []
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                rows = []
+                for row in ws.iter_rows(values_only=True):
+                    cells = [str(c) if c is not None else "" for c in row]
+                    if any(cells):
+                        rows.append("\t".join(cells))
+                if rows:
+                    parts.append(f"=== {sheet_name} ===\n" + "\n".join(rows))
+            wb.close()
+            content = "\n\n".join(parts)[:20_000]
             if not content.strip():
-                print(f"Sheet export empty for {file_name}: len={len(content)}, preview={repr(content[:100])}")
+                print(f"Sheet export empty for {file_name}")
             return {"filename": file_name, "type": "csv", "content": content}
 
         if mime_type in ("application/vnd.google-apps.document", "application/vnd.google-apps.presentation"):
@@ -664,7 +734,7 @@ async def index_source(body: dict):
     ]
 
     try:
-        sb.table("document_chunks").insert(rows).execute()
+        _sb_insert("document_chunks", rows)
     except Exception as e:
         return JSONResponse({"error": f"Erreur insertion chunks : {e}"}, status_code=500)
 
@@ -941,7 +1011,7 @@ async def sync_drive(body: dict, request: Request):
                         "last_indexed_at": now,
                     } for chunk, emb in zip(chunks, embeddings)]
 
-                    sb.table("document_chunks").insert(rows).execute()
+                    _sb_insert("document_chunks", rows)
                     ok += 1
                     _upd()
                     yield f"data: {json.dumps({'file': f['name'], 'status': 'ok', 'chunks': len(chunks), 'progress': processed, 'total': total})}\n\n"

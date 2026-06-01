@@ -39,9 +39,8 @@ def main():
                     parts.append(t.strip())
             text = "\n\n".join(parts)
 
-            if len(text) <= 100 and len(file_bytes) >= 100_000:
-                # Large file + little text → likely scanned → Claude Vision fallback
-                # Small file + little text → return the short text as-is (cover page, etc.)
+            if len(text) <= 200:
+                # Little text → likely scanned (contract, invoice, etc.) → Claude Vision fallback
                 try:
                     import os
                     import anthropic

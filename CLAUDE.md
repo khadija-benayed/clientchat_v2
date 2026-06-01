@@ -26,7 +26,6 @@
 - `backend/requirements.txt` — dépendances Python (`fastapi`, `sentence-transformers`, `torch+cpu`, `anthropic`, `supabase`, `google-api-python-client`…)
 - `backend/Dockerfile` — `python:3.11-slim`, modèle sentence-transformers baked au build (cold start ~2s)
 - `supabase/seed.sql` — schéma PostgreSQL complet (tables + RPC `match_chunks`)
-- `supabase/functions/chat/index.ts` — ancienne Edge Function Deno (archivée, non utilisée)
 
 ## Commandes
 
@@ -83,7 +82,6 @@
 - Ne pas ajouter de listener `document.addEventListener('click', …)` par message — utiliser le handler partagé dans `app.js`
 - Ne pas appeler `lucide.createIcons()` sans avoir injecté les `<i data-lucide>` au préalable
 - Ne pas appeler `fetch(BACKEND_URL)` directement — passer par `callBackend()`
-- Ne pas référencer `EDGE_URL`, `EDGE_HEADERS` ou `callEdge` — ces noms sont obsolètes depuis la migration Cloud Run
 
 ## Variables d'environnement backend
 
