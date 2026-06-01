@@ -7,6 +7,7 @@
 - **Icônes** : Lucide (CDN) — appeler `lucide.createIcons()` après tout `innerHTML` contenant `<i data-lucide="...">`
 - **Polices** : DM Sans + DM Mono (Google Fonts)
 - **Base de données** : Supabase (PostgreSQL + pgvector) — client JS `@supabase/supabase-js@2` via CDN
+- **Auth** : Supabase Auth — Google OAuth (`signInWithOAuth`). JWT transmis au backend via `Authorization: Bearer`
 - **Backend** : Python FastAPI sur Google Cloud Run — point d'entrée unique `BACKEND_URL` dans `db.js`
 - **IA** : Claude Sonnet 4.6 (chat) + Haiku 4.5 (task_action, summarize) — appelé côté backend uniquement
 - **Embeddings / RAG** : `sentence-transformers` local — modèle `paraphrase-multilingual-MiniLM-L12-v2` (384 dims, multilingue) — chargé au démarrage du conteneur, zéro API externe
@@ -17,12 +18,12 @@
 ## Architecture des fichiers
 
 - `index.html` — structure HTML + chargement des scripts (ordre : `db.js` → `ui.js` → `app.js`)
-- `db.js` — constantes globales (`BACKEND_URL`, `SB_URL`…), état global (`cur`, `tasks`, `session`…), Supabase, helpers utilitaires, Drive sync (`checkDriveUpdates`, `loadDocCache`)
-- `ui.js` — rendu DOM (chat, todo, modals, sources, KB, fiche client), logique d'envoi `send()`, prompts Claude (`buildL1/L2/L3`), gestion des sources
-- `app.js` — initialisation (dark mode, sidebar, DnD tâches), raccourcis clavier globaux, boot `window.load`
+- `db.js` — constantes globales (`BACKEND_URL`, `SB_URL`…), état global (`cur`, `tasks`, `session`, `_jwtToken`, `_currentUserId`), Supabase, auth Google (`signInWithGoogle`, `loadMyClients`), helpers utilitaires, Drive sync (`checkDriveUpdates`, `loadDocCache`)
+- `ui.js` — rendu DOM (chat, todo, modals, sources, KB, fiche client, welcome state, gestion membres), logique d'envoi `send()`, prompts Claude (`buildL1/L2/L3`), gestion des sources
+- `app.js` — initialisation (dark mode, sidebar, DnD tâches), boot auth (`onAuthStateChange`, `getSession`), raccourcis clavier globaux
 - `styles.css` — tout le CSS, variables de thème en `:root`
 - `cloudbuild.yaml` — pipeline CI/CD : `docker build ./backend` → `gcloud run deploy`
-- `backend/main.py` — FastAPI : toutes les actions (chat, RAG, Drive, KB, brief, session)
+- `backend/main.py` — FastAPI : middleware JWT, toutes les actions (chat, RAG, Drive, KB, brief, session, membres)
 - `backend/requirements.txt` — dépendances Python (`fastapi`, `sentence-transformers`, `torch+cpu`, `anthropic`, `supabase`, `google-api-python-client`…)
 - `backend/Dockerfile` — `python:3.11-slim`, modèle sentence-transformers baked au build (cold start ~2s)
 - `supabase/seed.sql` — schéma PostgreSQL complet (tables + RPC `match_chunks`)
@@ -32,7 +33,7 @@
 - **Lancer localement** : ouvrir `index.html` dans un navigateur (aucun serveur requis — pas de build)
 - **Déployer le front** : `git push origin main` → GitHub Actions déploie automatiquement sur GitHub Pages
 - **Déployer le backend** : `git push origin main` → Cloud Build trigger → build + deploy Cloud Run automatique
-- **Backend local** : `cd backend && uvicorn main:app --reload --port 8080` (avec les 4 vars d'env exportées)
+- **Backend local** : `cd backend && uvicorn main:app --reload --port 8080` (avec les vars d'env exportées)
 - **Tests** : aucun framework de test — vérifier manuellement dans le navigateur
 
 ## Conventions de code
@@ -49,9 +50,15 @@
 - `esc(s)` → échappement HTML anti-XSS — **toujours utiliser pour afficher du contenu utilisateur**
 - `show(id)` / `hide(id)` → toggle classe `hide`
 - `openModal(id)` / `closeModal(id)` → toggle classe `open`
-- `callBackend(payload)` → wrapper `fetch` vers `BACKEND_URL` (POST JSON, throw si HTTP non-2xx)
+- `callBackend(payload)` → wrapper `fetch` vers `BACKEND_URL` (POST JSON, injecte le JWT automatiquement via `getBackendHeaders()`, throw si HTTP non-2xx)
+- `getBackendHeaders()` → construit les headers HTTP : `Authorization: Bearer <jwt>` si connecté, sinon `X-Api-Key` (fallback transition)
 - `indexSourceBatched(payload)` → boucle sur `callBackend` avec `start_chunk` jusqu'à `has_more: false`
 - `setSyncDot(color, txt)` → indicateur de synchronisation dans la barre topbar
+
+### Auth — globaux importants
+- `_jwtToken` — JWT Supabase courant (mis à jour par `onAuthStateChange`)
+- `_currentUserId` — UUID Supabase Auth de l'utilisateur connecté
+- Ne jamais appeler `fetch(BACKEND_URL)` sans passer par `getBackendHeaders()` — le JWT doit toujours être transmis
 
 ### Formatage
 - Indentation : **2 espaces**
@@ -69,7 +76,7 @@
 - Utiliser `createElement` + `.value` / `.textContent` pour les inputs dynamiques (éviter `value="..."` dans l'HTML)
 
 ### Patterns à suivre
-- Appels backend : toujours via `callBackend({action: '...', ...})`, jamais `fetch(BACKEND_URL, ...)` brut (sauf cas spéciaux avec gestion manuelle du stream/response)
+- Appels backend : toujours via `callBackend({action: '...', ...})`, jamais `fetch(BACKEND_URL, ...)` brut (sauf SSE `sync_drive` qui utilise `getBackendHeaders()` manuellement)
 - Icônes Lucide : `<i data-lucide="nom">` dans le HTML, puis `lucide.createIcons()` après injection
 - Thème clair/sombre : utiliser les variables CSS `--tx`, `--sur`, `--brd2` — jamais de couleurs en dur
 - Persistance légère : `localStorage` avec préfixe `cc-` (ex. `cc-dark`, `cc-sess`, `cc-todo-w`)
@@ -81,7 +88,7 @@
 - Ne pas écrire dans `innerHTML` sans `esc()` sur les données externes
 - Ne pas ajouter de listener `document.addEventListener('click', …)` par message — utiliser le handler partagé dans `app.js`
 - Ne pas appeler `lucide.createIcons()` sans avoir injecté les `<i data-lucide>` au préalable
-- Ne pas appeler `fetch(BACKEND_URL)` directement — passer par `callBackend()`
+- Ne pas appeler `fetch(BACKEND_URL)` directement — passer par `callBackend()` ou `getBackendHeaders()`
 
 ## Variables d'environnement backend
 
@@ -93,15 +100,17 @@ Injectées dans Cloud Run (jamais dans le frontend) :
 | `SUPABASE_SERVICE_KEY` | Clé service role (accès complet) |
 | `ANTHROPIC_KEY` | Clé API Anthropic |
 | `GOOGLE_SA_KEY` | JSON service account Google Drive (stringifié) |
+| `API_KEY` | Clé HTTP legacy (fallback transition, optionnelle) |
 
 ## Actions backend disponibles
 
-Toutes via `POST BACKEND_URL` avec `{ "action": "...", ... }` :
+Toutes via `POST BACKEND_URL` avec `{ "action": "...", ... }` + header `Authorization: Bearer <jwt>` :
 
 | Action | Description |
 |--------|-------------|
 | `chat` | Chat Claude avec RAG (Sonnet) |
 | `task_action` | Chat Claude sans RAG — actions tâches (Haiku) |
+| `me` | Infos de l'utilisateur connecté + liste de ses clients assignés |
 | `index_source` | Chunk + embed + persist un document |
 | `list_drive_metadata` | Liste métadonnées d'un dossier Drive |
 | `export_single_file` | Exporte le contenu d'un fichier Drive |
@@ -109,4 +118,11 @@ Toutes via `POST BACKEND_URL` avec `{ "action": "...", ... }` :
 | `summarize_session` | Résumé de session (Haiku) |
 | `generate_brief` | Fiche client JSON structurée (Sonnet) |
 | `delete_source_chunks` | Purge les chunks d'une source |
-| `health` | Healthcheck (`{"status":"ok"}`) |
+| `get_client_members` | Liste membres + team_members disponibles + flag is_owner |
+| `add_client_member` | Ajoute un team_member à un client (owner requis) |
+| `remove_client_member` | Retire un membre (owner requis, dernier owner bloqué) |
+| `set_member_role` | Passe owner ↔ membre (owner requis, dernier owner bloqué) |
+| `claim_ownership` | Devient owner si le client n'en a aucun (JWT requis) |
+| `sync_drive` | Sync Drive complète SSE (stream événements) |
+| `sync_state` | Statut d'un sync Drive en cours |
+| `health` | Healthcheck — `GET /health` |
