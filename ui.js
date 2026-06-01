@@ -1835,8 +1835,6 @@ async function deleteClient(){
   hide('workspace'); show('empty');
   if(rtChan) { sb.removeChannel(rtChan); rtChan = null; }
   renderSidebar();
-  // Recharger la liste des clients dans le dropdown login
-  await loadClientList();
 }
 
 async function saveSettings(){

@@ -164,9 +164,6 @@ body {
 .brand     { font-size: 22px; font-weight: 500; margin-bottom: 4px; }
 .brand-sub { font-size: 13px; color: var(--tx3); margin-bottom: 28px; }
 
-.tabs { display: flex; border: 1px solid var(--brd2); border-radius: var(--rs); overflow: hidden; margin-bottom: 24px; }
-.tab  { flex:1; padding: 9px; text-align: center; font-size: 13px; cursor: pointer; background: transparent; border: none; color: var(--tx2); font-family: 'DM Sans',sans-serif; transition: all .15s; }
-.tab.on { background: var(--acc); color: #fff; }
 
 label { font-size: 12px; font-weight: 500; color: var(--tx2); display: block; margin-bottom: 5px; }
 

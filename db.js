@@ -139,25 +139,7 @@ function getMembersFromList(containerId) {
   return members;
 }
 
-function setTab(t, btn){
-  document.querySelectorAll('.tab').forEach(b=>b.classList.remove('on'));
-  btn.classList.add('on');
-  if(t === 'join') { show('pane-join'); hide('pane-create'); }
-  else { hide('pane-join'); show('pane-create'); }
-}
-
-async function loadClientList(){
-  const sel = $('join-select');
-  if (!sel) return; // login screen replaced by Google OAuth
-  const {data} = await sb.from('clients').select('id,name').order('name');
-  sel.innerHTML = '<option value="">— Sélectionne un client —</option>';
-  (data||[]).forEach(c=>{
-    const opt = document.createElement('option');
-    opt.value=c.id; opt.textContent=c.name; sel.appendChild(opt);
-  });
-}
-
-// ── Authentification Google OAuth (CHANTIER 1) ───────────────────────────────
+// ── Authentification Google OAuth ─────────────────────────────────────────────
 async function signInWithGoogle() {
   const btn = $('google-signin-btn');
   if (btn) { btn.disabled = true; btn.textContent = 'Connexion…'; }
@@ -186,18 +168,7 @@ async function loadMyClients() {
   }
 }
 
-// ── Login par mot de passe (LEGACY — conservé pendant la période de transition) ──
-// Ces fonctions restent actives pour la modal "Rejoindre un client" dans l'app.
-// L'écran de login initial utilise désormais Google OAuth (signInWithGoogle).
-
-// [LOGIN SCREEN DISABLED — remplacé par Google OAuth]
-// async function joinClient(){ ... }
-
-// [CREATE SCREEN DISABLED — remplacé par Google OAuth]
-// async function createClient(){ ... }
-
 function showErr(id,msg){$(id).textContent=msg;show(id);}
-function setBtn(id,txt,dis){const b=$(id);b.textContent=txt;b.disabled=dis;}
 
 function addSession(c){
   session=session.filter(x=>x.id!==c.id);
