@@ -216,15 +216,22 @@ export function useClients({ jwtToken, currentUserId }) {
       }
 
       // 3. Classifier : nouveau / modifié / à jour
+      //    Tolérance 5 min pour éviter les faux positifs liés aux décalages
+      //    d'horloge entre Drive API et le serveur (modifiedTime ≈ last_indexed_at).
+      const TOLERANCE_MS = 5 * 60 * 1000;
       const toIndex = [];
       const driveIds = new Set();
       for (const f of metaData.files) {
         if (!EXPORTABLE_MIMETYPES.includes(f.mimeType)) continue;
         driveIds.add(f.id);
         const known = indexedMap[f.id];
-        if (!known) toIndex.push({ ...f, reason: 'new' });
-        else if (new Date(f.modifiedTime) > new Date(known.last_indexed_at))
-          toIndex.push({ ...f, reason: 'modified' });
+        if (!known) {
+          toIndex.push({ ...f, reason: 'new' });
+        } else {
+          const modT = new Date(f.modifiedTime).getTime();
+          const idxT = new Date(known.last_indexed_at).getTime();
+          if (modT > idxT + TOLERANCE_MS) toIndex.push({ ...f, reason: 'modified' });
+        }
       }
 
       // 4. Purger les zombies (en base mais supprimés du Drive)
@@ -236,28 +243,54 @@ export function useClients({ jwtToken, currentUserId }) {
 
       if (!toIndex.length) return;
 
-      setSyncProgress({ done: 0, total: toIndex.length });
-      const MAX_PER_RUN = 10;
-      let indexed = 0;
+      // Seuls les fichiers NOUVEAUX (jamais indexés) sont comptés dans le badge.
+      // Les fichiers modifiés sont ré-indexés silencieusement en arrière-plan.
+      const newFiles  = toIndex.filter(f => f.reason === 'new');
+      const modified  = toIndex.filter(f => f.reason === 'modified');
 
-      for (const fileMeta of toIndex.slice(0, MAX_PER_RUN)) {
+      if (newFiles.length > 0) setSyncProgress({ done: 0, total: newFiles.length });
+
+      const MAX_PER_RUN = 10;
+      let indexedNew = 0;
+
+      // Traiter d'abord les nouveaux fichiers (affichage badge)
+      for (const fileMeta of newFiles.slice(0, MAX_PER_RUN)) {
         try {
           const exportData = await callBackend({
             action: 'export_single_file', file_id: fileMeta.id,
             file_name: fileMeta.name, mime_type: fileMeta.mimeType,
           }, jwtToken);
           if (!exportData.file?.content?.trim()) continue;
-
           const sourceType = fileMeta.mimeType.includes('spreadsheet') ? 'sheet' : 'doc';
           await indexSourceBatched({
             action: 'index_source', client_id: client.id,
             source_type: sourceType, source_id: fileMeta.id,
             source_name: fileMeta.name, content: exportData.file.content,
           }, jwtToken);
-          indexed++;
-          setSyncProgress({ done: indexed, total: toIndex.length });
+          indexedNew++;
+          setSyncProgress({ done: indexedNew, total: newFiles.length });
         } catch (e) {
-          console.warn('checkDriveUpdates file error:', e.message);
+          console.warn('checkDriveUpdates new file error:', e.message);
+        }
+      }
+
+      // Ré-indexer les fichiers modifiés silencieusement (sans badge)
+      const modifiedBatch = modified.slice(0, MAX_PER_RUN - Math.min(newFiles.length, MAX_PER_RUN));
+      for (const fileMeta of modifiedBatch) {
+        try {
+          const exportData = await callBackend({
+            action: 'export_single_file', file_id: fileMeta.id,
+            file_name: fileMeta.name, mime_type: fileMeta.mimeType,
+          }, jwtToken);
+          if (!exportData.file?.content?.trim()) continue;
+          const sourceType = fileMeta.mimeType.includes('spreadsheet') ? 'sheet' : 'doc';
+          await indexSourceBatched({
+            action: 'index_source', client_id: client.id,
+            source_type: sourceType, source_id: fileMeta.id,
+            source_name: fileMeta.name, content: exportData.file.content,
+          }, jwtToken);
+        } catch (e) {
+          console.warn('checkDriveUpdates modified file error:', e.message);
         }
       }
     } catch (e) {

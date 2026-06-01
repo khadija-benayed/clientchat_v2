@@ -223,25 +223,75 @@ export default function LoginScreen({ onSignIn }) {
     <div id="login-root" ref={containerRef}>
       <canvas ref={canvasRef} id="ln-canvas" />
 
-      {/* Abeille volante */}
+      {/* Abeille volante — redesign pour des ailes bien visibles et une tête mignonne */}
       <div className="ln-bee" ref={beeRef}>
-        <svg ref={beeSvgRef} width="44" height="44" viewBox="0 0 40 40" fill="none"
+        {/*
+          ViewBox élargi (-6 -3 52 52) pour que les ailes qui s'étalent
+          de chaque côté ne soient pas rognées par le bord du SVG.
+          Ordre SVG : corps → tête → yeux → antennes → AILES EN DERNIER
+          (les ailes par-dessus = toujours visibles, jamais cachées par la tête).
+        */}
+        <svg ref={beeSvgRef} width="52" height="52" viewBox="-6 -3 52 52" fill="none"
           xmlns="http://www.w3.org/2000/svg">
-          <ellipse data-wing className="ln-wing" cx="10" cy="8"  rx="10" ry="5.5" fill="#C2E2F5" opacity=".8"/>
-          <ellipse data-wing className="ln-wing" cx="30" cy="8"  rx="10" ry="5.5" fill="#C2E2F5" opacity=".8"/>
-          <ellipse data-wing className="ln-wing" cx="9"  cy="16" rx="6.5" ry="3.5" fill="#C2E2F5" opacity=".45"/>
-          <ellipse data-wing className="ln-wing" cx="31" cy="16" rx="6.5" ry="3.5" fill="#C2E2F5" opacity=".45"/>
-          <ellipse cx="20" cy="27" rx="8" ry="10" fill="#193644"/>
-          <path d="M12 22 Q20 25 28 22 L28 27 Q20 30 12 27Z" fill="#F89B1C"/>
-          <path d="M12.5 30.5 Q20 33.5 27.5 30.5 L27.5 34.5 Q20 37.5 12.5 34.5Z" fill="#F89B1C"/>
-          <circle cx="20" cy="14" r="7" fill="#193644"/>
-          <circle cx="17.5" cy="13" r="1.4" fill="white" opacity=".9"/>
-          <circle cx="22.5" cy="13" r="1.4" fill="white" opacity=".9"/>
-          <path d="M17 9 Q14.5 5.5 12 4" stroke="#C2E2F5" strokeWidth="1" strokeLinecap="round" fill="none" opacity=".65"/>
-          <circle cx="12" cy="4" r="1.6" fill="#F89B1C"/>
-          <path d="M23 9 Q25.5 5.5 28 4" stroke="#C2E2F5" strokeWidth="1" strokeLinecap="round" fill="none" opacity=".65"/>
-          <circle cx="28" cy="4" r="1.6" fill="#F89B1C"/>
-          <polygon points="18.5,37 21.5,37 20,41" fill="#FF6772" opacity=".85"/>
+
+          {/* ── Abdomen ─────────────────────────────────────── */}
+          <ellipse cx="20" cy="31" rx="8.5" ry="11" fill="#193644"/>
+          {/* Bande jaune haute */}
+          <path d="M12 27 Q20 30.5 28 27 L27.5 32 Q20 35.5 12.5 32Z" fill="#F89B1C"/>
+          {/* Bande jaune basse */}
+          <path d="M12.8 34.5 Q20 38 27.2 34.5 L26.8 39 Q20 42 13.2 39Z" fill="#F89B1C"/>
+          {/* Dard */}
+          <polygon points="18,42 22,42 20,46" fill="#FF6772" opacity=".8"/>
+
+          {/* ── Thorax ──────────────────────────────────────── */}
+          <ellipse cx="20" cy="20" rx="7" ry="6.5" fill="#193644"/>
+          {/* Duvet léger sur le thorax */}
+          <ellipse cx="20" cy="18.5" rx="5.5" ry="4" fill="#2a5068" opacity=".3"/>
+
+          {/* ── Tête ────────────────────────────────────────── */}
+          <circle cx="20" cy="11" r="9" fill="#193644"/>
+          {/* Duvet léger sur le front */}
+          <ellipse cx="20" cy="8.5" rx="6" ry="4" fill="#2a5068" opacity=".25"/>
+
+          {/* ── Grands yeux expressifs ────────────────────── */}
+          {/* Blanc des yeux */}
+          <circle cx="15.5" cy="10.5" r="4" fill="white" opacity=".96"/>
+          <circle cx="24.5" cy="10.5" r="4" fill="white" opacity=".96"/>
+          {/* Pupilles */}
+          <circle cx="16.5" cy="11.5" r="2.2" fill="#0d1f2c"/>
+          <circle cx="25.5" cy="11.5" r="2.2" fill="#0d1f2c"/>
+          {/* Reflet principal (étincelle) */}
+          <circle cx="17.8" cy="10" r="1.1" fill="white" opacity=".95"/>
+          <circle cx="26.8" cy="10" r="1.1" fill="white" opacity=".95"/>
+          {/* Petit reflet secondaire */}
+          <circle cx="15.8" cy="13" r=".55" fill="white" opacity=".55"/>
+          <circle cx="24.8" cy="13" r=".55" fill="white" opacity=".55"/>
+
+          {/* ── Antennes ────────────────────────────────────── */}
+          <path d="M17 4 Q14 0 11.5 -1" stroke="#C2E2F5" strokeWidth="1.3"
+            strokeLinecap="round" fill="none" opacity=".75"/>
+          <circle cx="11" cy="-1.2" r="2.2" fill="#F89B1C"/>
+          <path d="M23 4 Q26 0 28.5 -1" stroke="#C2E2F5" strokeWidth="1.3"
+            strokeLinecap="round" fill="none" opacity=".75"/>
+          <circle cx="29" cy="-1.2" r="2.2" fill="#F89B1C"/>
+
+          {/* ── AILES — dessinées EN DERNIER pour être toujours visibles ── */}
+          {/* Aile supérieure gauche : s'étale en haut-gauche depuis l'épaule */}
+          <ellipse data-wing cx="3" cy="14" rx="13" ry="6"
+            fill="#C2E2F5" opacity=".88"
+            transform="rotate(-22 3 14)"/>
+          {/* Aile supérieure droite */}
+          <ellipse data-wing cx="37" cy="14" rx="13" ry="6"
+            fill="#C2E2F5" opacity=".88"
+            transform="rotate(22 37 14)"/>
+          {/* Aile inférieure gauche : plus petite, légèrement plus bas */}
+          <ellipse data-wing cx="5" cy="23" rx="9.5" ry="4.5"
+            fill="#C2E2F5" opacity=".52"
+            transform="rotate(-15 5 23)"/>
+          {/* Aile inférieure droite */}
+          <ellipse data-wing cx="35" cy="23" rx="9.5" ry="4.5"
+            fill="#C2E2F5" opacity=".52"
+            transform="rotate(15 35 23)"/>
         </svg>
       </div>
 
