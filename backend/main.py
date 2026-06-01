@@ -58,25 +58,48 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[ALLOWED_ORIGIN],
     allow_methods=["POST", "OPTIONS"],
-    allow_headers=["Content-Type", "X-Api-Key"],
+    allow_headers=["Content-Type", "X-Api-Key", "Authorization"],
 )
+
+_CORS_HEADERS = {
+    "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+    "Access-Control-Allow-Headers": "Content-Type, X-Api-Key, Authorization",
+}
 
 
 @app.middleware("http")
-async def require_api_key(request: Request, call_next):
+async def auth_middleware(request: Request, call_next):
     if request.method == "OPTIONS" or request.url.path == "/health":
         return await call_next(request)
-    cors = {"Access-Control-Allow-Origin": ALLOWED_ORIGIN, "Access-Control-Allow-Headers": "Content-Type, X-Api-Key"}
-    if API_KEY and request.headers.get("X-Api-Key") != API_KEY:
-        return JSONResponse({"error": "unauthorized"}, status_code=401, headers=cors)
+
     ip = request.client.host if request.client else "unknown"
     if not _check_rate_limit(ip):
-        return JSONResponse({"error": "rate limit exceeded"}, status_code=429, headers=cors)
+        return JSONResponse({"error": "rate limit exceeded"}, status_code=429, headers=_CORS_HEADERS)
+
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        try:
+            user_resp = sb.auth.get_user(token)
+            request.state.user_id = user_resp.user.id if user_resp.user else None
+            if not request.state.user_id:
+                return JSONResponse({"error": "unauthorized"}, status_code=401, headers=_CORS_HEADERS)
+        except Exception:
+            return JSONResponse({"error": "unauthorized"}, status_code=401, headers=_CORS_HEADERS)
+    elif API_KEY and request.headers.get("X-Api-Key") == API_KEY:
+        # Transition fallback — legacy API key still accepted for 2 weeks
+        request.state.user_id = None
+    elif not API_KEY:
+        # Dev mode: no auth configured
+        request.state.user_id = None
+    else:
+        return JSONResponse({"error": "unauthorized"}, status_code=401, headers=_CORS_HEADERS)
+
     try:
         return await call_next(request)
     except Exception as e:
         print(f"Unhandled exception: {e}\n{traceback.format_exc()}")
-        return JSONResponse({"error": "internal server error"}, status_code=500, headers=cors)
+        return JSONResponse({"error": "internal server error"}, status_code=500, headers=_CORS_HEADERS)
 
 # ── Environment variables ─────────────────────────────────────────────────────
 SUPABASE_URL = os.environ["SUPABASE_URL"]
@@ -426,7 +449,10 @@ def health():
 async def dispatcher(request: Request):
     body = await request.json()
     action = body.get("action")
+    user_id = getattr(request.state, "user_id", None)
 
+    if action == "me":
+        return await get_me(request)
     if action == "summarize_session":
         return await summarize_session(body)
     if action == "read_drive_folder":
@@ -448,7 +474,35 @@ async def dispatcher(request: Request):
     if action == "sync_state":
         key = f"{body.get('client_id')}|{body.get('folder_id')}"
         return _sync_state.get(key) or JSONResponse({"error": "aucun sync en cours ou récent"}, status_code=404)
-    return await chat(body)
+    return await chat(body, user_id=user_id)
+
+
+# ── /me — current user info + assigned clients ────────────────────────────
+async def get_me(request: Request):
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        return JSONResponse({"error": "JWT requis pour /me"}, status_code=401)
+
+    try:
+        member_resp = sb.table("team_members").select("*").eq("id", user_id).maybe_single().execute()
+        member = member_resp.data
+
+        clients_resp = (
+            sb.table("client_members")
+            .select("role, clients(id, name, drive_folder_id, context, sources, members)")
+            .eq("member_id", user_id)
+            .execute()
+        )
+        clients = []
+        for row in (clients_resp.data or []):
+            client_data = row.get("clients")
+            if client_data:
+                clients.append({**client_data, "role": row["role"]})
+
+        return {"member": member, "clients": clients}
+    except Exception as e:
+        print(f"get_me error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── summarize_session ─────────────────────────────────────────────────────────
@@ -1031,7 +1085,7 @@ async def sync_drive(body: dict, request: Request):
 
 
 # ── chat (default) ────────────────────────────────────────────────────────────
-async def chat(body: dict):
+async def chat(body: dict, user_id: Optional[str] = None):
     message = body.get("message", "")
     system = body.get("system", "")
     client_id = body.get("client_id")
@@ -1158,14 +1212,17 @@ async def chat(body: dict):
 
     # Log usage — non-blocking
     try:
-        sb.table("usage_logs").insert({
+        log_row: dict = {
             "client_id": client_id or None,
             "model": chat_model,
             "message_type": message_type,
             "tokens_input": usage["input_tokens"],
             "tokens_output": usage["output_tokens"],
             "cost_usd": calculate_cost(chat_model, usage),
-        }).execute()
+        }
+        if user_id:
+            log_row["user_id"] = user_id
+        sb.table("usage_logs").insert(log_row).execute()
     except Exception as e:
         print(f"usage_logs insert error (non bloquant): {e}")
 

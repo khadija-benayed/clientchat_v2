@@ -6,7 +6,16 @@ const SB_URL = 'https://erpjerfvswesipmdqxab.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVycGplcmZ2c3dlc2lwbWRxeGFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4NTQwNDEsImV4cCI6MjA5MjQzMDA0MX0.ftgCx_YzClgkNCPF5PprnPJd-y6mdl_vETtvl6pzG2U';
 const BACKEND_URL = 'https://clientchat-v2-1004127157825.europe-west1.run.app';
 const BACKEND_API_KEY = localStorage.getItem('cc-api-key') || '';
-const BACKEND_HEADERS = {'Content-Type': 'application/json', 'X-Api-Key': BACKEND_API_KEY};
+// BACKEND_HEADERS kept as legacy fallback; use getBackendHeaders() for all new calls
+let _jwtToken = null;
+let _currentUserId = null;
+
+function getBackendHeaders() {
+  const h = {'Content-Type': 'application/json'};
+  if (_jwtToken) h['Authorization'] = 'Bearer ' + _jwtToken;
+  else if (BACKEND_API_KEY) h['X-Api-Key'] = BACKEND_API_KEY;
+  return h;
+}
 const EXPORTABLE_MIMETYPES = [
   'application/vnd.google-apps.document',
   'application/vnd.google-apps.spreadsheet',
@@ -19,7 +28,7 @@ let cur = null, tasks = [], activeF = 'all', rtChan = null;
 let session = JSON.parse(localStorage.getItem('cc-sess') || '[]');
 
 async function callBackend(payload){
-  const r = await fetch(BACKEND_URL,{method:'POST',headers:BACKEND_HEADERS,body:JSON.stringify(payload)});
+  const r = await fetch(BACKEND_URL,{method:'POST',headers:getBackendHeaders(),body:JSON.stringify(payload)});
   if(!r.ok){
     let msg='Backend HTTP '+r.status;
     try{ const d=await r.json(); if(d?.error) msg+=': '+d.error; }catch(_){}
@@ -138,8 +147,9 @@ function setTab(t, btn){
 }
 
 async function loadClientList(){
-  const {data} = await sb.from('clients').select('id,name').order('name');
   const sel = $('join-select');
+  if (!sel) return; // login screen replaced by Google OAuth
+  const {data} = await sb.from('clients').select('id,name').order('name');
   sel.innerHTML = '<option value="">— Sélectionne un client —</option>';
   (data||[]).forEach(c=>{
     const opt = document.createElement('option');
@@ -147,31 +157,44 @@ async function loadClientList(){
   });
 }
 
-async function joinClient(){
-  const clientId=$('join-select').value, pass=$('join-pass').value;
-  hide('join-err');
-  if(!clientId){showErr('join-err','Sélectionne un client.');return;}
-  if(!pass){showErr('join-err','Entre le mot de passe.');return;}
-  setBtn('join-btn','Vérification…',true);
-  const hash = await hashPass(pass);
-  const {data} = await sb.from('clients').select('*').eq('id',clientId).eq('password_hash',hash).single();
-  setBtn('join-btn',"Accéder à l'espace",false);
-  if(!data){showErr('join-err','Mot de passe incorrect.');return;}
-  addSession(data); enterApp(data);
+// ── Authentification Google OAuth (CHANTIER 1) ───────────────────────────────
+async function signInWithGoogle() {
+  const btn = $('google-signin-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Connexion…'; }
+  try {
+    await sb.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: 'https://khadija-benayed.github.io/clientchat_v2' },
+    });
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Continuer avec Google'; }
+    showErr('google-err', 'Erreur connexion Google : ' + e.message);
+  }
 }
 
-async function createClient(){
-  const name=$('c-name').value.trim(), pass=$('c-pass').value;
-  hide('create-err');
-  if(!name||!pass){showErr('create-err','Nom et mot de passe requis.');return;}
-  setBtn('create-btn','Création…',true);
-  const hash = await hashPass(pass);
-  const membersData = getMembersFromList('c-members-list');
-  const {data,error} = await sb.from('clients').insert({name,password_hash:hash,members:JSON.stringify(membersData)}).select().single();
-  setBtn('create-btn',"Créer l'espace",false);
-  if(error){showErr('create-err',error.message);return;}
-  addSession(data); enterApp(data);
+async function loadMyClients() {
+  try {
+    const data = await callBackend({action: 'me'});
+    if (data.error) { console.warn('loadMyClients: /me error:', data.error); return; }
+    const clients = data.clients || [];
+    if (clients.length) {
+      session = clients;
+      localStorage.setItem('cc-sess', JSON.stringify(session));
+    }
+  } catch (e) {
+    console.warn('loadMyClients error:', e.message);
+  }
 }
+
+// ── Login par mot de passe (LEGACY — conservé pendant la période de transition) ──
+// Ces fonctions restent actives pour la modal "Rejoindre un client" dans l'app.
+// L'écran de login initial utilise désormais Google OAuth (signInWithGoogle).
+
+// [LOGIN SCREEN DISABLED — remplacé par Google OAuth]
+// async function joinClient(){ ... }
+
+// [CREATE SCREEN DISABLED — remplacé par Google OAuth]
+// async function createClient(){ ... }
 
 function showErr(id,msg){$(id).textContent=msg;show(id);}
 function setBtn(id,txt,dis){const b=$(id);b.textContent=txt;b.disabled=dis;}
@@ -196,10 +219,13 @@ function leaveClient(e, clientId) {
   renderSidebar();
 }
 
-function logout(){
+async function logout(){
   if(cur && !sessionSaved && sessionExchangeCount >= 3) saveSessionSummary();
   session = [];
+  _jwtToken = null;
+  _currentUserId = null;
   localStorage.removeItem('cc-sess');
+  try { await sb.auth.signOut(); } catch(_) {}
   location.reload();
 }
 

@@ -1155,7 +1155,7 @@ async function syncSource(idx, {resume = false, retried = false, incremental = t
       // ── Stream SSE : le backend gère export + chunk + embed + insert ──
       const resp = await fetch(BACKEND_URL, {
         method: 'POST',
-        headers: BACKEND_HEADERS,
+        headers: getBackendHeaders(),
         body: JSON.stringify({action:'sync_drive', folder_id:folderId, client_id:syncClientId, resume, incremental}),
       });
       if(!resp.ok){
@@ -1676,6 +1676,11 @@ async function joinExisting(){
   if(!data){showErr('join-ex-err','Mot de passe incorrect.');return;}
   closeModal('modal-join-existing');
   $('join-ex-pass').value = '';
+  // Register in client_members so RLS and /me work for this client
+  if (_currentUserId) {
+    await sb.from('client_members').upsert({client_id: clientId, member_id: _currentUserId, role: 'member'}, {onConflict: 'client_id,member_id'})
+      .then(() => {}).catch(e => console.warn('joinExisting: client_members upsert:', e.message));
+  }
   addSession(data);
   renderSidebar();
   selectClient(data);
@@ -1689,6 +1694,11 @@ async function createClientModal(){
   const membersData=getMembersFromList('n-members-list');
   const {data,error}=await sb.from('clients').insert({name,password_hash:hash,members:JSON.stringify(membersData)}).select().single();
   if(error){showErr('new-err',error.message);return;}
+  // Register creator as owner in client_members so RLS and /me work
+  if (data && _currentUserId) {
+    await sb.from('client_members').insert({client_id: data.id, member_id: _currentUserId, role: 'owner'})
+      .then(() => {}).catch(e => console.warn('createClientModal: client_members insert:', e.message));
+  }
   closeModal('modal-new');addSession(data);renderSidebar();selectClient(data);
 }
 

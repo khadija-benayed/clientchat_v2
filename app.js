@@ -73,10 +73,35 @@ window.addEventListener('load', async () => {
     if (btn) btn.innerHTML = '<i data-lucide="panel-left-open" style="width:16px;height:16px"></i>';
   }
 
-  addMemberRow('c-members-list');
   sb = supabase.createClient(SB_URL, SB_KEY);
-  await loadClientList();
-  if(session.length){ enterApp(session[0]); }
+
+  // ── Auth state listener ──────────────────────────────────────────────────
+  sb.auth.onAuthStateChange(async (event, authSession) => {
+    if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && authSession) {
+      _jwtToken = authSession.access_token;
+      _currentUserId = authSession.user?.id || null;
+      hide('login');
+      await loadMyClients();
+      enterApp(session[0] || null);
+    } else if (event === 'TOKEN_REFRESHED' && authSession) {
+      _jwtToken = authSession.access_token;
+    } else if (event === 'SIGNED_OUT') {
+      _jwtToken = null;
+      _currentUserId = null;
+      session = [];
+      localStorage.removeItem('cc-sess');
+      hide('app'); show('login');
+    }
+  });
+
+  // ── Check existing session ───────────────────────────────────────────────
+  const { data: { session: authSession } } = await sb.auth.getSession();
+  if (!authSession) {
+    // No active session — show login screen
+    show('login');
+  }
+  // If there's a session, onAuthStateChange fires INITIAL_SESSION and handles boot.
+
   lucide.createIcons();
 });
 
