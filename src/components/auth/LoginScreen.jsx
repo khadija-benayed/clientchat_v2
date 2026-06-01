@@ -223,75 +223,73 @@ export default function LoginScreen({ onSignIn }) {
     <div id="login-root" ref={containerRef}>
       <canvas ref={canvasRef} id="ln-canvas" />
 
-      {/* Abeille volante — redesign pour des ailes bien visibles et une tête mignonne */}
+      {/* Abeille mignonne ✨ */}
       <div className="ln-bee" ref={beeRef}>
         {/*
-          ViewBox élargi (-6 -3 52 52) pour que les ailes qui s'étalent
-          de chaque côté ne soient pas rognées par le bord du SVG.
-          Ordre SVG : corps → tête → yeux → antennes → AILES EN DERNIER
-          (les ailes par-dessus = toujours visibles, jamais cachées par la tête).
+          Anatomie de placement :
+          - Tête    : cy=11, r=9  → bord bas à y=20
+          - Thorax  : cy=23       → y=17-29  (juste sous la tête)
+          - Abdomen : cy=36       → y=26-46
+          - Ailes   : cy=22-28   → NIVEAU THORAX, clairement sous la tête ✓
+          ViewBox "-10 -4 60 54" donne un bleed de 10px à gauche/droite
+          pour que les grandes ailes horizontales ne soient pas coupées.
         */}
-        <svg ref={beeSvgRef} width="52" height="52" viewBox="-6 -3 52 52" fill="none"
+        <svg ref={beeSvgRef} width="56" height="56" viewBox="-10 -4 60 54" fill="none"
           xmlns="http://www.w3.org/2000/svg">
 
           {/* ── Abdomen ─────────────────────────────────────── */}
-          <ellipse cx="20" cy="31" rx="8.5" ry="11" fill="#193644"/>
-          {/* Bande jaune haute */}
-          <path d="M12 27 Q20 30.5 28 27 L27.5 32 Q20 35.5 12.5 32Z" fill="#F89B1C"/>
-          {/* Bande jaune basse */}
-          <path d="M12.8 34.5 Q20 38 27.2 34.5 L26.8 39 Q20 42 13.2 39Z" fill="#F89B1C"/>
-          {/* Dard */}
-          <polygon points="18,42 22,42 20,46" fill="#FF6772" opacity=".8"/>
+          <ellipse cx="20" cy="36" rx="8.5" ry="10" fill="#193644"/>
+          <path d="M12.2 32 Q20 35.5 27.8 32 L27.4 37.5 Q20 41 12.6 37.5Z" fill="#F89B1C"/>
+          <path d="M13 40 Q20 43.5 27 40 L26.6 45 Q20 48 13.4 45Z" fill="#F89B1C"/>
+          <polygon points="18.5,46 21.5,46 20,49.5" fill="#FF6772" opacity=".75"/>
 
           {/* ── Thorax ──────────────────────────────────────── */}
-          <ellipse cx="20" cy="20" rx="7" ry="6.5" fill="#193644"/>
-          {/* Duvet léger sur le thorax */}
-          <ellipse cx="20" cy="18.5" rx="5.5" ry="4" fill="#2a5068" opacity=".3"/>
+          <ellipse cx="20" cy="23" rx="7" ry="6" fill="#193644"/>
+          <ellipse cx="20" cy="21" rx="5.5" ry="3.5" fill="#264a5e" opacity=".35"/>
 
           {/* ── Tête ────────────────────────────────────────── */}
-          <circle cx="20" cy="11" r="9" fill="#193644"/>
-          {/* Duvet léger sur le front */}
-          <ellipse cx="20" cy="8.5" rx="6" ry="4" fill="#2a5068" opacity=".25"/>
+          <circle cx="20" cy="11" r="9.5" fill="#193644"/>
+          <ellipse cx="20" cy="7.5" rx="7" ry="4.5" fill="#264a5e" opacity=".25"/>
 
-          {/* ── Grands yeux expressifs ────────────────────── */}
-          {/* Blanc des yeux */}
-          <circle cx="15.5" cy="10.5" r="4" fill="white" opacity=".96"/>
-          <circle cx="24.5" cy="10.5" r="4" fill="white" opacity=".96"/>
-          {/* Pupilles */}
-          <circle cx="16.5" cy="11.5" r="2.2" fill="#0d1f2c"/>
-          <circle cx="25.5" cy="11.5" r="2.2" fill="#0d1f2c"/>
-          {/* Reflet principal (étincelle) */}
-          <circle cx="17.8" cy="10" r="1.1" fill="white" opacity=".95"/>
-          <circle cx="26.8" cy="10" r="1.1" fill="white" opacity=".95"/>
-          {/* Petit reflet secondaire */}
-          <circle cx="15.8" cy="13" r=".55" fill="white" opacity=".55"/>
-          <circle cx="24.8" cy="13" r=".55" fill="white" opacity=".55"/>
+          {/* ── Yeux kawaii ─────────────────────────────────── */}
+          {/* Blanc chaud (pas pur blanc = moins agressif) */}
+          <ellipse cx="14" cy="10" rx="3.5" ry="4" fill="#fff5e8" opacity=".97"/>
+          <ellipse cx="26" cy="10" rx="3.5" ry="4" fill="#fff5e8" opacity=".97"/>
+          {/* Pupilles (marron foncé chaleureux, pas noir pur) */}
+          <circle cx="14.8" cy="10.8" r="1.8" fill="#1a2e3a"/>
+          <circle cx="26.8" cy="10.8" r="1.8" fill="#1a2e3a"/>
+          {/* UNE seule étincelle par œil — coin supérieur gauche de la pupille */}
+          <circle cx="13.6" cy="9.2" r="1" fill="white" opacity=".97"/>
+          <circle cx="25.6" cy="9.2" r="1" fill="white" opacity=".97"/>
+          {/* Petit sourire discret */}
+          <path d="M16.5 16 Q20 18 23.5 16" stroke="white" strokeWidth=".8"
+            strokeLinecap="round" fill="none" opacity=".38"/>
 
           {/* ── Antennes ────────────────────────────────────── */}
-          <path d="M17 4 Q14 0 11.5 -1" stroke="#C2E2F5" strokeWidth="1.3"
-            strokeLinecap="round" fill="none" opacity=".75"/>
-          <circle cx="11" cy="-1.2" r="2.2" fill="#F89B1C"/>
-          <path d="M23 4 Q26 0 28.5 -1" stroke="#C2E2F5" strokeWidth="1.3"
-            strokeLinecap="round" fill="none" opacity=".75"/>
-          <circle cx="29" cy="-1.2" r="2.2" fill="#F89B1C"/>
+          <path d="M16.5 3.5 Q14 -0.5 11 -2"
+            stroke="#C2E2F5" strokeWidth="1.4" strokeLinecap="round" fill="none" opacity=".8"/>
+          <circle cx="10.5" cy="-2.5" r="2.3" fill="#F89B1C"/>
+          <path d="M23.5 3.5 Q26 -0.5 29 -2"
+            stroke="#C2E2F5" strokeWidth="1.4" strokeLinecap="round" fill="none" opacity=".8"/>
+          <circle cx="29.5" cy="-2.5" r="2.3" fill="#F89B1C"/>
 
-          {/* ── AILES — dessinées EN DERNIER pour être toujours visibles ── */}
-          {/* Aile supérieure gauche : s'étale en haut-gauche depuis l'épaule */}
-          <ellipse data-wing cx="3" cy="14" rx="13" ry="6"
-            fill="#C2E2F5" opacity=".88"
-            transform="rotate(-22 3 14)"/>
-          {/* Aile supérieure droite */}
-          <ellipse data-wing cx="37" cy="14" rx="13" ry="6"
-            fill="#C2E2F5" opacity=".88"
-            transform="rotate(22 37 14)"/>
-          {/* Aile inférieure gauche : plus petite, légèrement plus bas */}
-          <ellipse data-wing cx="5" cy="23" rx="9.5" ry="4.5"
-            fill="#C2E2F5" opacity=".52"
-            transform="rotate(-15 5 23)"/>
-          {/* Aile inférieure droite */}
-          <ellipse data-wing cx="35" cy="23" rx="9.5" ry="4.5"
-            fill="#C2E2F5" opacity=".52"
-            transform="rotate(15 35 23)"/>
+          {/* ── AILES au niveau du THORAX (cy=22-28, bien sous la tête) ── */}
+          {/* Les ailes s'étalent horizontalement depuis les épaules.
+              cx=-2 et cx=42 = centres très à l'extérieur du corps.
+              rotate ±8° = léger angle naturel, pas trop vertical. */}
+          <ellipse data-wing cx="-2" cy="22" rx="14" ry="5.5"
+            fill="#C2E2F5" opacity=".87"
+            transform="rotate(-8 -2 22)"/>
+          <ellipse data-wing cx="42" cy="22" rx="14" ry="5.5"
+            fill="#C2E2F5" opacity=".87"
+            transform="rotate(8 42 22)"/>
+          {/* Ailes inférieures — jonction thorax/abdomen */}
+          <ellipse data-wing cx="1" cy="29" rx="10" ry="4"
+            fill="#C2E2F5" opacity=".5"
+            transform="rotate(-5 1 29)"/>
+          <ellipse data-wing cx="39" cy="29" rx="10" ry="4"
+            fill="#C2E2F5" opacity=".5"
+            transform="rotate(5 39 29)"/>
         </svg>
       </div>
 
