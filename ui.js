@@ -217,7 +217,74 @@ function fmtMsgTime(d){
   if(isYest) return 'Hier '+hm;
   return d.toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit'})+' '+hm;
 }
+function _wsGreeting() {
+  const h = new Date().getHours();
+  if (h < 12) return 'Bonjour';
+  if (h < 18) return 'Bon après-midi';
+  return 'Bonsoir';
+}
+
+function showWelcomeState(clientName, teamStr) {
+  const msgsEl = $('msgs');
+  msgsEl.innerHTML = '';
+  const prompts = [
+    { icon: '📋', cls: 'orange', text: 'Fais-moi un point sur l\'avancement du projet' },
+    { icon: '🎯', cls: 'navy',   text: 'Quelles sont les tâches prioritaires en ce moment ?' },
+    { icon: '📁', cls: 'coral',  text: 'Résume les derniers documents partagés par le client' },
+    { icon: '💡', cls: 'blue',   text: 'Quels sont les prochains jalons importants ?' },
+  ];
+  const ws = document.createElement('div');
+  ws.className = 'welcome-state';
+  ws.id = 'welcome-state';
+
+  const greeting = _wsGreeting();
+  const safeClient = esc(clientName);
+  const safeSub = teamStr
+    ? 'Équipe · ' + esc(teamStr) + ' — prêts à butiner ?'
+    : 'Prêt à butiner ?';
+
+  ws.innerHTML = `
+    <div class="ws-hex-cluster">
+      <div class="ws-hex ws-hex-tr"></div>
+      <div class="ws-hex ws-hex-bl"></div>
+      <div class="ws-hex ws-hex-r"></div>
+      <div class="ws-hex ws-hex-c"></div>
+    </div>
+    <div class="ws-greeting">${greeting}</div>
+    <div class="ws-client-name">${safeClient}</div>
+    <div class="ws-sub">${safeSub}</div>
+    <div class="ws-prompts">
+      ${prompts.map(p => `
+        <button class="ws-prompt-chip" data-prompt="${esc(p.text)}">
+          <span class="ws-prompt-icon ${p.cls}">${p.icon}</span>
+          <span class="ws-prompt-text">${esc(p.text)}</span>
+          <span class="ws-prompt-arrow">→</span>
+        </button>`).join('')}
+    </div>`;
+
+  ws.querySelectorAll('.ws-prompt-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const prompt = btn.dataset.prompt;
+      dismissWelcomeState();
+      const inp = $('inp');
+      inp.value = prompt;
+      inp.focus();
+      send();
+    });
+  });
+
+  msgsEl.appendChild(ws);
+}
+
+function dismissWelcomeState() {
+  const ws = document.getElementById('welcome-state');
+  if (!ws) return;
+  ws.classList.add('ws-exit');
+  setTimeout(() => ws.remove(), 230);
+}
+
 function addMsg(role,text,badge){
+  dismissWelcomeState();
   const c=$('msgs');
   const d=document.createElement('div'); d.className='msg '+role;
   if(role==='a'){const w=document.createElement('div');w.className='msg-who';w.textContent='Claude · '+(cur?.name||'');d.appendChild(w);}

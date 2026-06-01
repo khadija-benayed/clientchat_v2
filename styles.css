@@ -724,3 +724,122 @@ select {
 }
 .cal-task-item:hover { background: var(--sur2); }
 
+/* ── Welcome State ─────────────────────────────────────────────────────── */
+.welcome-state {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; padding: 40px 28px; gap: 0;
+  animation: wsFadeIn .5s cubic-bezier(.4,0,.2,1) both;
+}
+@keyframes wsFadeIn {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.welcome-state.ws-exit {
+  animation: wsFadeOut .22s cubic-bezier(.4,0,.2,1) both;
+  pointer-events: none;
+}
+@keyframes wsFadeOut {
+  to { opacity: 0; transform: translateY(-10px); }
+}
+
+/* — Hex cluster — */
+.ws-hex-cluster {
+  position: relative; width: 88px; height: 88px;
+  margin-bottom: 26px; flex-shrink: 0;
+}
+/* Soft glow behind the cluster */
+.ws-hex-cluster::after {
+  content: ''; position: absolute; inset: -12px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(248,155,28,.15) 0%, transparent 70%);
+  animation: wsGlowPulse 3.2s ease-in-out infinite;
+}
+@keyframes wsGlowPulse {
+  0%,100% { transform: scale(1); opacity: .8; }
+  50%      { transform: scale(1.15); opacity: 1; }
+}
+.ws-hex {
+  position: absolute;
+  clip-path: polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
+  animation: wsHexPulse 3.2s ease-in-out infinite;
+}
+.ws-hex-c  { width:46px;height:52px;top:18px;left:21px;background:var(--sb-orange);animation-delay:0s; }
+.ws-hex-tr { width:28px;height:32px;top:0;right:4px;background:var(--sb-navy);opacity:.16;animation-delay:.45s; }
+.ws-hex-bl { width:24px;height:28px;bottom:0;left:0;background:var(--sb-blue-md);opacity:.22;animation-delay:.9s; }
+.ws-hex-r  { width:18px;height:21px;top:32px;right:0;background:var(--sb-coral);opacity:.2;animation-delay:1.35s; }
+@keyframes wsHexPulse {
+  0%,100% { transform: scale(1); }
+  50%      { transform: scale(1.07); }
+}
+
+/* — Text — */
+.ws-greeting { font-size:13px;color:var(--tx3);text-align:center;margin-bottom:4px;letter-spacing:.02em; }
+.ws-client-name {
+  font-size: 22px; font-weight: 600; color: var(--tx);
+  text-align: center; letter-spacing: -.02em; margin-bottom: 5px;
+}
+.ws-sub {
+  font-size: 13px; color: var(--tx3); text-align: center; margin-bottom: 30px;
+}
+
+/* — Prompt chips — */
+.ws-prompts { display: flex; flex-direction: column; gap: 7px; width: 100%; max-width: 420px; }
+.ws-prompt-chip {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 14px;
+  background: var(--sur); border: 1px solid var(--brd2);
+  border-radius: var(--r); cursor: pointer;
+  font-size: 13px; color: var(--tx2); text-align: left;
+  font-family: 'DM Sans', sans-serif;
+  transition: border-color .14s, color .14s, transform .14s, box-shadow .14s;
+  box-shadow: 0 1px 3px rgba(25,54,68,.04);
+  position: relative; overflow: hidden;
+}
+/* left accent bar */
+.ws-prompt-chip::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+  width: 3px; border-radius: 3px 0 0 3px;
+  background: var(--sb-orange);
+  transform: scaleY(0); transform-origin: center;
+  transition: transform .18s cubic-bezier(.4,0,.2,1);
+}
+.ws-prompt-chip:hover {
+  border-color: rgba(248,155,28,.45); color: var(--tx);
+  transform: translateX(3px);
+  box-shadow: 0 2px 10px rgba(25,54,68,.09);
+}
+.ws-prompt-chip:hover::before { transform: scaleY(1); }
+.ws-prompt-icon {
+  width: 28px; height: 28px; border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; font-size: 14px; line-height: 1;
+}
+.ws-prompt-icon.orange { background: rgba(248,155,28,.12); }
+.ws-prompt-icon.navy   { background: rgba(25,54,68,.08); }
+.ws-prompt-icon.coral  { background: rgba(255,103,114,.10); }
+.ws-prompt-icon.blue   { background: rgba(0,119,155,.09); }
+.ws-prompt-text { flex: 1; line-height: 1.4; }
+.ws-prompt-arrow {
+  font-size: 13px; color: var(--tx3);
+  opacity: 0; flex-shrink: 0;
+  transition: opacity .14s, transform .14s;
+}
+.ws-prompt-chip:hover .ws-prompt-arrow { opacity: 1; transform: translateX(2px); }
+
+/* staggered entrance */
+.ws-prompt-chip:nth-child(1) { animation: wsChipIn .42s .18s cubic-bezier(.4,0,.2,1) both; }
+.ws-prompt-chip:nth-child(2) { animation: wsChipIn .42s .28s cubic-bezier(.4,0,.2,1) both; }
+.ws-prompt-chip:nth-child(3) { animation: wsChipIn .42s .38s cubic-bezier(.4,0,.2,1) both; }
+.ws-prompt-chip:nth-child(4) { animation: wsChipIn .42s .48s cubic-bezier(.4,0,.2,1) both; }
+@keyframes wsChipIn {
+  from { opacity: 0; transform: translateY(7px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* dark mode */
+[data-theme="dark"] .ws-prompt-chip { background: var(--sur); }
+[data-theme="dark"] .ws-hex-cluster::after { background: radial-gradient(ellipse, rgba(248,155,28,.08) 0%, transparent 70%); }
+[data-theme="dark"] .ws-hex-tr { opacity: .28; }
+[data-theme="dark"] .ws-hex-bl { opacity: .32; }
+[data-theme="dark"] .ws-hex-r  { opacity: .28; }
+

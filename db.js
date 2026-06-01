@@ -492,7 +492,7 @@ async function selectClient(c){
   const mems=getMembers();
   const mStr=mems.map(m=>m.name||m.initials).join(' & ');
   cur._summaries = prevSummaries;
-  addMsg('a','Bonjour ! Je suis au courant du projet '+cur.name+(mStr?' — équipe : '+mStr:'')+'. Pose tes questions ou dis-moi ce que tu avances.');
+  showWelcomeState(cur.name, mStr);
   // checkDriveUpdates must complete before loadDocCache to ensure fresh chunks
   (async () => {
     await checkDriveUpdates(cur);
