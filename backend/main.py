@@ -118,7 +118,7 @@ genai.configure(api_key=GOOGLE_API_KEY)
 
 # ── Gemini model IDs ──────────────────────────────────────────────────────────
 GEMINI_FLASH = "gemini-2.0-flash"
-GEMINI_PRO = "gemini-1.5-pro"
+GEMINI_PRO = "gemini-1.5-flash"
 
 # ── Cost calculation ──────────────────────────────────────────────────────────
 GEMINI_PRICING: dict[str, dict[str, float]] = {
