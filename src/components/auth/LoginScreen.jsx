@@ -225,71 +225,61 @@ export default function LoginScreen({ onSignIn }) {
 
       {/* Abeille mignonne ✨ */}
       <div className="ln-bee" ref={beeRef}>
-        {/*
-          Anatomie de placement :
-          - Tête    : cy=11, r=9  → bord bas à y=20
-          - Thorax  : cy=23       → y=17-29  (juste sous la tête)
-          - Abdomen : cy=36       → y=26-46
-          - Ailes   : cy=22-28   → NIVEAU THORAX, clairement sous la tête ✓
-          ViewBox "-10 -4 60 54" donne un bleed de 10px à gauche/droite
-          pour que les grandes ailes horizontales ne soient pas coupées.
-        */}
         <svg ref={beeSvgRef} width="56" height="56" viewBox="-10 -4 60 54" fill="none"
           xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <clipPath id="ab-clip">
+              <ellipse cx="20" cy="37" rx="9.5" ry="10.5"/>
+            </clipPath>
+          </defs>
 
-          {/* ── Abdomen ─────────────────────────────────────── */}
-          <ellipse cx="20" cy="36" rx="8.5" ry="10" fill="#193644"/>
-          <path d="M12.2 32 Q20 35.5 27.8 32 L27.4 37.5 Q20 41 12.6 37.5Z" fill="#F89B1C"/>
-          <path d="M13 40 Q20 43.5 27 40 L26.6 45 Q20 48 13.4 45Z" fill="#F89B1C"/>
-          <polygon points="18.5,46 21.5,46 20,49.5" fill="#FF6772" opacity=".75"/>
+          {/* ── Ailes (derrière le corps) ── */}
+          <path data-wing
+            d="M13 24 C 6 15 -9 16 -9 24 C -8 31 5 30 13 27 Z"
+            fill="#C2E2F5" stroke="#9ec8e0" strokeWidth=".7"/>
+          <path data-wing
+            d="M27 24 C 34 15 49 16 49 24 C 48 31 35 30 27 27 Z"
+            fill="#C2E2F5" stroke="#9ec8e0" strokeWidth=".7"/>
+          <path data-wing
+            d="M14 29 C 4 26 -5 31 -4 36 C -3 40 6 38 14 33 Z"
+            fill="#C2E2F5" opacity=".75" stroke="#9ec8e0" strokeWidth=".5"/>
+          <path data-wing
+            d="M26 29 C 36 26 45 31 44 36 C 43 40 34 38 26 33 Z"
+            fill="#C2E2F5" opacity=".75" stroke="#9ec8e0" strokeWidth=".5"/>
 
-          {/* ── Thorax ──────────────────────────────────────── */}
-          <ellipse cx="20" cy="23" rx="7" ry="6" fill="#193644"/>
-          <ellipse cx="20" cy="21" rx="5.5" ry="3.5" fill="#264a5e" opacity=".35"/>
+          {/* ── Abdomen jaune avec rayures navy ── */}
+          <ellipse cx="20" cy="37" rx="9.5" ry="10.5" fill="#F89B1C"/>
+          <rect x="10" y="32" width="20" height="5" fill="#193644" clipPath="url(#ab-clip)"/>
+          <rect x="10" y="39.5" width="20" height="5" fill="#193644" clipPath="url(#ab-clip)"/>
+          <polygon points="18.5,47 21.5,47 20,51" fill="#d07a00"/>
 
-          {/* ── Tête ────────────────────────────────────────── */}
-          <circle cx="20" cy="11" r="9.5" fill="#193644"/>
-          <ellipse cx="20" cy="7.5" rx="7" ry="4.5" fill="#264a5e" opacity=".25"/>
+          {/* ── Thorax ── */}
+          <ellipse cx="20" cy="24" rx="7" ry="6.5" fill="#193644"/>
 
-          {/* ── Yeux kawaii ─────────────────────────────────── */}
-          {/* Blanc chaud (pas pur blanc = moins agressif) */}
-          <ellipse cx="14" cy="10" rx="3.5" ry="4" fill="#fff5e8" opacity=".97"/>
-          <ellipse cx="26" cy="10" rx="3.5" ry="4" fill="#fff5e8" opacity=".97"/>
-          {/* Pupilles (marron foncé chaleureux, pas noir pur) */}
-          <circle cx="14.8" cy="10.8" r="1.8" fill="#1a2e3a"/>
-          <circle cx="26.8" cy="10.8" r="1.8" fill="#1a2e3a"/>
-          {/* UNE seule étincelle par œil — coin supérieur gauche de la pupille */}
-          <circle cx="13.6" cy="9.2" r="1" fill="white" opacity=".97"/>
-          <circle cx="25.6" cy="9.2" r="1" fill="white" opacity=".97"/>
-          {/* Petit sourire discret */}
-          <path d="M16.5 16 Q20 18 23.5 16" stroke="white" strokeWidth=".8"
-            strokeLinecap="round" fill="none" opacity=".38"/>
+          {/* ── Tête grande et ronde ── */}
+          <circle cx="20" cy="12" r="11" fill="#F89B1C"/>
 
-          {/* ── Antennes ────────────────────────────────────── */}
-          <path d="M16.5 3.5 Q14 -0.5 11 -2"
-            stroke="#C2E2F5" strokeWidth="1.4" strokeLinecap="round" fill="none" opacity=".8"/>
-          <circle cx="10.5" cy="-2.5" r="2.3" fill="#F89B1C"/>
-          <path d="M23.5 3.5 Q26 -0.5 29 -2"
-            stroke="#C2E2F5" strokeWidth="1.4" strokeLinecap="round" fill="none" opacity=".8"/>
-          <circle cx="29.5" cy="-2.5" r="2.3" fill="#F89B1C"/>
+          {/* ── Yeux kawaii énormes ── */}
+          <circle cx="14.5" cy="11.5" r="4.5" fill="white"/>
+          <circle cx="15.4" cy="12.5" r="2.6" fill="#193644"/>
+          <circle cx="13.8" cy="10.4" r="1.2" fill="white"/>
+          <circle cx="16.2" cy="13.8" r="0.55" fill="white" opacity=".7"/>
+          <circle cx="25.5" cy="11.5" r="4.5" fill="white"/>
+          <circle cx="26.4" cy="12.5" r="2.6" fill="#193644"/>
+          <circle cx="24.8" cy="10.4" r="1.2" fill="white"/>
+          <circle cx="27.2" cy="13.8" r="0.55" fill="white" opacity=".7"/>
 
-          {/* ── AILES au niveau du THORAX (cy=22-28, bien sous la tête) ── */}
-          {/* Les ailes s'étalent horizontalement depuis les épaules.
-              cx=-2 et cx=42 = centres très à l'extérieur du corps.
-              rotate ±8° = léger angle naturel, pas trop vertical. */}
-          <ellipse data-wing cx="-2" cy="22" rx="14" ry="5.5"
-            fill="#C2E2F5" opacity=".87"
-            transform="rotate(-8 -2 22)"/>
-          <ellipse data-wing cx="42" cy="22" rx="14" ry="5.5"
-            fill="#C2E2F5" opacity=".87"
-            transform="rotate(8 42 22)"/>
-          {/* Ailes inférieures — jonction thorax/abdomen */}
-          <ellipse data-wing cx="1" cy="29" rx="10" ry="4"
-            fill="#C2E2F5" opacity=".5"
-            transform="rotate(-5 1 29)"/>
-          <ellipse data-wing cx="39" cy="29" rx="10" ry="4"
-            fill="#C2E2F5" opacity=".5"
-            transform="rotate(5 39 29)"/>
+          {/* ── Sourire ── */}
+          <path d="M16 18 Q20 22 24 18"
+            stroke="#c06000" strokeWidth="1.4" strokeLinecap="round" fill="none"/>
+
+          {/* ── Antennes ── */}
+          <path d="M15.5 2.5 Q13 -0.5 10.5 -2.5"
+            stroke="#193644" strokeWidth="1.6" strokeLinecap="round" fill="none"/>
+          <circle cx="10" cy="-3" r="2.4" fill="#F89B1C" stroke="#d07a00" strokeWidth=".5"/>
+          <path d="M24.5 2.5 Q27 -0.5 29.5 -2.5"
+            stroke="#193644" strokeWidth="1.6" strokeLinecap="round" fill="none"/>
+          <circle cx="30" cy="-3" r="2.4" fill="#F89B1C" stroke="#d07a00" strokeWidth=".5"/>
         </svg>
       </div>
 
