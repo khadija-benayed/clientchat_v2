@@ -257,6 +257,44 @@ def get_drive_service() -> tuple:
     return drive, sa_info.get("client_email", "")
 
 
+# ── Gmail (domain-wide delegation) ───────────────────────────────────────────
+def get_gmail_service(user_email: str):
+    """Gmail API service impersonating a Google Workspace user. Requires DWD on SA."""
+    if not GOOGLE_SA_KEY:
+        raise ValueError("GOOGLE_SA_KEY manquante")
+    sa_info = json.loads(GOOGLE_SA_KEY)
+    creds = service_account.Credentials.from_service_account_info(
+        sa_info,
+        scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+    ).with_subject(user_email)
+    return build("gmail", "v1", credentials=creds, cache_discovery=False)
+
+
+def _extract_email_text(payload: dict) -> str:
+    """Extracts plain text from a Gmail message payload. Prefers text/plain, strips HTML fallback."""
+    import html as _html
+
+    def _walk(part: dict) -> str:
+        mime = part.get("mimeType", "")
+        if mime == "text/plain":
+            data = part.get("body", {}).get("data", "")
+            if data:
+                return base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="replace")
+        if mime == "text/html":
+            data = part.get("body", {}).get("data", "")
+            if data:
+                raw = base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="replace")
+                return _html.unescape(re.sub(r"<[^>]+>", " ", raw))
+        for sub in part.get("parts", []):
+            result = _walk(sub)
+            if result.strip():
+                return result
+        return ""
+
+    text = _walk(payload)
+    return re.sub(r"\s+", " ", text).strip()[:2500]
+
+
 _OFFICE_MIME = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
     "application/msword": "docx",
@@ -484,6 +522,10 @@ async def dispatcher(request: Request):
     if action == "sync_state":
         key = f"{body.get('client_id')}|{body.get('folder_id')}"
         return _sync_state.get(key) or JSONResponse({"error": "aucun sync en cours ou récent"}, status_code=404)
+    if action == "sync_emails":
+        return await sync_emails(body, request)
+    if action == "update_gmail_sync":
+        return await update_gmail_sync(body, user_id)
     return await chat(body, user_id=user_id)
 
 
@@ -1258,6 +1300,220 @@ async def sync_drive(body: dict, request: Request):
         "Cache-Control": "no-cache",
         "X-Accel-Buffering": "no",
     })
+
+
+# ── summarize_with_llm ───────────────────────────────────────────────────────
+# NOTE: Function intentionally isolated to facilitate a future swap from
+# Anthropic/Haiku to Gemini Flash when the migration occurs — only this
+# function needs to change, not the caller.
+def summarize_with_llm(text: str) -> str:
+    """Summarize email thread text. Returns 'SKIP' if no business info found."""
+    response = claude.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=400,
+        system=(
+            "Tu es un assistant qui extrait les informations métier d'échanges email.\n"
+            "Extrait UNIQUEMENT : décisions prises, chiffres clés, engagements pris, points bloquants, actions à faire.\n"
+            "Format : liste à tirets, 5 points max, sois factuel.\n"
+            "Ne mentionne jamais les noms des expéditeurs ni les adresses email.\n"
+            "Si le thread ne contient aucune information métier pertinente, réponds uniquement : SKIP"
+        ),
+        messages=[{"role": "user", "content": text}],
+    )
+    return response.content[0].text.strip() if response.content else "SKIP"
+
+
+# ── sync_emails ───────────────────────────────────────────────────────────────
+async def sync_emails(body: dict, request: Request):
+    client_id = body.get("client_id")
+    label_name = body.get("label_name", "").strip()
+    days_back = max(1, min(90, int(body.get("days_back", 7))))
+    user_id = getattr(request.state, "user_id", None)
+
+    if not client_id or not label_name:
+        return JSONResponse({"error": "client_id et label_name requis"}, status_code=400)
+    if not user_id:
+        return JSONResponse({"error": "JWT requis"}, status_code=401)
+
+    # Récupérer les membres opt-in Gmail pour ce client
+    try:
+        rows = (
+            sb.table("client_members")
+            .select("member_id, team_members(id, email, gmail_sync_enabled)")
+            .eq("client_id", client_id)
+            .execute()
+        )
+        opted_in_emails = []
+        for row in (rows.data or []):
+            tm = row.get("team_members") or {}
+            if tm.get("gmail_sync_enabled") and tm.get("email"):
+                opted_in_emails.append(tm["email"])
+    except Exception as e:
+        return JSONResponse({"error": f"Erreur récupération membres : {e}"}, status_code=500)
+
+    async def _no_members():
+        yield f"data: {json.dumps({'status': 'done', 'total': 0, 'ok': 0, 'skipped': 0, 'errors': 0, 'message': 'Aucun membre avec Gmail activé pour ce client'})}\n\n"
+
+    if not opted_in_emails:
+        return StreamingResponse(_no_members(), media_type="text/event-stream", headers={
+            "Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+        })
+
+    # Calculer la date de coupure (format Gmail : YYYY/MM/DD)
+    cutoff_ts = int(time.time()) - days_back * 86400
+    cutoff_date = datetime.utcfromtimestamp(cutoff_ts).strftime('%Y/%m/%d')
+
+    async def generate():
+        loop = asyncio.get_running_loop()
+        seen_thread_ids: set = set()
+        all_threads: list = []
+        ok = 0
+        skipped = 0
+        errors = 0
+
+        # ── Collecte des threads depuis toutes les boîtes opt-in ──────────────
+        for email in opted_in_emails:
+            try:
+                gmail = await loop.run_in_executor(None, get_gmail_service, email)
+                query = f'label:"{label_name}" after:{cutoff_date}'
+                page_token = None
+                while True:
+                    params: dict = {"userId": "me", "q": query, "maxResults": 100}
+                    if page_token:
+                        params["pageToken"] = page_token
+                    result = await loop.run_in_executor(
+                        None,
+                        lambda p=params, g=gmail: g.users().threads().list(**p).execute()
+                    )
+                    for t in result.get("threads", []):
+                        if t["id"] not in seen_thread_ids:
+                            seen_thread_ids.add(t["id"])
+                            all_threads.append({"id": t["id"], "gmail": gmail})
+                    page_token = result.get("nextPageToken")
+                    if not page_token:
+                        break
+            except Exception as e:
+                print(f"sync_emails: Gmail list error for {email}: {e}")
+                yield f"data: {json.dumps({'status': 'heartbeat', 'progress': 0, 'total': 0})}\n\n"
+
+        total = len(all_threads)
+        if total == 0:
+            yield f"data: {json.dumps({'status': 'done', 'total': 0, 'ok': 0, 'skipped': 0, 'errors': 0})}\n\n"
+            return
+
+        processed = 0
+
+        for item in all_threads:
+            thread_id = item["id"]
+            gmail = item["gmail"]
+            processed += 1
+
+            try:
+                # Télécharger le thread complet avec heartbeat
+                fetch_task = asyncio.ensure_future(
+                    loop.run_in_executor(
+                        None,
+                        lambda tid=thread_id, g=gmail: g.users().threads().get(
+                            userId="me", id=tid, format="full"
+                        ).execute()
+                    )
+                )
+                while not fetch_task.done():
+                    await asyncio.wait({fetch_task}, timeout=5.0)
+                    if not fetch_task.done():
+                        yield f"data: {json.dumps({'status': 'heartbeat', 'progress': processed, 'total': total})}\n\n"
+                thread_data = fetch_task.result()
+
+                messages = thread_data.get("messages", [])
+
+                # Extraire le sujet depuis le premier message
+                subject = "Sans sujet"
+                if messages:
+                    for h in messages[0].get("payload", {}).get("headers", []):
+                        if h.get("name", "").lower() == "subject":
+                            subject = h["value"][:100]
+                            break
+
+                # Construire le texte du thread (corps de tous les messages)
+                parts_text = []
+                for msg in messages:
+                    msg_date = ""
+                    for h in msg.get("payload", {}).get("headers", []):
+                        if h.get("name", "").lower() == "date":
+                            msg_date = h["value"][:30]
+                            break
+                    body_text = _extract_email_text(msg.get("payload", {}))
+                    if body_text:
+                        parts_text.append(f"[{msg_date}]\n{body_text}" if msg_date else body_text)
+
+                thread_text = "\n\n---\n\n".join(parts_text)[:8000]
+                if not thread_text.strip():
+                    skipped += 1
+                    yield f"data: {json.dumps({'thread_id': thread_id, 'subject': subject, 'status': 'skipped', 'progress': processed, 'total': total})}\n\n"
+                    continue
+
+                # Résumer via LLM avec heartbeat (fonction isolée pour swap futur Gemini)
+                summarize_task = asyncio.ensure_future(
+                    loop.run_in_executor(None, summarize_with_llm, thread_text)
+                )
+                while not summarize_task.done():
+                    await asyncio.wait({summarize_task}, timeout=5.0)
+                    if not summarize_task.done():
+                        yield f"data: {json.dumps({'status': 'heartbeat', 'progress': processed, 'total': total})}\n\n"
+                summary = summarize_task.result()
+
+                if summary.strip().upper() == "SKIP":
+                    skipped += 1
+                    yield f"data: {json.dumps({'thread_id': thread_id, 'subject': subject, 'status': 'skipped', 'progress': processed, 'total': total})}\n\n"
+                    continue
+
+                # Embed + stocker dans document_chunks (jamais le corps brut)
+                embedding = (await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, [summary]))[0]
+                now_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+                try:
+                    sb.table("document_chunks").delete().eq("client_id", client_id).eq("source_id", thread_id).eq("source_type", "email_summary").execute()
+                except Exception:
+                    pass
+
+                sb.table("document_chunks").insert({
+                    "client_id": client_id,
+                    "source_type": "email_summary",
+                    "source_name": f"Email — {subject[:60]}",
+                    "source_id": thread_id,
+                    "chunk_text": summary,
+                    "embedding": embedding,
+                    "last_indexed_at": now_str,
+                }).execute()
+
+                ok += 1
+                yield f"data: {json.dumps({'thread_id': thread_id, 'subject': subject, 'status': 'summarized', 'progress': processed, 'total': total})}\n\n"
+
+            except Exception as e:
+                errors += 1
+                print(f"sync_emails: error thread {thread_id}: {e}")
+                yield f"data: {json.dumps({'thread_id': thread_id, 'status': 'error', 'error': str(e)[:200], 'progress': processed, 'total': total})}\n\n"
+
+        yield f"data: {json.dumps({'status': 'done', 'total': total, 'ok': ok, 'skipped': skipped, 'errors': errors})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
+
+
+# ── update_gmail_sync ─────────────────────────────────────────────────────────
+async def update_gmail_sync(body: dict, user_id: Optional[str]):
+    enabled = body.get("enabled")
+    if enabled is None:
+        return JSONResponse({"error": "enabled requis (bool)"}, status_code=400)
+    if not user_id:
+        return JSONResponse({"error": "JWT requis"}, status_code=401)
+    try:
+        sb.table("team_members").update({"gmail_sync_enabled": bool(enabled)}).eq("id", user_id).execute()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return {"updated": True}
 
 
 # ── chat (default) ────────────────────────────────────────────────────────────

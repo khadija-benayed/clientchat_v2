@@ -465,6 +465,7 @@ function sourceIcon(type){
     sheet: '<i data-lucide="folder-open" style="width:14px;height:14px;vertical-align:-2px"></i>',
     session:'<i data-lucide="clock" style="width:14px;height:14px;vertical-align:-2px"></i>',
     notion: '<i data-lucide="layout-grid" style="width:14px;height:14px;vertical-align:-2px"></i>',
+    email_summary: '📧',
   };
   return icons[type] || '<i data-lucide="star" style="width:14px;height:14px;vertical-align:-2px"></i>';
 }
@@ -1110,6 +1111,7 @@ async function openSettings(){
   const srcs = getSources();
   const driveSrc = srcs.find(s=>s.type==='drive');
   $('drive-in').value = driveSrc ? (driveSrc.folder_id||'') : (cur.drive_folder_id||'');
+  $('gmail-label-in').value = cur.gmail_label || '';
   switchSettingsTab('params');
   renderMList();
   await migrateDriveLegacy();
@@ -1848,12 +1850,13 @@ async function saveSettings(){
   const driveSrc = srcs.find(s=>s.type==='drive');
   const du = driveSrc ? (driveSrc.folder_id||'') : $('drive-in').value.trim();
   if(du) $('drive-in').value = du;
+  const gmailLabel = ($('gmail-label-in')?.value || '').trim() || null;
 
   if (hasBrief) {
-    // Fiche active : sauvegarder uniquement membres + sources + drive_folder_id
+    // Fiche active : sauvegarder uniquement membres + sources + drive_folder_id + gmail_label
     // Ne pas toucher à context (contiendrait sinon le textarea vide ou du JSON brut)
-    await sb.from('clients').update({drive_folder_id:du, members:cur.members, sources:cur.sources}).eq('id',cur.id);
-    cur.drive_folder_id=du; addSession(cur);
+    await sb.from('clients').update({drive_folder_id:du, members:cur.members, sources:cur.sources, gmail_label:gmailLabel}).eq('id',cur.id);
+    cur.drive_folder_id=du; cur.gmail_label=gmailLabel; addSession(cur);
     closeModal('modal-settings'); renderFilters();
     return;
   }
@@ -1874,8 +1877,8 @@ async function saveSettings(){
 
   // Reconstruire le contexte : manuel + blocs fichier + Drive
   const ctx = [manualCtx, ...fileBlocks, driveBlock].filter(Boolean).join('\n\n');
-  await sb.from('clients').update({context:ctx, drive_folder_id:du, members:cur.members, sources:cur.sources}).eq('id',cur.id);
-  cur.context=ctx; cur.drive_folder_id=du; addSession(cur);
+  await sb.from('clients').update({context:ctx, drive_folder_id:du, members:cur.members, sources:cur.sources, gmail_label:gmailLabel}).eq('id',cur.id);
+  cur.context=ctx; cur.drive_folder_id=du; cur.gmail_label=gmailLabel; addSession(cur);
   closeModal('modal-settings'); renderFilters();
 }
 
@@ -2031,4 +2034,103 @@ function calDayClick(dateStr) {
         <span>${esc(t.title)}</span>
       </div>`
     ).join('');
+}
+
+// ── Gmail sync ────────────────────────────────────────────────────────────────
+
+async function syncEmails() {
+  if (!cur) return;
+  const labelName = ($('gmail-label-in')?.value || '').trim() || (cur.gmail_label || '').trim();
+  if (!labelName) {
+    addMsg('a', '⚠ Configure d\'abord le label Gmail dans les paramètres du client.');
+    return;
+  }
+
+  const btn = $('btn-sync-emails');
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  setSyncDot('#EF9F27', 'sync emails…');
+  addMsg('a', '⏳ Synchronisation emails en cours…');
+
+  try {
+    const resp = await fetch(BACKEND_URL, {
+      method: 'POST',
+      headers: getBackendHeaders(),
+      body: JSON.stringify({action: 'sync_emails', client_id: cur.id, label_name: labelName, days_back: 7}),
+    });
+    if (!resp.ok) {
+      const d = await resp.json().catch(() => ({}));
+      throw new Error(d.error || 'Backend HTTP ' + resp.status);
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let syncOk = 0, syncSkipped = 0, syncErrors = 0, syncTotal = 0, syncDone = false;
+    let doneMsg = '';
+
+    outer: while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      const text = decoder.decode(value, {stream: true});
+      for (const line of text.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        let ev;
+        try { ev = JSON.parse(line.slice(6)); } catch(_) { continue; }
+        if (ev.status === 'heartbeat') continue;
+        if (ev.status === 'done') {
+          syncTotal = ev.total; syncOk = ev.ok ?? syncOk;
+          syncSkipped = ev.skipped ?? syncSkipped; syncErrors = ev.errors ?? syncErrors;
+          if (ev.message) doneMsg = ev.message;
+          syncDone = true; break outer;
+        }
+        if (ev.status === 'summarized') syncOk++;
+        if (ev.status === 'skipped') syncSkipped++;
+        if (ev.status === 'error') syncErrors++;
+        if (ev.progress != null) setSyncProgress(ev.progress, ev.total || 1);
+      }
+    }
+
+    setSyncProgress(null, null);
+    if (doneMsg) {
+      addMsg('a', doneMsg);
+    } else if (syncTotal === 0) {
+      addMsg('a', 'Aucun email trouvé pour le label "' + labelName + '".');
+    } else {
+      const parts = [];
+      if (syncOk) parts.push(syncOk + ' email(s) résumé(s)');
+      if (syncSkipped) parts.push(syncSkipped + ' sans info métier');
+      if (syncErrors) parts.push(syncErrors + ' erreur(s)');
+      addMsg('a', '✓ ' + (parts.join(', ') || 'Sync terminée') + '.');
+    }
+    setSyncDot('#52b788', 'synchronisé');
+
+  } catch(e) {
+    setSyncProgress(null, null);
+    console.error('syncEmails:', e.message);
+    addMsg('a', '⚠ Erreur sync emails : ' + e.message);
+    setSyncDot('#E24B4A', 'erreur');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Sync emails'; }
+  }
+}
+
+async function openGmailPrefs() {
+  const toggle = $('gmail-sync-toggle');
+  if (!toggle) return;
+  try {
+    if (_currentUserId) {
+      const {data} = await sb.from('team_members').select('gmail_sync_enabled').eq('id', _currentUserId).single();
+      toggle.checked = !!(data?.gmail_sync_enabled);
+    }
+  } catch(e) { console.warn('openGmailPrefs:', e.message); }
+  openModal('modal-gmail-prefs');
+}
+
+async function updateGmailSync(enabled) {
+  try {
+    await callBackend({action: 'update_gmail_sync', enabled});
+  } catch(e) {
+    console.error('updateGmailSync:', e.message);
+    const toggle = $('gmail-sync-toggle');
+    if (toggle) toggle.checked = !enabled; // revert on error
+  }
 }

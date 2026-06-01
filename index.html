@@ -79,6 +79,7 @@
       <button class="btn-ghost" onclick="openModal('modal-join-existing')">+ Rejoindre un client</button>
       <button class="btn-ghost" onclick="openModal('modal-new')" style="margin-top:4px">+ Créer un client</button>
       <button class="btn-ghost" onclick="openKbBrowser()">Base de savoir →</button>
+      <button class="btn-ghost" onclick="openGmailPrefs()">Préférences Gmail</button>
       <button class="btn-logout" onclick="logout()">Déconnexion</button>
     </div>
   </div>
@@ -190,6 +191,16 @@
     </div>
     <button class="btn-add-member" style="margin-top:8px" onclick="openModal('modal-add-source')">+ Ajouter une source</button>
   </div>
+  <!-- Gmail sync par client -->
+  <div class="gmail-section">
+    <div class="sources-label"><span>Sync emails Gmail</span></div>
+    <div class="gmail-label-row">
+      <input type="text" id="gmail-label-in" placeholder="Ex : CC/Aroma-Zone"/>
+      <button class="src-sync-btn" id="btn-sync-emails" onclick="syncEmails()">Sync emails</button>
+    </div>
+    <div class="note-txt" style="margin-top:4px">Label Gmail des emails de ce client. <span class="gmail-prefs-link" onclick="openGmailPrefs()">Activer pour mes emails →</span></div>
+  </div>
+
   <div class="brief-section" id="brief-section">
     <div class="brief-header">
       <span class="brief-label">Fiche client générée</span>
@@ -412,6 +423,26 @@
   <div id="kb-browser-list" style="max-height:400px;overflow-y:auto"></div>
   <div class="modal-foot">
     <button class="btn btn-sec" onclick="closeModal('kb-browser-overlay')">Fermer</button>
+  </div>
+</div>
+</div>
+
+<!-- Modal préférences Gmail utilisateur -->
+<div class="modal-bg" id="modal-gmail-prefs">
+<div class="modal" style="max-width:380px">
+  <h2>Préférences Gmail</h2>
+  <div class="gmail-prefs-row">
+    <div>
+      <div class="gmail-prefs-title">Activer la sync Gmail</div>
+      <div class="gmail-prefs-sub">Permet à ClientChat de lire vos emails labelisés pour en extraire des résumés métier. Le corps des emails n'est jamais stocké.</div>
+    </div>
+    <label class="toggle-switch">
+      <input type="checkbox" id="gmail-sync-toggle" onchange="updateGmailSync(this.checked)"/>
+      <span class="toggle-slider"></span>
+    </label>
+  </div>
+  <div class="modal-foot">
+    <button class="btn btn-sec" onclick="closeModal('modal-gmail-prefs')">Fermer</button>
   </div>
 </div>
 </div>
