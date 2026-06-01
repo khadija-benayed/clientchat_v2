@@ -477,6 +477,8 @@ async def dispatcher(request: Request):
         return await remove_client_member(body, user_id)
     if action == "set_member_role":
         return await set_member_role(body, user_id)
+    if action == "claim_ownership":
+        return await claim_ownership(body, user_id)
     if action == "sync_drive":
         return await sync_drive(body, request)
     if action == "sync_state":
@@ -913,10 +915,20 @@ async def get_client_members(body: dict, user_id: Optional[str]):
             if m["id"] not in existing_ids
         ]
 
+        owners_count = sum(1 for m in members if m["role"] == "owner")
+
+        # current_role: role of the requesting user in this client, or None
+        current_role = next(
+            (m["role"] for m in members if m["member_id"] == user_id), None
+        ) if user_id else None
+
         return {
             "members": members,
             "available": available,
             "is_owner": _is_owner(user_id, client_id),
+            "current_role": current_role,          # "owner" | "member" | null
+            "owners_count": owners_count,
+            "can_claim": bool(user_id and owners_count == 0),
         }
     except Exception as e:
         print(f"get_client_members error: {e}")
@@ -1001,6 +1013,26 @@ async def set_member_role(body: dict, user_id: Optional[str]):
         return JSONResponse({"error": str(e)}, status_code=500)
 
     return {"updated": True}
+
+
+# ── claim_ownership ───────────────────────────────────────────────────────────
+async def claim_ownership(body: dict, user_id: Optional[str]):
+    """Lets any authenticated user become owner when the client has zero owners."""
+    client_id = body.get("client_id")
+    if not client_id:
+        return JSONResponse({"error": "client_id requis"}, status_code=400)
+    if not user_id:
+        return JSONResponse({"error": "JWT requis pour claim_ownership"}, status_code=401)
+    if _count_owners(client_id) > 0:
+        return JSONResponse({"error": "Ce client a déjà un owner — demande-lui de te promouvoir"}, status_code=403)
+    try:
+        sb.table("client_members").upsert(
+            {"client_id": client_id, "member_id": user_id, "role": "owner"},
+            on_conflict="client_id,member_id",
+        ).execute()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return {"claimed": True}
 
 
 # ── sync_drive ────────────────────────────────────────────────────────────────

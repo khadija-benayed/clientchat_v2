@@ -927,12 +927,11 @@ function _cmInitials(fullName, email) {
 
 async function renderClientMembers() {
   const list = $('cm-list');
-  const addRow = $('cm-add-row');
-  const errEl = $('cm-err');
   if (!list) return;
 
   list.innerHTML = '<div class="cm-empty">Chargement…</div>';
   hide('cm-err');
+  hide('cm-add-row');
 
   let data;
   try {
@@ -946,58 +945,39 @@ async function renderClientMembers() {
     return;
   }
 
-  list.innerHTML = '';
-  if (!data.members || !data.members.length) {
-    list.innerHTML = '<div class="cm-empty">Aucun membre assigné.</div>';
-  } else {
-    data.members.forEach(m => {
-      const ini = _cmInitials(m.full_name, m.email);
-      const st = mStyle(ini);
-      const displayName = esc(m.full_name || m.email || 'Utilisateur');
-      const displayEmail = esc(m.email || '');
-
-      const row = document.createElement('div');
-      row.className = 'cm-row';
-      row.innerHTML =
-        `<div class="cm-avatar" style="background:${st.bg};color:${st.c}">${esc(ini)}</div>` +
-        `<div class="cm-info"><div class="cm-name">${displayName}</div><div class="cm-email">${displayEmail}</div></div>` +
-        `<span class="cm-role-badge ${m.role}">${m.role === 'owner' ? 'owner' : 'membre'}</span>`;
-
-      if (data.is_owner) {
-        const actions = document.createElement('div');
-        actions.className = 'cm-actions';
-
-        const roleBtn = document.createElement('button');
-        roleBtn.className = 'cm-role-btn';
-        if (m.role === 'owner') {
-          roleBtn.textContent = '→ membre';
-          roleBtn.title = 'Rétrograder en membre';
-          roleBtn.addEventListener('click', () => setClientMemberRole(m.member_id, 'member'));
-        } else {
-          roleBtn.textContent = '→ owner';
-          roleBtn.title = 'Promouvoir en owner';
-          roleBtn.addEventListener('click', () => setClientMemberRole(m.member_id, 'owner'));
-        }
-
-        const remBtn = document.createElement('button');
-        remBtn.className = 'cm-remove-btn';
-        remBtn.title = 'Retirer ce membre';
-        remBtn.textContent = '×';
-        remBtn.addEventListener('click', () => removeClientMember(m.member_id, m.full_name || m.email));
-
-        actions.appendChild(roleBtn);
-        actions.appendChild(remBtn);
-        row.appendChild(actions);
-      }
-
-      list.appendChild(row);
-    });
+  // ── CAS 1 : aucun owner → banner "Devenir owner" ──────────────────────────
+  if (data.can_claim) {
+    list.innerHTML =
+      '<div class="cm-claim-banner">' +
+        '<span>⚠️ Cet espace n\'a pas encore d\'owner.</span>' +
+        '<button class="cm-claim-btn" onclick="claimOwnership()">Devenir owner</button>' +
+      '</div>';
+    return;
   }
 
-  // Add row — visible seulement pour les owners
-  if (data.is_owner) {
-    const sel = $('cm-add-select');
-    sel.innerHTML = '';
+  // ── CAS 2 : membre ou non-assigné, owners existants → lecture seule ────────
+  if (!data.is_owner) {
+    _renderCmRows(list, data.members, false);
+    if (data.current_role === 'member') {
+      const hint = document.createElement('div');
+      hint.className = 'cm-hint';
+      hint.textContent = 'Demande à un owner de te promouvoir pour gérer les accès.';
+      list.appendChild(hint);
+    } else {
+      // Non assigné : pas dans client_members du tout
+      const hint = document.createElement('div');
+      hint.className = 'cm-hint';
+      hint.textContent = 'Tu n\'es pas encore assigné à cet espace. Demande à un owner de t\'ajouter.';
+      list.appendChild(hint);
+    }
+    return;
+  }
+
+  // ── CAS 3 : owner → contrôle complet ─────────────────────────────────────
+  _renderCmRows(list, data.members, true);
+
+  const sel = $('cm-add-select');
+  if (sel) {
     const avail = data.available || [];
     if (!avail.length) {
       sel.innerHTML = '<option value="">Tous les membres sont assignés</option>';
@@ -1012,9 +992,68 @@ async function renderClientMembers() {
         sel.appendChild(opt);
       });
     }
-    show('cm-add-row');
-  } else {
-    hide('cm-add-row');
+  }
+  show('cm-add-row');
+}
+
+function _renderCmRows(container, members, isOwner) {
+  container.innerHTML = '';
+  if (!members || !members.length) {
+    container.innerHTML = '<div class="cm-empty">Aucun membre assigné.</div>';
+    return;
+  }
+  members.forEach(m => {
+    const ini = _cmInitials(m.full_name, m.email);
+    const st = mStyle(ini);
+    const displayName = esc(m.full_name || m.email || 'Utilisateur');
+    const displayEmail = esc(m.email || '');
+
+    const row = document.createElement('div');
+    row.className = 'cm-row';
+    row.innerHTML =
+      `<div class="cm-avatar" style="background:${st.bg};color:${st.c}">${esc(ini)}</div>` +
+      `<div class="cm-info"><div class="cm-name">${displayName}</div><div class="cm-email">${displayEmail}</div></div>` +
+      `<span class="cm-role-badge ${m.role}">${m.role === 'owner' ? 'owner' : 'membre'}</span>`;
+
+    if (isOwner) {
+      const actions = document.createElement('div');
+      actions.className = 'cm-actions';
+
+      const roleBtn = document.createElement('button');
+      roleBtn.className = 'cm-role-btn';
+      if (m.role === 'owner') {
+        roleBtn.textContent = '→ membre';
+        roleBtn.title = 'Rétrograder en membre';
+        roleBtn.addEventListener('click', () => setClientMemberRole(m.member_id, 'member'));
+      } else {
+        roleBtn.textContent = '→ owner';
+        roleBtn.title = 'Promouvoir en owner';
+        roleBtn.addEventListener('click', () => setClientMemberRole(m.member_id, 'owner'));
+      }
+
+      const remBtn = document.createElement('button');
+      remBtn.className = 'cm-remove-btn';
+      remBtn.title = 'Retirer ce membre';
+      remBtn.textContent = '×';
+      remBtn.addEventListener('click', () => removeClientMember(m.member_id, m.full_name || m.email));
+
+      actions.appendChild(roleBtn);
+      actions.appendChild(remBtn);
+      row.appendChild(actions);
+    }
+
+    container.appendChild(row);
+  });
+}
+
+async function claimOwnership() {
+  hide('cm-err');
+  try {
+    const data = await callBackend({action: 'claim_ownership', client_id: cur.id});
+    if (data.error) { showErr('cm-err', data.error); return; }
+    await renderClientMembers();
+  } catch(e) {
+    showErr('cm-err', e.message);
   }
 }
 

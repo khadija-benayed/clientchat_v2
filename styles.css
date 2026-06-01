@@ -902,4 +902,21 @@ select {
   background: var(--sur); color: var(--tx); min-width: 0;
 }
 .cm-add-row .btn-sec { width: auto; padding: 7px 14px; flex-shrink: 0; }
+.cm-claim-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px; border-radius: var(--rs);
+  background: rgba(248,155,28,.1); border: 1px solid rgba(248,155,28,.3);
+  font-size: 13px; color: var(--tx2);
+}
+.cm-claim-btn {
+  padding: 5px 12px; border-radius: var(--rs); border: none;
+  background: var(--sb-orange); color: #fff; font-size: 12px; font-weight: 600;
+  cursor: pointer; font-family: 'DM Sans', sans-serif; flex-shrink: 0;
+  transition: opacity .15s;
+}
+.cm-claim-btn:hover { opacity: .88; }
+.cm-hint {
+  font-size: 12px; color: var(--tx3); font-style: italic;
+  margin-top: 8px; padding: 0 2px;
+}
 
