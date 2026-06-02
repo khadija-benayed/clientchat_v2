@@ -1680,7 +1680,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
             query_emb = (await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, [query_for_embed]))[0]
             result = sb.rpc("match_chunks", {
                 "query_embedding": query_emb,
-                "match_count": 40,
+                "match_count": 150,
                 "p_client_id": client_id,
             }).execute()
             chunks = result.data or []
@@ -1699,13 +1699,46 @@ async def chat(body: dict, user_id: Optional[str] = None):
 
             # Source-name keyword boost: chunks from sources whose filename contains
             # query words rank first, before the diversity cap is applied.
-            # This ensures e.g. "Notes point suivi tracking" surfaces when the user
-            # asks about "point suivi tracking", even if its chunk text scores lower
-            # than a big structured sheet that dominates the semantic results.
             query_words = {w.lower() for w in re.findall(r'\w{4,}', message)}
             def _name_overlap(chunk):
                 name = chunk["source_name"].lower()
                 return sum(1 for w in query_words if w in name)
+
+            # Keyword-source safety net: if a source whose name matches the query
+            # isn't in the semantic results at all (scored below rank 150), fetch
+            # its chunks directly so the guaranteed-slots logic can include them.
+            if query_words:
+                semantic_sources = {c["source_name"] for c in chunks}
+                try:
+                    all_src_rows = (
+                        sb.table("document_chunks")
+                        .select("source_name")
+                        .eq("client_id", client_id)
+                        .execute()
+                    )
+                    all_sources = {r["source_name"] for r in (all_src_rows.data or [])}
+                    missing_kw_sources = [
+                        s for s in all_sources
+                        if s not in semantic_sources
+                        and sum(1 for w in query_words if w in s.lower()) >= 2
+                    ]
+                    for src in missing_kw_sources[:5]:
+                        extra = (
+                            sb.table("document_chunks")
+                            .select("source_name, chunk_text, source_type, client_id")
+                            .eq("client_id", client_id)
+                            .eq("source_name", src)
+                            .limit(2)
+                            .execute()
+                        )
+                        for row in (extra.data or []):
+                            chunks.append({
+                                **row,
+                                "similarity": 0.0,  # unknown — will be ranked by name_overlap
+                            })
+                except Exception as _kw_err:
+                    print(f"keyword safety net error (non bloquant): {_kw_err}")
+
             chunks.sort(key=lambda c: (_name_overlap(c), c["similarity"]), reverse=True)
 
             # Source diversity: cap at 2 chunks per source so one large file
