@@ -885,10 +885,17 @@ async def index_source(body: dict):
         )
 
     # Embed all at once — local model, zero timeout risk.
-    # Prepend source_name (capped at 60 chars) so queries that reference the doc by name
-    # score higher. Cap prevents long names from eating into MiniLM's 128-token limit.
+    # Prefix = "filename [dd/mm/yyyy]\n" so semantic search benefits from both
+    # the document name and its modification date (helps "récent", "dernière version"…).
     loop = asyncio.get_running_loop()
-    prefix = (source_name[:60] + "\n") if source_name else ""
+    date_tag = ""
+    if drive_modified_at:
+        try:
+            _dt = datetime.fromisoformat(drive_modified_at.replace("Z", "+00:00"))
+            date_tag = f" [{_dt.strftime('%d/%m/%Y')}]"
+        except Exception:
+            pass
+    prefix = (source_name[:60] + date_tag + "\n") if source_name else ""
     embed_inputs = [prefix + c for c in chunks] if prefix else chunks
     embeddings = await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, embed_inputs)
 
@@ -1334,8 +1341,15 @@ async def sync_drive(body: dict, request: Request):
                         yield f"data: {json.dumps({'file': f['name'], 'status': 'empty', 'progress': processed, 'total': total})}\n\n"
                         continue
 
-                    # Prepend filename (capped) so queries referencing the doc by name score higher.
-                    embed_inputs = [f["name"][:60] + "\n" + c for c in chunks]
+                    # Prefix = "filename [dd/mm/yyyy]\n" — same as index_source.
+                    _fdate = ""
+                    if f.get("modifiedTime"):
+                        try:
+                            _fdt = datetime.fromisoformat(f["modifiedTime"].replace("Z", "+00:00"))
+                            _fdate = f" [{_fdt.strftime('%d/%m/%Y')}]"
+                        except Exception:
+                            pass
+                    embed_inputs = [f["name"][:60] + _fdate + "\n" + c for c in chunks]
                     # Heartbeat during embedding (same pattern as downloads)
                     embed_task = asyncio.ensure_future(
                         loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, embed_inputs)
@@ -1636,7 +1650,32 @@ async def chat(body: dict, user_id: Optional[str] = None):
     if message and message_type != "task_action":
         try:
             loop = asyncio.get_running_loop()
-            query_emb = (await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, [message]))[0]
+
+            # HyDE (Hypothetical Document Embeddings): for substantive queries, ask
+            # Gemini Flash to generate what an ideal document excerpt would look like,
+            # then embed that instead of the raw question. Doc-to-doc matching is far
+            # more accurate than question-to-doc for paraphrase-style models.
+            # Skip for short/conversational turns — they don't benefit from it.
+            query_for_embed = message
+            if len(message.strip()) > 25:
+                try:
+                    _hyde_model = genai.GenerativeModel(GEMINI_FLASH)
+                    _hyde_resp = _hyde_model.generate_content(
+                        f"Écris en 2-3 phrases un extrait de document professionnel "
+                        f"qui contiendrait la réponse à cette question : « {message} »\n"
+                        f"Réponds uniquement avec l'extrait, sans introduction ni explication.",
+                        generation_config=genai.types.GenerationConfig(
+                            max_output_tokens=120,
+                            temperature=0.0,
+                        ),
+                    )
+                    _hyde_text = (_hyde_resp.text or "").strip()
+                    if len(_hyde_text) > 20:
+                        query_for_embed = _hyde_text
+                except Exception:
+                    pass  # fall back to raw message
+
+            query_emb = (await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, [query_for_embed]))[0]
             result = sb.rpc("match_chunks", {
                 "query_embedding": query_emb,
                 "match_count": 40,
@@ -1694,8 +1733,14 @@ async def chat(body: dict, user_id: Optional[str] = None):
                 session_chunks = [c for c in to_inject if c["source_type"] == "session"]
 
                 if doc_chunks:
+                    # Normalize source names for in-text citation: replace [ ] with ( )
+                    # so filenames like "[Client x Agency] || Doc" don't produce nested
+                    # brackets [[Client x Agency] || Doc] that break the citation regex.
+                    def _cite_name(name: str) -> str:
+                        return name.replace('[', '(').replace(']', ')')
+
                     doc_block = "\n\n".join(
-                        f"— {c['source_name']}\n{c['chunk_text']}" for c in doc_chunks
+                        f"— {_cite_name(c['source_name'])}\n{c['chunk_text']}" for c in doc_chunks
                     )
                     system_with_rag += (
                         "\n\n[Documents pertinents]\nIMPORTANT : quand tu utilises une information "

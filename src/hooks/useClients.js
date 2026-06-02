@@ -203,17 +203,26 @@ export function useClients({ jwtToken, currentUserId }) {
       );
       if (!metaData.files?.length) return;
 
-      // 2. État des chunks indexés en base
-      const { data: indexedRows } = await supabase
-        .from('document_chunks')
-        .select('source_id, last_indexed_at')
-        .eq('client_id', client.id)
-        .not('source_id', 'is', null);
-
+      // 2. État des chunks indexés en base — paginé (PostgREST limite à 1000 lignes
+      //    par défaut ; sans pagination, les gros clients semblent avoir des fichiers
+      //    "nouveaux" alors qu'ils sont déjà indexés).
       const indexedMap = {};
-      for (const row of (indexedRows || [])) {
-        if (!indexedMap[row.source_id])
-          indexedMap[row.source_id] = row.last_indexed_at;
+      const PAGE = 1000;
+      let offset = 0;
+      while (true) {
+        const { data: rows } = await supabase
+          .from('document_chunks')
+          .select('source_id, last_indexed_at')
+          .eq('client_id', client.id)
+          .not('source_id', 'is', null)
+          .range(offset, offset + PAGE - 1);
+        if (!rows?.length) break;
+        for (const row of rows) {
+          if (!indexedMap[row.source_id] || row.last_indexed_at > indexedMap[row.source_id])
+            indexedMap[row.source_id] = row.last_indexed_at;
+        }
+        if (rows.length < PAGE) break;
+        offset += PAGE;
       }
 
       // 3. Compter les fichiers nouveaux / modifiés (tolérance 5 min)
