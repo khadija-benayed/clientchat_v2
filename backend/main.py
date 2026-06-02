@@ -1639,7 +1639,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
             query_emb = (await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, [message]))[0]
             result = sb.rpc("match_chunks", {
                 "query_embedding": query_emb,
-                "match_count": 15,
+                "match_count": 40,
                 "p_client_id": client_id,
             }).execute()
             chunks = result.data or []
@@ -1655,6 +1655,17 @@ async def chat(body: dict, user_id: Optional[str] = None):
                 }
                 for c in chunks
             ]
+
+            # Source-name keyword boost: chunks from sources whose filename contains
+            # query words rank first, before the diversity cap is applied.
+            # This ensures e.g. "Notes point suivi tracking" surfaces when the user
+            # asks about "point suivi tracking", even if its chunk text scores lower
+            # than a big structured sheet that dominates the semantic results.
+            query_words = {w.lower() for w in re.findall(r'\w{4,}', message)}
+            def _name_overlap(chunk):
+                name = chunk["source_name"].lower()
+                return sum(1 for w in query_words if w in name)
+            chunks.sort(key=lambda c: (_name_overlap(c), c["similarity"]), reverse=True)
 
             # Source diversity: cap at 2 chunks per source so one large file
             # can't crowd out all other sources from the injected context.
