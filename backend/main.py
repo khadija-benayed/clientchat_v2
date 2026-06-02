@@ -845,6 +845,7 @@ async def index_source(body: dict):
     source_type = body.get("source_type")
     source_name = body.get("source_name")
     source_id = body.get("source_id")
+    drive_modified_at = body.get("drive_modified_at")
     content = body.get("content", "")
 
     if not source_name or not source_type or not content:
@@ -908,6 +909,7 @@ async def index_source(body: dict):
             "source_type": source_type,
             "source_name": source_name,
             **({"source_id": source_id} if source_id else {}),
+            **({"drive_modified_at": drive_modified_at} if drive_modified_at else {}),
             "chunk_text": chunk,
             "embedding": emb,
             "last_indexed_at": now,
@@ -1357,6 +1359,7 @@ async def sync_drive(body: dict, request: Request):
                         "chunk_text": chunk,
                         "embedding": emb,
                         "last_indexed_at": now,
+                        **({"drive_modified_at": f["modifiedTime"]} if f.get("modifiedTime") else {}),
                     } for chunk, emb in zip(chunks, embeddings)]
 
                     _sb_insert("document_chunks", rows)
@@ -1659,8 +1662,8 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     )
                     system_with_rag += (
                         "\n\n[Documents pertinents]\nIMPORTANT : quand tu utilises une information "
-                        "issue de ces extraits, cite le nom du fichier source entre parenthèses, "
-                        "ex : *(source : NomDuFichier)*.\n\n" + doc_block
+                        "issue de ces extraits, cite le nom du fichier source entre crochets, "
+                        "ex : [NomDuFichier].\n\n" + doc_block
                     )
                     sources_used = [
                         {

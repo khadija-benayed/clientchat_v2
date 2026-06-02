@@ -293,22 +293,20 @@ body {
 .dp:nth-child(3) { animation-delay: .30s; }
 @keyframes bounce { 0%,80%,100%{transform:translateY(0)} 40%{transform:translateY(-6px)} }
 
-/* Sources RAG */
+/* Sources RAG — chip layout */
 .msg-sources { margin-top: 6px; }
-.msg-sources-toggle {
-  font-size: 11px; color: var(--tx3); background: transparent; border: none;
-  cursor: pointer; display: flex; align-items: center; gap: 4px;
-  padding: 3px 6px; border-radius: 4px; transition: color .12s, background .12s;
+.msg-sources-label {
+  font-size: 10px; color: var(--tx3);
+  display: flex; align-items: center; gap: 3px; margin-bottom: 5px;
 }
-.msg-sources-toggle:hover { color: var(--tx2); background: var(--sur2); }
-.msg-sources-list { display: none; flex-direction: column; gap: 4px; margin-top: 4px; }
-.msg-sources-list.open { display: flex; }
-.msg-source-item {
-  background: var(--sur2); border-radius: var(--rs);
-  padding: 6px 10px; font-size: 12px;
+.msg-sources-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.src-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: var(--sur2); border: 1px solid var(--brd2); border-radius: 99px;
+  padding: 3px 9px 3px 6px; font-size: 11px; color: var(--tx2);
+  max-width: 200px; cursor: default; user-select: none;
 }
-.src-name { color: var(--tx2); display: flex; align-items: center; gap: 5px; }
-.src-preview { color: var(--tx3); font-size: 11px; margin-top: 2px; }
+.src-chip span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* KB button */
 .kb-btn {

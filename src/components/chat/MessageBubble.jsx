@@ -14,7 +14,7 @@
  * @param {Function} onSaveToKb  - Appelée avec le texte pour ouvrir la modal KB
  */
 import { useState } from 'react';
-import { Layers, ChevronDown } from 'lucide-react';
+import { Layers } from 'lucide-react';
 
 // Icônes des types de sources
 function SourceIcon({ type }) {
@@ -35,7 +35,6 @@ function formatTime(date) {
 }
 
 export default function MessageBubble({ msg, clientName, onSaveToKb }) {
-  const [sourcesOpen, setSourcesOpen] = useState(false);
   const [kbSaved, setKbSaved] = useState(false);
 
   const isUser = msg.role === 'u';
@@ -67,31 +66,22 @@ export default function MessageBubble({ msg, clientName, onSaveToKb }) {
         <div className="msg-badge">{msg.badge}</div>
       )}
 
-      {/* Sources RAG dépliables */}
+      {/* Sources RAG */}
       {!isUser && uniqueSources.length > 0 && (
         <div className="msg-sources">
-          <button
-            className="msg-sources-toggle"
-            onClick={() => setSourcesOpen(!sourcesOpen)}
-          >
-            <Layers size={11} />
-            {' '}{uniqueSources.length} source{uniqueSources.length > 1 ? 's' : ''}
-            {' '}<ChevronDown
-              size={11}
-              style={{ transition: 'transform .15s', transform: sourcesOpen ? 'rotate(180deg)' : '' }}
-            />
-          </button>
-          <div className={`msg-sources-list${sourcesOpen ? ' open' : ''}`}>
+          <div className="msg-sources-label">
+            <Layers size={10} /> Sources
+          </div>
+          <div className="msg-sources-chips">
             {uniqueSources.map((s, i) => (
-              <div key={i} className="msg-source-item">
-                <div className="src-name">
-                  <SourceIcon type={s.source_type} />
-                  {s.source_name || 'Fichier sans nom'}
-                </div>
-                {s.preview && (
-                  <div className="src-preview">{s.preview}…</div>
-                )}
-              </div>
+              <span
+                key={i}
+                className="src-chip"
+                title={[s.source_name, s.preview ? s.preview + '…' : ''].filter(Boolean).join('\n\n')}
+              >
+                <SourceIcon type={s.source_type} />
+                <span>{(s.source_name || 'Fichier').replace(/\.[^.]+$/, '')}</span>
+              </span>
             ))}
           </div>
         </div>

@@ -372,7 +372,7 @@ function buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr, task
     : 'Réponds en français de façon précise et structurée. Pour les questions et analyses, développe ta réponse : sois complet, utilise des listes ou sections si utile, ne sois pas trop bref. Réponds directement à ce qui est demandé sans paraphraser la question.';
   const part1Desc = isAction
     ? 'ta réponse courte confirmant l\'action effectuée (1-2 phrases max).'
-    : 'ta réponse complète et précise. Cite tes sources entre parenthèses quand tu utilises un document : *(source : NomFichier)*.';
+    : 'ta réponse complète et précise. Cite tes sources entre crochets quand tu utilises un document : [NomFichier].';
   return 'Tu es l\'assistant projet de l\'équipe sur ce client.\n'
     + 'Date du jour : ' + today + '.\n'
     + 'TO-DO ACTUELLE : ' + snap(tasks) + '\n'
@@ -407,7 +407,7 @@ function buildL2(ctxForPrompt, summaries, docCache) {
   }
   if (docCache?.length) {
     const MAX_CHARS = 80000;
-    let cacheBlock = '\n\n[Documents Drive récents]\nQuand tu utilises une info, cite le fichier entre parenthèses : *(source : NomDuFichier)*.\n';
+    let cacheBlock = '\n\n[Documents Drive récents]\nQuand tu utilises une info, cite le fichier entre crochets : [NomDuFichier].\n';
     let total = 0;
     for (const doc of docCache) {
       const chunk = doc.content.slice(0, 8000);

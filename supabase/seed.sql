@@ -92,6 +92,9 @@ CREATE TABLE IF NOT EXISTS usage_logs (
 -- Migration : ajoute user_id si la table existe déjà en production
 ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS user_id uuid;
 
+-- Migration : stocke la date de modification Drive réelle (vs last_indexed_at = date de sync)
+ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS drive_modified_at timestamptz;
+
 -- ── Index de performance ──────────────────────────────────────────────────────
 
 -- Recherche vectorielle ivfflat cosinus — gte-small, 384 dims (lists=50)

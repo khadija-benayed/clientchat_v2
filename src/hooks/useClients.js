@@ -266,6 +266,7 @@ export function useClients({ jwtToken, currentUserId }) {
             action: 'index_source', client_id: client.id,
             source_type: sourceType, source_id: fileMeta.id,
             source_name: fileMeta.name, content: exportData.file.content,
+            drive_modified_at: fileMeta.modifiedTime || null,
           }, jwtToken);
           indexedNew++;
           setSyncProgress({ done: indexedNew, total: newFiles.length });
@@ -288,6 +289,7 @@ export function useClients({ jwtToken, currentUserId }) {
             action: 'index_source', client_id: client.id,
             source_type: sourceType, source_id: fileMeta.id,
             source_name: fileMeta.name, content: exportData.file.content,
+            drive_modified_at: fileMeta.modifiedTime || null,
           }, jwtToken);
         } catch (e) {
           console.warn('checkDriveUpdates modified file error:', e.message);
@@ -305,7 +307,7 @@ export function useClients({ jwtToken, currentUserId }) {
     try {
       const { data } = await supabase
         .from('document_chunks')
-        .select('source_name, source_id, chunk_text, last_indexed_at')
+        .select('source_name, source_id, chunk_text, last_indexed_at, drive_modified_at')
         .eq('client_id', client.id)
         .in('source_type', ['doc', 'sheet', 'pdf', 'file'])
         .order('last_indexed_at', { ascending: false })
@@ -316,13 +318,19 @@ export function useClients({ jwtToken, currentUserId }) {
       const bySource = {};
       for (const row of data) {
         if (!bySource[row.source_name])
-          bySource[row.source_name] = { source_id: row.source_id, last_indexed_at: row.last_indexed_at, text: '' };
+          bySource[row.source_name] = {
+            source_id: row.source_id,
+            last_indexed_at: row.last_indexed_at,
+            drive_modified_at: row.drive_modified_at,
+            text: '',
+          };
         if (bySource[row.source_name].text.length < 8000)
           bySource[row.source_name].text += (bySource[row.source_name].text ? '\n' : '') + row.chunk_text;
       }
       const docs = Object.entries(bySource).slice(0, 10).map(([name, v]) => ({
         driveId: v.source_id, filename: name,
-        content: v.text.slice(0, 8000), modifiedTime: v.last_indexed_at || null,
+        content: v.text.slice(0, 8000),
+        modifiedTime: v.drive_modified_at || v.last_indexed_at || null,
       }));
       setDocCache(docs);
     } catch (e) {
