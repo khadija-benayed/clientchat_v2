@@ -1718,16 +1718,17 @@ async def chat(body: dict, user_id: Optional[str] = None):
             chunks = diverse
 
             if chunks:
-                HIGH_THRESHOLD = 0.62
-                LOW_THRESHOLD = 0.50
+                FLOOR = 0.45   # hard floor — below this is noise, even if keyword-boosted
                 MAX_INJECT = 6
                 MIN_INJECT = 2
-                high_q = [c for c in chunks if c["similarity"] >= HIGH_THRESHOLD]
-                if len(high_q) >= MIN_INJECT:
-                    to_inject = high_q[:MAX_INJECT]
+                # Use the keyword-sorted order (applied above). A pure similarity threshold
+                # applied here would undo the keyword boost: e.g. "Notes point suivi tracking"
+                # chunks score ~0.52 but rank first by name overlap. We trust the sort.
+                above_floor = [c for c in chunks if c["similarity"] >= FLOOR]
+                if len(above_floor) >= MIN_INJECT:
+                    to_inject = above_floor[:MAX_INJECT]
                 else:
-                    low_q = [c for c in chunks if c["similarity"] >= LOW_THRESHOLD]
-                    to_inject = low_q[:MIN_INJECT]
+                    to_inject = chunks[:MIN_INJECT]
 
                 doc_chunks = [c for c in to_inject if c["source_type"] != "session"]
                 session_chunks = [c for c in to_inject if c["source_type"] == "session"]
