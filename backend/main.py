@@ -884,9 +884,11 @@ async def index_source(body: dict):
             {"error": "Aucun chunk généré — contenu trop court ou vide."}, status_code=400
         )
 
-    # Embed all at once — local model, zero timeout risk
+    # Embed all at once — local model, zero timeout risk.
+    # Prepend source_name so queries that mention the document by name score higher.
     loop = asyncio.get_running_loop()
-    embeddings = await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, chunks)
+    embed_inputs = [source_name + "\n" + c for c in chunks] if source_name else chunks
+    embeddings = await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, embed_inputs)
 
     # Delete old chunks before inserting (source_id stable key for Drive, source_name fallback)
     try:
@@ -1330,9 +1332,11 @@ async def sync_drive(body: dict, request: Request):
                         yield f"data: {json.dumps({'file': f['name'], 'status': 'empty', 'progress': processed, 'total': total})}\n\n"
                         continue
 
+                    # Prepend filename so queries referencing the doc by name score higher.
+                    embed_inputs = [f["name"] + "\n" + c for c in chunks]
                     # Heartbeat during embedding (same pattern as downloads)
                     embed_task = asyncio.ensure_future(
-                        loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, chunks)
+                        loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, embed_inputs)
                     )
                     while not embed_task.done():
                         await asyncio.wait({embed_task}, timeout=5.0)
@@ -1485,6 +1489,14 @@ async def sync_emails(body: dict, request: Request):
         if total == 0:
             yield f"data: {json.dumps({'status': 'done', 'total': 0, 'ok': 0, 'skipped': 0, 'errors': 0})}\n\n"
             return
+
+        # Purge all stale email summaries before re-inserting fresh ones.
+        # Threads outside the current date range would otherwise persist indefinitely.
+        try:
+            sb.table("document_chunks").delete()\
+                .eq("client_id", client_id).eq("source_type", "email_summary").execute()
+        except Exception as e:
+            print(f"sync_emails: purge stale summaries error (non bloquant): {e}")
 
         processed = 0
 

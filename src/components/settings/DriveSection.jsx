@@ -122,8 +122,10 @@ export default function DriveSection({ client, onClientUpdate, onSyncMessage, sy
       {sources.length === 0 ? (
         <div className="src-empty">Aucune source connectée.</div>
       ) : sources.map((s, i) => {
-        const statusCls = s.status === 'ok' ? 'ok' : s.status === 'syncing' ? 'syncing' : 'err';
-        const statusLbl = s.status === 'ok' ? '✓ Connecté' : s.status === 'syncing' ? '⟳ Sync…' : '✗ Erreur';
+        const isActive = Boolean(syncing[i]);
+        const progress = isActive ? syncHook.driveProgress : null;
+        const statusCls = isActive ? 'syncing' : (s.status === 'ok' ? 'ok' : 'err');
+        const statusLbl = isActive ? '⟳ Sync…' : (s.status === 'ok' ? '✓ Connecté' : '✗ Erreur');
         const syncDate = s.last_synced_at
           ? new Date(s.last_synced_at).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
           : 'jamais';
@@ -132,15 +134,21 @@ export default function DriveSection({ client, onClientUpdate, onSyncMessage, sy
             <div className="src-icon">{iconMap[s.type] || '📎'}</div>
             <div className="src-info">
               <div className="src-name">{s.name || s.type}</div>
-              <div className="src-meta">Dernière sync : {syncDate}</div>
+              <div className="src-meta">
+                {isActive
+                  ? (progress && progress.total > 0
+                      ? `${progress.done} / ${progress.total} fichiers…`
+                      : '⏳ Connexion en cours…')
+                  : `Dernière sync : ${syncDate}`}
+              </div>
             </div>
             <span className={`src-status ${statusCls}`}>{statusLbl}</span>
             <div className="src-actions">
-              <button className="src-sync-btn" disabled={syncing[i] || s.type === 'notion'}
+              <button className="src-sync-btn" disabled={isActive || s.type === 'notion'}
                 onClick={() => syncSource(i)}>
-                {syncing[i] ? '…' : 'Sync'}
+                Sync
               </button>
-              <button className="src-del-btn" onClick={() => removeSource(i)} title="Supprimer">×</button>
+              <button className="src-del-btn" onClick={() => removeSource(i)} title="Supprimer" disabled={isActive}>×</button>
             </div>
           </div>
         );
