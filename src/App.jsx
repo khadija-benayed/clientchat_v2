@@ -36,6 +36,7 @@ import ShortcutsModal from './components/shared/ShortcutsModal';
 import GmailPrefsModal from './components/shared/GmailPrefsModal';
 import NewClientModal from './components/shared/NewClientModal';
 import JoinClientModal from './components/shared/JoinClientModal';
+import Modal from './components/shared/Modal';
 
 import supabase from './lib/supabase';
 import { callBackend } from './lib/backend';
@@ -97,6 +98,8 @@ export default function App() {
   const [gmailPrefsOpen, setGmailPrefsOpen] = useState(false);
   const [newClientOpen, setNewClientOpen] = useState(false);
   const [joinClientOpen, setJoinClientOpen] = useState(false);
+  const [leaveConfirm, setLeaveConfirm] = useState(null); // { id, name } | null
+  const [leaveError, setLeaveError] = useState('');
 
   // ── Raccourcis clavier ────────────────────────────────────────────────────
   useEffect(() => {
@@ -138,6 +141,21 @@ export default function App() {
 
   function handleLeaveClient(e, clientId) {
     e.stopPropagation();
+    const client = clients.find(c => c.id === clientId);
+    setLeaveError('');
+    setLeaveConfirm({ id: clientId, name: client?.name || '' });
+  }
+
+  async function confirmLeaveClient() {
+    if (!leaveConfirm) return;
+    const { id: clientId } = leaveConfirm;
+    setLeaveError('');
+    try {
+      await callBackend({ action: 'remove_client_member', client_id: clientId, member_id: currentUserId }, jwtToken);
+    } catch (e) {
+      setLeaveError(e.message || 'Erreur lors de la déconnexion.');
+      return;
+    }
     setClients(prev => {
       const updated = prev.filter(c => c.id !== clientId);
       localStorage.setItem('cc-sess', JSON.stringify(updated));
@@ -147,6 +165,7 @@ export default function App() {
       setCurrentClient(null);
       setTasks([]);
     }
+    setLeaveConfirm(null);
   }
 
   // ── Mise à jour de tâches depuis le chat ──────────────────────────────────
@@ -390,6 +409,20 @@ export default function App() {
           setClients(prev => { const u = [client, ...prev]; localStorage.setItem('cc-sess', JSON.stringify(u)); return u; });
           handleSelectClient(client);
         }} />
+
+      <Modal isOpen={!!leaveConfirm} onClose={() => { setLeaveConfirm(null); setLeaveError(''); }} title="Quitter ce client" maxWidth="400px">
+        <p style={{ margin: '0 0 12px', color: 'var(--tx)' }}>
+          Tu es sur le point de quitter <strong>{leaveConfirm?.name}</strong>.<br />
+          Tu ne pourras plus accéder à cet espace sauf si un owner t'y réinvite.
+        </p>
+        {leaveError && <div className="err" style={{ marginBottom: '10px' }}>{leaveError}</div>}
+        <div className="modal-foot">
+          <button className="btn btn-sec" onClick={() => { setLeaveConfirm(null); setLeaveError(''); }}>Annuler</button>
+          <button className="btn" style={{ width: 'auto', background: 'var(--red, #e53e3e)' }} onClick={confirmLeaveClient}>
+            Quitter ce client
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }

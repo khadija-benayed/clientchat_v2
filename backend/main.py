@@ -1097,17 +1097,19 @@ async def remove_client_member(body: dict, user_id: Optional[str]):
 
     if not client_id or not member_id:
         return JSONResponse({"error": "client_id et member_id requis"}, status_code=400)
-    if not _is_owner(user_id, client_id):
+
+    self_removal = (member_id == user_id)
+    if not self_removal and not _is_owner(user_id, client_id):
         return JSONResponse({"error": "Seul un owner peut retirer des membres"}, status_code=403)
 
-    # Guard: don't remove last owner
+    # Guard: don't remove last owner (applies to both self-removal and owner-removal)
     target = (
         sb.table("client_members").select("role")
         .eq("client_id", client_id).eq("member_id", member_id)
         .maybe_single().execute()
     )
     if target.data and target.data.get("role") == "owner" and _count_owners(client_id) <= 1:
-        return JSONResponse({"error": "Impossible de retirer le dernier owner"}, status_code=400)
+        return JSONResponse({"error": "Impossible de quitter ce client : tu es le seul owner. Transfère l'ownership avant de partir."}, status_code=400)
 
     try:
         sb.table("client_members").delete().eq("client_id", client_id).eq("member_id", member_id).execute()
@@ -1718,17 +1720,22 @@ async def chat(body: dict, user_id: Optional[str] = None):
             chunks = diverse
 
             if chunks:
-                FLOOR = 0.45   # hard floor — below this is noise, even if keyword-boosted
+                FLOOR = 0.45
                 MAX_INJECT = 6
                 MIN_INJECT = 2
-                # Use the keyword-sorted order (applied above). A pure similarity threshold
-                # applied here would undo the keyword boost: e.g. "Notes point suivi tracking"
-                # chunks score ~0.52 but rank first by name overlap. We trust the sort.
-                above_floor = [c for c in chunks if c["similarity"] >= FLOOR]
-                if len(above_floor) >= MIN_INJECT:
-                    to_inject = above_floor[:MAX_INJECT]
-                else:
-                    to_inject = chunks[:MIN_INJECT]
+                # Keyword-matched sources get guaranteed slots (already diversity-capped at
+                # 2 chunks/source), so they are never crowded out by higher-scoring semantic
+                # matches from unrelated files. Remaining slots are filled with the best
+                # semantic matches above the hard floor from non-keyword sources.
+                keyword_chunks = [c for c in chunks if _name_overlap(c) >= 2]
+                kw_sources = {c["source_name"] for c in keyword_chunks}
+                remaining = max(0, MAX_INJECT - len(keyword_chunks))
+                semantic_chunks = [
+                    c for c in chunks
+                    if c["source_name"] not in kw_sources and c["similarity"] >= FLOOR
+                ][:remaining]
+                combined = (keyword_chunks + semantic_chunks)[:MAX_INJECT]
+                to_inject = combined if len(combined) >= MIN_INJECT else chunks[:MIN_INJECT]
 
                 doc_chunks = [c for c in to_inject if c["source_type"] != "session"]
                 session_chunks = [c for c in to_inject if c["source_type"] == "session"]

@@ -1,56 +1,113 @@
-/**
- * src/components/shared/NewClientModal.jsx — Créer un nouveau client
- */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Modal from './Modal';
 import supabase from '../../lib/supabase';
 
+function computeInitials(fullName, email) {
+  const src = fullName || email || '?';
+  const parts = src.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
 export default function NewClientModal({ isOpen, onClose, currentUserId, onCreated }) {
   const [name, setName] = useState('');
-  const [members, setMembers] = useState([{ ini: '', name: '' }]);
+  const [teamMembers, setTeamMembers] = useState([]);
+  const [selectedIds, setSelectedIds] = useState([]);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  function addRow() { setMembers(prev => [...prev, { ini: '', name: '' }]); }
-  function removeRow(i) { setMembers(prev => prev.filter((_, idx) => idx !== i)); }
-  function updateRow(i, field, val) { setMembers(prev => prev.map((m, idx) => idx === i ? { ...m, [field]: val } : m)); }
+  useEffect(() => {
+    if (!isOpen) return;
+    setName(''); setSelectedIds([]); setError('');
+    supabase.from('team_members').select('id, full_name, email').order('full_name')
+      .then(({ data }) => setTeamMembers(data || []));
+  }, [isOpen]);
+
+  function toggle(id) {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
 
   async function create() {
     if (!name.trim()) { setError('Le nom du client est requis.'); return; }
-    setError('');
-    const membersData = members.filter(m => m.ini.trim())
-      .map(m => ({ initials: m.ini.trim().toUpperCase(), name: m.name.trim() || m.ini.trim().toUpperCase() }));
-    const { data, error: err } = await supabase.from('clients')
-      .insert({ name: name.trim(), members: JSON.stringify(membersData) })
-      .select().single();
-    if (err) { setError(err.message); return; }
-    if (data && currentUserId) {
-      await supabase.from('client_members').insert({ client_id: data.id, member_id: currentUserId, role: 'owner' })
+    setError(''); setLoading(true);
+    try {
+      // Build clients.members: creator always included, plus selected others
+      const membersList = teamMembers.filter(m => m.id === currentUserId || selectedIds.includes(m.id));
+      const usedInitials = [];
+      const membersJson = membersList.map(m => {
+        const base = computeInitials(m.full_name, m.email);
+        let ini = base;
+        let n = 2;
+        while (usedInitials.includes(ini)) { ini = base + n++; }
+        usedInitials.push(ini);
+        return { initials: ini, name: m.full_name || m.email, member_id: m.id };
+      });
+
+      const { data, error: err } = await supabase.from('clients')
+        .insert({ name: name.trim(), members: JSON.stringify(membersJson) })
+        .select().single();
+      if (err) { setError(err.message); return; }
+
+      // Add client_members: creator as owner, others as member
+      const rows = [
+        { client_id: data.id, member_id: currentUserId, role: 'owner' },
+        ...selectedIds.filter(id => id !== currentUserId).map(id => ({
+          client_id: data.id, member_id: id, role: 'member',
+        })),
+      ];
+      await supabase.from('client_members').insert(rows)
         .then(() => {}).catch(e => console.warn('NewClient client_members:', e.message));
+
+      setName(''); setSelectedIds([]);
+      onCreated?.(data); onClose();
+    } catch (e) {
+      setError(e.message || 'Erreur inattendue.');
+    } finally {
+      setLoading(false);
     }
-    setName(''); setMembers([{ ini: '', name: '' }]);
-    onCreated?.(data); onClose();
   }
+
+  const others = teamMembers.filter(m => m.id !== currentUserId);
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Nouveau client">
-      <label>Nom</label>
-      <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ex : Décathlon"
-        onKeyDown={e => { if (e.key === 'Enter') create(); }} />
-      <label>Membres de l'équipe</label>
-      {members.map((m, i) => (
-        <div key={i} className="member-row">
-          <input type="text" placeholder="Initiales" value={m.ini}
-            onChange={e => updateRow(i, 'ini', e.target.value.toUpperCase())} style={{ textTransform: 'uppercase', marginBottom: 0 }} maxLength={5} />
-          <input type="text" placeholder="Prénom Nom" value={m.name}
-            onChange={e => updateRow(i, 'name', e.target.value)} style={{ marginBottom: 0 }} />
-          <button className="btn-rem-member" onClick={() => removeRow(i)}>×</button>
+      <label>Nom du client</label>
+      <input type="text" value={name} onChange={e => setName(e.target.value)}
+        placeholder="Ex : Décathlon" onKeyDown={e => { if (e.key === 'Enter') create(); }} />
+
+      <label style={{ marginTop: '12px' }}>Membres de l'équipe</label>
+
+      {/* Current user — always added as owner */}
+      {teamMembers.find(m => m.id === currentUserId) && (() => {
+        const me = teamMembers.find(m => m.id === currentUserId);
+        return (
+          <div className="cm-row" style={{ opacity: 0.7, marginBottom: '4px' }}>
+            <div className="cm-info">
+              <div className="cm-name">{me.full_name || me.email}</div>
+              <div className="cm-email">toi — owner</div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {others.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
+          {others.map(m => (
+            <label key={m.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 'normal' }}>
+              <input type="checkbox" checked={selectedIds.includes(m.id)}
+                onChange={() => toggle(m.id)} style={{ width: 'auto', margin: 0 }} />
+              <span>{m.full_name || m.email}</span>
+            </label>
+          ))}
         </div>
-      ))}
-      <button className="btn-add-member" onClick={addRow}>+ Ajouter un membre</button>
-      {error && <div className="err" style={{ marginTop: '6px' }}>{error}</div>}
+      )}
+
+      {error && <div className="err" style={{ marginTop: '8px' }}>{error}</div>}
       <div className="modal-foot">
         <button className="btn btn-sec" onClick={onClose}>Annuler</button>
-        <button className="btn" style={{ width: 'auto' }} onClick={create}>Créer</button>
+        <button className="btn" style={{ width: 'auto' }} onClick={create} disabled={loading}>
+          {loading ? 'Création…' : 'Créer'}
+        </button>
       </div>
     </Modal>
   );
