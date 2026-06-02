@@ -644,14 +644,20 @@ async def summarize_session(body: dict):
         loop = asyncio.get_running_loop()
         embedding = (await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, [summary_text]))[0]
         session_source_name = f"Session du {time.strftime('%Y-%m-%d')}"
-        sb.table("document_chunks").delete().match({"client_id": client_id, "source_type": "session"}).execute()
-        sb.table("document_chunks").insert({
-            "client_id": client_id,
-            "source_type": "session",
-            "source_name": session_source_name,
-            "chunk_text": summary_text,
-            "embedding": embedding,
-        }).execute()
+        # UPDATE existing row first — atomic, no unique-constraint race.
+        # INSERT only when no row exists yet (first summary for this client).
+        _updated = sb.table("document_chunks")\
+            .update({"source_name": session_source_name, "chunk_text": summary_text, "embedding": embedding})\
+            .eq("client_id", client_id).eq("source_type", "session")\
+            .execute()
+        if not _updated.data:
+            sb.table("document_chunks").insert({
+                "client_id": client_id,
+                "source_type": "session",
+                "source_name": session_source_name,
+                "chunk_text": summary_text,
+                "embedding": embedding,
+            }).execute()
     except Exception as e:
         print(f"CC-208 index session error (non bloquant): {e}")
 
@@ -1626,7 +1632,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     **c,
                     "source_name": c.get("source_file") or c.get("source_name") or "",
                     "chunk_text": c.get("content") or c.get("chunk_text") or "",
-                    "source_type": c.get("source_type") or "doc",
+                    "source_type": c.get("source_type") if c.get("source_type") is not None else "doc",
                     "metadata": c.get("metadata"),  # always None — never access subkeys directly
                 }
                 for c in chunks
