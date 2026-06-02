@@ -785,7 +785,23 @@ async def generate_brief(body: dict):
     except Exception as e:
         return JSONResponse({"error": f"Erreur IA (brief) : {e}"}, status_code=502)
 
-    cleaned = re.sub(r"^```(?:json)?\s*", "", raw_text, flags=re.IGNORECASE)
+    # Log usage — non-blocking (response is guaranteed non-None here)
+    try:
+        usage_meta = getattr(response, "usage_metadata", None)
+        _in = usage_meta.prompt_token_count if usage_meta else 0
+        _out = usage_meta.candidates_token_count if usage_meta else 0
+        sb.table("usage_logs").insert({
+            "client_id": client_id or None,
+            "model": GEMINI_PRO,
+            "message_type": "generate_brief",
+            "tokens_input": _in,
+            "tokens_output": _out,
+            "cost_usd": calculate_cost(GEMINI_PRO, {"input_tokens": _in, "output_tokens": _out}),
+        }).execute()
+    except Exception as e:
+        print(f"usage_logs insert error (non bloquant): {e}")
+
+    cleaned = re.sub(r"^```(?:json)?\s*", "", raw_text.strip(), flags=re.IGNORECASE)
     cleaned = re.sub(r"\s*```\s*$", "", cleaned).strip()
 
     try:
@@ -1374,9 +1390,13 @@ def summarize_with_llm(text: str) -> str:
         )
         response = gemini.generate_content(text)
         return _gemini_text(response).strip()
-    except Exception as e:
-        print(f"summarize_with_llm error: {e}")
+    except ValueError:
+        # _gemini_text raises ValueError when Gemini blocks or returns no content — treat as SKIP
         return "SKIP"
+    except Exception as e:
+        # API quota, network, auth errors — propagate so the caller counts this as an error
+        print(f"summarize_with_llm error: {e}")
+        raise
 
 
 # ── sync_emails ───────────────────────────────────────────────────────────────
@@ -1655,7 +1675,17 @@ async def chat(body: dict, user_id: Optional[str] = None):
                         "— ils font partie de l'historique des échanges, pas des documents de référence."
                         "\n\n" + sess_block
                     )
+
+                if not doc_chunks and not session_chunks:
+                    # Documents indexed but none passed the similarity threshold
+                    system_with_rag += (
+                        "\n\n[Disponibilité des documents]\nAucun extrait pertinent trouvé dans les documents "
+                        "indexés pour cette question. Si tu ne trouves pas l information dans la fiche client "
+                        "ou le contexte disponible, dis-le explicitement à l utilisateur plutôt que d estimer "
+                        "ou d inventer."
+                    )
             else:
+                # No documents indexed for this client at all
                 system_with_rag += (
                     "\n\n[Disponibilité des documents]\nAucun extrait pertinent trouvé dans les documents "
                     "indexés pour cette question. Si tu ne trouves pas l information dans la fiche client "

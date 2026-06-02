@@ -26,8 +26,8 @@ export default function JoinClientModal({ isOpen, onClose, existingIds, currentU
       const { error: err } = await supabase.from('client_members')
         .upsert({ client_id: clientId, member_id: currentUserId, role: 'member' }, { onConflict: 'client_id,member_id' });
       if (err) { setError(err.message); return; }
-      const { data } = await supabase.from('clients').select('*').eq('id', clientId).single();
-      if (!data) { setError('Client introuvable après la jonction.'); return; }
+      const { data, error: fetchErr } = await supabase.from('clients').select('*').eq('id', clientId).single();
+      if (fetchErr || !data) { setError(fetchErr?.message || 'Client introuvable après la jonction.'); return; }
       onJoined?.(data); onClose();
     } catch (e) {
       setError(e.message || 'Erreur inattendue.');

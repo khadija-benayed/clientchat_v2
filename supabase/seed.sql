@@ -77,10 +77,11 @@ CREATE TABLE IF NOT EXISTS agency_knowledge (
   created_at     timestamptz             DEFAULT now()
 );
 
--- usage_logs : suivi coût et tokens Claude (CC-211)
+-- usage_logs : suivi coût et tokens IA
 CREATE TABLE IF NOT EXISTS usage_logs (
   id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id     uuid        REFERENCES clients(id) ON DELETE SET NULL,
+  user_id       uuid,                   -- member UUID (no FK — team_members lives outside seed.sql)
   model         text        NOT NULL,
   message_type  text        NOT NULL,
   tokens_input  integer,
@@ -88,6 +89,8 @@ CREATE TABLE IF NOT EXISTS usage_logs (
   cost_usd      numeric,
   created_at    timestamptz             DEFAULT now()
 );
+-- Migration : ajoute user_id si la table existe déjà en production
+ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS user_id uuid;
 
 -- ── Index de performance ──────────────────────────────────────────────────────
 
@@ -157,7 +160,7 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 BEGIN
-  SET LOCAL hnsw.ef_search = 40;
+  SET LOCAL ivfflat.probes = 10;  -- visit 10/50 lists (20 % de l'index) — améliore le rappel vectoriel
   RETURN QUERY
   SELECT
     dc.id,
