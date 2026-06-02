@@ -16,7 +16,7 @@ import { FolderOpen, FileText } from 'lucide-react';
 import { callBackend, indexSourceBatched } from '../../lib/backend';
 import supabase from '../../lib/supabase';
 
-export default function DriveSection({ client, onClientUpdate, onSyncMessage, syncHook, jwtToken }) {
+export default function DriveSection({ client, onClientUpdate, onSyncMessage, syncHook, onSyncComplete, indexingRef, jwtToken }) {
   const [showAddForm, setShowAddForm] = useState(null); // 'drive' | 'file' | null
   const [driveFolderId, setDriveFolderId] = useState('');
   const [driveName, setDriveName] = useState('');
@@ -76,6 +76,11 @@ export default function DriveSection({ client, onClientUpdate, onSyncMessage, sy
     const srcs = srcsOverride || getSources();
     const s = srcs[idx];
     if (!s) return;
+    if (indexingRef?.current) {
+      onSyncMessage?.({ type: 'info', message: '⏳ Indexation automatique en cours, réessaie dans quelques instants.' });
+      return;
+    }
+    if (indexingRef) indexingRef.current = true;
     setSyncing(prev => ({ ...prev, [idx]: true }));
     if (s.type === 'drive') {
       try {
@@ -101,12 +106,14 @@ export default function DriveSection({ client, onClientUpdate, onSyncMessage, sy
         setSources(updatedSrcs);
         await supabase.from('clients').update({ sources: JSON.stringify(updatedSrcs), drive_folder_id: s.folder_id }).eq('id', client.id);
         onClientUpdate?.({ sources: JSON.stringify(updatedSrcs) });
+        onSyncComplete?.();
       } catch (e) {
         const updatedSrcs = srcs.map((x, i) => i === idx ? { ...x, status: 'err' } : x);
         setSources(updatedSrcs);
         onSyncMessage?.({ type: 'error', message: '⚠ Erreur sync : ' + e.message });
       }
     }
+    if (indexingRef) indexingRef.current = false;
     setSyncing(prev => ({ ...prev, [idx]: false }));
   }
 
@@ -122,7 +129,7 @@ export default function DriveSection({ client, onClientUpdate, onSyncMessage, sy
       {sources.length === 0 ? (
         <div className="src-empty">Aucune source connectée.</div>
       ) : sources.map((s, i) => {
-        const isActive = Boolean(syncing[i]);
+        const isActive = Boolean(syncing[i]) || (s.type === 'drive' && syncHook.isSyncing);
         const progress = isActive ? syncHook.driveProgress : null;
         const statusCls = isActive ? 'syncing' : (s.status === 'ok' ? 'ok' : 'err');
         const statusLbl = isActive ? '⟳ Sync…' : (s.status === 'ok' ? '✓ Connecté' : '✗ Erreur');

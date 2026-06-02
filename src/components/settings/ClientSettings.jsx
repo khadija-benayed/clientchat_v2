@@ -25,7 +25,7 @@ import supabase from '../../lib/supabase';
 
 export default function ClientSettings({
   isOpen, onClose, client, onClientUpdate, onSyncMessage,
-  onDeleteClient, onOpenGmailPrefs, syncHook, jwtToken,
+  onDeleteClient, onOpenGmailPrefs, syncHook, onSyncComplete, indexingRef, jwtToken,
 }) {
   const [tab, setTab] = useState('params');
   const [ctx, setCtx] = useState('');
@@ -142,7 +142,8 @@ export default function ClientSettings({
             placeholder="Infos clés : secteur, stack, interlocuteurs, enjeux…" />
 
           <DriveSection client={client} onClientUpdate={handleClientUpdate}
-            onSyncMessage={onSyncMessage} syncHook={syncHook} jwtToken={jwtToken} />
+            onSyncMessage={onSyncMessage} syncHook={syncHook}
+            onSyncComplete={onSyncComplete} indexingRef={indexingRef} jwtToken={jwtToken} />
 
           <EmailSection client={client} onClientUpdate={handleClientUpdate}
             onSyncMessage={onSyncMessage} syncHook={syncHook}

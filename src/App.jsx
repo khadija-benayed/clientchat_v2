@@ -74,7 +74,7 @@ export default function App() {
     tasks, setTasks, summaries, docCache,
     syncStatus, setSyncStatus, syncProgress,
     selectClient, upsertTask, deleteTask, saveTaskOrder,
-    getMembers, addSummary, loadClients,
+    getMembers, addSummary, loadClients, loadDocCache, indexingRef,
   } = clientStore;
 
   // ── Sync ──────────────────────────────────────────────────────────────────
@@ -298,6 +298,8 @@ export default function App() {
         }}
         onOpenGmailPrefs={() => setGmailPrefsOpen(true)}
         syncHook={syncHook}
+        onSyncComplete={() => currentClient && loadDocCache(currentClient)}
+        indexingRef={indexingRef}
         jwtToken={jwtToken}
       />
 
