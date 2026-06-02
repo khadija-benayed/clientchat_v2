@@ -1,61 +1,97 @@
 # Client Chat — Smart Bees
 
-Interface interne de l'agence Smart Bees pour la gestion de projets clients. Chaque membre de l'équipe dispose d'un accès individuel via Google OAuth et accède aux espaces clients auxquels il est assigné — avec un **chat IA contextuel**, une **to-do collaborative en temps réel**, un accès intelligent aux **documents Google Drive**, une **mémoire des sessions**, et une **base de savoir partagée**.
+Interface interne de l'agence Smart Bees pour la gestion de projets clients. Chaque membre de l'équipe dispose d'un accès individuel via Google et accède aux espaces clients auxquels il est assigné — avec un **chat IA contextuel**, une **to-do collaborative en temps réel**, un accès intelligent aux **documents Google Drive**, une **mémoire des sessions**, et une **base de savoir partagée**.
 
 ---
 
-## Table des matières
+## Pour les non-développeurs — État du projet
 
-1. [Contexte & Objectif](#1-contexte--objectif)
-2. [Stack Technique](#2-stack-technique)
-3. [Architecture Générale](#3-architecture-générale)
-4. [Structure des fichiers](#4-structure-des-fichiers)
-5. [Fonctionnalités détaillées](#5-fonctionnalités-détaillées)
-6. [Pipeline RAG](#6-pipeline-rag)
-7. [Schéma de base de données](#7-schéma-de-base-de-données)
-8. [API Backend — Actions disponibles](#8-api-backend--actions-disponibles)
-9. [Variables d'environnement](#9-variables-denvironnement)
-10. [Installation locale](#10-installation-locale)
-11. [Déploiement](#11-déploiement)
-12. [Raccourcis clavier](#12-raccourcis-clavier)
-13. [Contraintes & Décisions techniques](#13-contraintes--décisions-techniques)
+### Ce que fait l'application
+
+Client Chat est l'outil interne de Smart Bees. Vous vous connectez avec votre compte Google, vous choisissez un client, et vous avez accès à :
+
+- **Un chat IA** qui connaît les documents Drive du client, l'historique des sessions passées, et les tâches en cours. Posez-lui n'importe quelle question sur le projet.
+- **Une to-do partagée** avec statuts, priorités, assignations et deadlines — mise à jour en temps réel pour toute l'équipe.
+- **L'accès aux docs Drive** indexés automatiquement : le chat "lit" vos fichiers et y répond.
+- **Une mémoire des sessions** : les échanges passés sont résumés automatiquement et réinjectés dans les prochaines conversations.
+- **Une base de savoir agence** : capturez les insights cross-clients d'un clic.
+
+### Ce qui est en place aujourd'hui (juin 2026)
+
+| Fonctionnalité | État |
+|---|---|
+| Login Google OAuth | Opérationnel |
+| Chat IA (Gemini 2.5 Flash) | Opérationnel |
+| Synchronisation automatique Google Drive | Opérationnel |
+| To-do collaborative temps réel | Opérationnel |
+| Gestion des membres par client | Opérationnel |
+| Résumés de session automatiques | Opérationnel |
+| Fiche client (brief structuré) | Opérationnel |
+| Base de savoir agence | Opérationnel |
+| OCR PDF (Claude Haiku 4.5) | Opérationnel |
+| Synchronisation emails Gmail | Opérationnel |
+
+### Changements récents
+
+| Date | Changement |
+|---|---|
+| Juin 2026 | Mise à jour des modèles Gemini → 2.5 Flash + 2.5 Pro (les anciens étaient dépréciés) |
+| Mai 2026 | Migration du frontend de vanilla JS vers React 18 + Vite — mêmes fonctionnalités, code plus maintenable |
+| Avril 2026 | Migration du moteur IA d'Anthropic Claude vers Google Gemini (sauf OCR PDF) |
+| Avril 2026 | Ajout de la synchronisation Gmail |
+| Mars 2026 | Authentification individuelle par membre (Google OAuth) |
+
+### Accès à l'application
+
+URL : **https://khadija-benayed.github.io/clientchat_v2/**
+
+Connexion avec un compte Google `@smart-bees.fr`. Si vous n'êtes pas encore assigné à un client, contactez un owner de cet espace.
 
 ---
 
-## 1. Contexte & Objectif
+## Table des matières (documentation technique)
 
-Smart Bees est une agence dont les équipes travaillent sur plusieurs comptes clients simultanément. Le problème récurrent : le contexte client se perd entre les sessions (réunions, Slack, mails, docs dispersés), ce qui force à se répéter à chaque fois qu'on pose une question à l'IA ou à un coéquipier.
-
-**Client Chat résout ça en centralisant :**
-- Les **tâches** du compte client avec statuts, priorités, assignés et deadlines
-- Le **chat IA** qui connaît le client grâce aux documents Drive et aux résumés de sessions passées
-- L'**historique des échanges** sous forme de résumés auto-générés et réinjectés automatiquement
-- La **base de savoir agence** pour capitaliser sur les apprentissages cross-clients
+1. [Stack Technique](#1-stack-technique)
+2. [Architecture Générale](#2-architecture-générale)
+3. [Structure des fichiers](#3-structure-des-fichiers)
+4. [Fonctionnalités détaillées](#4-fonctionnalités-détaillées)
+5. [Pipeline RAG](#5-pipeline-rag)
+6. [Schéma de base de données](#6-schéma-de-base-de-données)
+7. [API Backend — Actions disponibles](#7-api-backend--actions-disponibles)
+8. [Variables d'environnement](#8-variables-denvironnement)
+9. [Installation locale](#9-installation-locale)
+10. [Déploiement](#10-déploiement)
+11. [Raccourcis clavier](#11-raccourcis-clavier)
+12. [Contraintes & Décisions techniques](#12-contraintes--décisions-techniques)
 
 ---
 
-## 2. Stack Technique
+## 1. Stack Technique
 
 | Couche | Technologie | Rôle |
 |--------|-------------|------|
-| Frontend | HTML/CSS/JS vanilla | UI, pas de framework ni bundler |
-| Icônes | Lucide (CDN) | Icônes SVG |
+| Frontend | React 18 + Vite | UI composants, routing SPA |
+| Styles | Tailwind CSS + variables CSS | Thème clair/sombre, utilitaires layout |
+| Icônes | lucide-react | Icônes SVG |
 | Polices | DM Sans + DM Mono (Google Fonts) | Typographie |
 | Auth | Supabase Auth — Google OAuth | Login individuel, JWT, RLS |
 | Base de données | Supabase (PostgreSQL + pgvector) | Persistance, realtime, RPC vectorielle |
-| Backend IA | Python FastAPI sur Google Cloud Run | Chat Claude, embeddings, RAG, Drive, membres |
-| Modèle IA | Claude Sonnet 4.6 + Haiku 4.5 | Chat (Sonnet) / actions tâches et résumés (Haiku) |
+| Backend IA | Python FastAPI sur Google Cloud Run | Chat Gemini, embeddings, RAG, Drive, membres |
+| Modèle IA (chat) | Gemini 2.5 Flash | Chat, actions tâches, résumés de session |
+| Modèle IA (brief) | Gemini 2.5 Pro | Génération de la fiche client structurée |
+| Modèle IA (OCR PDF) | Claude Haiku 4.5 | Extraction texte PDF via vision (extract_worker.py) |
 | Embeddings | sentence-transformers `paraphrase-multilingual-MiniLM-L12-v2` | Local, 384 dims, zéro API externe |
 | Documents | Google Drive API v3 (service account) | Export et listing des fichiers |
+| Emails | Gmail API (service account) | Lecture des emails de contact |
 | CI/CD | Cloud Build (`cloudbuild.yaml`) | Push `main` → build Docker → deploy Cloud Run |
-| Hébergement front | GitHub Pages | Déploiement statique automatique |
+| Hébergement front | GitHub Pages | Déploiement statique automatique (dist/) |
 
 ---
 
-## 3. Architecture Générale
+## 2. Architecture Générale
 
 ```
-Navigateur (HTML/CSS/JS)
+Navigateur (React 18 + Vite)
         │  Google OAuth
         ├──────────────────► Supabase Auth → JWT
         │
@@ -65,8 +101,9 @@ Navigateur (HTML/CSS/JS)
 Cloud Run — FastAPI Python  (clientchat-v2, europe-west1)
   ├── auth_middleware : vérifie JWT via sb.auth.get_user()
   ├── sentence-transformers (embeddings locaux, chargés au démarrage)
-  ├── anthropic SDK (Claude Sonnet 4.6 / Haiku 4.5)
-  ├── google-api-python-client (Drive API v3)
+  ├── google.generativeai SDK (Gemini 2.5 Flash / Pro)
+  ├── anthropic SDK (Claude Haiku 4.5 — OCR PDF uniquement)
+  ├── google-api-python-client (Drive API v3, Gmail API)
   └── supabase-py (PostgreSQL, RPC match_chunks, service role)
         │
         ▼
@@ -83,8 +120,8 @@ Supabase (PostgreSQL + pgvector)
 2. Le middleware FastAPI valide le JWT via Supabase Auth, pose `user_id` sur la requête
 3. Le backend encode le message en vecteur (sentence-transformers, local, ~10ms)
 4. Il lance `match_chunks` sur Supabase (cosine similarity, max 6 chunks) pour le RAG
-5. Il construit le payload Claude avec system prompt + contexte RAG + historique de session
-6. Claude répond ; le backend loggue l'usage (`user_id` inclus) et retourne `{ text, sources_used }`
+5. Il construit le payload Gemini avec system prompt + contexte RAG + historique de session
+6. Gemini répond ; le backend loggue l'usage (`user_id` inclus) et retourne `{ text, sources_used }`
 7. Le front parse la réponse : partie conversationnelle + JSON tâches séparé par `---JSON---`
 
 **Realtime Supabase :**
@@ -92,36 +129,62 @@ Un canal PostgreSQL change par client (`t-{client_id}`) écoute la table `tasks`
 
 ---
 
-## 4. Structure des fichiers
+## 3. Structure des fichiers
 
 ```
 clientchat_v2/
-├── index.html              # HTML — structure + chargement des scripts
-├── db.js                   # Config globale, état, auth, Supabase, helpers, Drive sync
-├── ui.js                   # Rendu DOM, chat, todo, modals, KB, sources, membres, prompts IA
-├── app.js                  # Boot auth (onAuthStateChange), dark mode, sidebar, raccourcis, DnD
-├── styles.css              # Tout le CSS, variables de thème (:root)
-├── cloudbuild.yaml         # Pipeline CI/CD : build Docker → déploiement Cloud Run
+│
+├── src/                        # Frontend React + Vite
+│   ├── main.jsx                # Point d'entrée React
+│   ├── App.jsx                 # Composant racine — orchestre tout le state
+│   ├── index.css               # Variables CSS + Tailwind + styles globaux
+│   │
+│   ├── lib/
+│   │   ├── constants.js        # BACKEND_URL, SB_URL, SB_KEY, helpers utilitaires
+│   │   ├── supabase.js         # Client Supabase singleton
+│   │   └── backend.js          # callBackend(), openBackendSSE() — couche réseau
+│   │
+│   ├── hooks/
+│   │   ├── useAuth.js          # Auth Supabase (SIGNED_IN, TOKEN_REFRESHED…)
+│   │   ├── useClients.js       # Liste clients, sélection, tâches, Drive, Realtime
+│   │   ├── useChat.js          # Messages, send(), L1/L2/L3 prompts, task updates
+│   │   └── useSync.js          # SSE streaming Drive sync + Email sync
+│   │
+│   └── components/
+│       ├── auth/               # LoginScreen (animation canvas + abeille)
+│       ├── layout/             # Sidebar, ClientHeader
+│       ├── chat/               # ChatPanel, MessageList, MessageBubble, ChatInput
+│       ├── tasks/              # TaskPanel, TaskBoard, TaskCard, TaskFilters, TaskModal, CalendarModal
+│       ├── settings/           # ClientSettings, MembersSection, DriveSection, EmailSection
+│       ├── knowledge/          # KbSaveModal, KbBrowser
+│       └── shared/             # Modal, SyncStatus, ShortcutsModal, NewClientModal, JoinClientModal
 │
 ├── backend/
-│   ├── main.py             # FastAPI — middleware JWT + toutes les actions
-│   ├── extract_worker.py   # Worker subprocess pour extraction PDF/Office (isolation crash)
-│   ├── requirements.txt    # Dépendances Python
-│   └── Dockerfile          # python:3.11-slim + modèle sentence-transformers baked au build
+│   ├── main.py                 # FastAPI — middleware JWT + toutes les actions
+│   ├── extract_worker.py       # Worker subprocess PDF/Office — OCR via Claude Haiku 4.5
+│   ├── requirements.txt        # Dépendances Python
+│   └── Dockerfile              # python:3.11-slim + sentence-transformers baked au build
 │
-└── supabase/
-    └── seed.sql            # Schéma complet PostgreSQL (tables + RPC match_chunks)
+├── supabase/
+│   └── seed.sql                # Schéma complet PostgreSQL (tables + RPC match_chunks)
+│
+├── dist/                       # Build Vite — déployé sur GitHub Pages (ne pas éditer)
+├── vite.config.js              # Config Vite (base: /clientchat_v2/)
+├── tailwind.config.js          # Config Tailwind
+└── cloudbuild.yaml             # Pipeline CI/CD : build Docker → deploy Cloud Run
 ```
+
+Les anciens fichiers vanilla JS (`app.js.old`, `db.js.old`, `ui.js.old`, `styles.css.old`) sont conservés en référence uniquement — ils ne sont pas utilisés en production.
 
 ---
 
-## 5. Fonctionnalités détaillées
+## 4. Fonctionnalités détaillées
 
 ### Authentification individuelle
 
 - Login Google OAuth via Supabase Auth (`signInWithOAuth`)
 - À la connexion : appel `action: 'me'` → liste des espaces clients assignés chargée automatiquement
-- JWT stocké en mémoire (`_jwtToken`), transmis à chaque requête backend via `Authorization: Bearer`
+- JWT stocké en mémoire via `useAuth`, transmis à chaque requête backend via `Authorization: Bearer`
 - Refresh token géré automatiquement par Supabase JS (`TOKEN_REFRESHED`)
 - Déconnexion : `sb.auth.signOut()` + purge session localStorage
 
@@ -150,9 +213,9 @@ Le chat assemble un system prompt en **3 niveaux** selon l'intention détectée 
 - **L3 (bilan/synthèse)** : résumés de sessions plus anciens (indices 0 à N-4)
 
 Détection d'intention (JS pur, avant appel IA) :
-- `isTaskAction(msg)` → message court + verbe d'action → L1 only + modèle **Haiku** (rapide, 10× moins cher)
-- `isClientQuestion(msg)` → mot-clé contexte → L1 + L2 + modèle **Sonnet**
-- `isComplexQuery(msg)` → bilan/synthèse → L1 + L2 + L3 + modèle **Sonnet**
+- `isTaskAction(msg)` → message court + verbe d'action → L1 only + modèle **Gemini 2.5 Flash** (rapide)
+- `isClientQuestion(msg)` → mot-clé contexte → L1 + L2 + modèle **Gemini 2.5 Flash**
+- `isComplexQuery(msg)` → bilan/synthèse → L1 + L2 + L3 + modèle **Gemini 2.5 Flash**
 - Message ambigu → L1 + L2 par défaut (pas de dégradation silencieuse)
 
 ### Gestion des tâches
@@ -162,7 +225,7 @@ Détection d'intention (JS pur, avant appel IA) :
 - **Assignation** : initiales simples (`KB`) ou multi-membres (`KB+PH`)
 - **Notes** : horodatées, ajout incrémental (jamais de remplacement), supprimables individuellement
 - **Deadlines** : badges visuels — retard (rouge), cette semaine (orange), futur (gris)
-- **Correspondance déterministe** : avant chaque appel Claude, le front calcule un score Levenshtein (≤1) pour chaque tâche et injecte le résultat (`UNIQUE / AMBIGUÏTÉ / DÉJÀ FAIT / AUCUNE`) dans le contexte
+- **Correspondance déterministe** : avant chaque appel IA, le front calcule un score Levenshtein (≤1) pour chaque tâche et injecte le résultat (`UNIQUE / AMBIGUÏTÉ / DÉJÀ FAIT / AUCUNE`) dans le contexte
 - **Drag & drop** : réordonnancement avec persistance dans `localStorage`
 - **Filtres** : par statut, par membre, "cette semaine" (deadline ≤ 7j), recherche texte
 - **Calendrier** : vue mensuelle avec dots de priorité, clic sur un jour liste les tâches
@@ -180,14 +243,14 @@ Détection d'intention (JS pur, avant appel IA) :
 
 ### Mémoire des sessions
 
-- Après ≥ 3 échanges, un résumé est auto-généré par Claude Haiku et persisté dans `session_summaries`
+- Après ≥ 3 échanges, un résumé est auto-généré par Gemini 2.5 Flash et persisté dans `session_summaries`
 - **Triggers** : changement de client, 10 min d'inactivité, toutes les 10 réponses
 - Les 3 résumés les plus récents sont injectés dans L2 ; les anciens dans L3
 - Panneau "Historique sessions" dans les Paramètres (20 derniers résumés)
 
 ### Base de savoir agence (KB)
 
-- Chaque réponse de Claude affiche un bouton `+ KB` pour capturer l'insight
+- Chaque réponse de l'IA affiche un bouton `+ KB` pour capturer l'insight
 - Formulaire : titre + contenu éditable + tags libres
 - Navigateur : recherche full-text, suppression individuelle
 - Accessible depuis la sidebar : "Base de savoir →"
@@ -195,7 +258,7 @@ Détection d'intention (JS pur, avant appel IA) :
 
 ---
 
-## 6. Pipeline RAG
+## 5. Pipeline RAG
 
 ```
 Texte du fichier Drive
@@ -227,7 +290,7 @@ match_chunks RPC (pgvector cosine similarity)
 
 ---
 
-## 7. Schéma de base de données
+## 6. Schéma de base de données
 
 ```sql
 -- Membres authentifiés (1 ligne par signup Google)
@@ -252,7 +315,6 @@ client_members (
 clients (
   id               uuid PK,
   name             text,
-  password_hash    text,        -- SHA-256 legacy (join par mot de passe)
   context          text,        -- JSON fiche client OU texte libre
   drive_folder_id  text,
   members          text,        -- JSON [{initials, name}] pour l'assignation des tâches
@@ -308,7 +370,7 @@ agency_knowledge (
 usage_logs (
   id            uuid PK,
   client_id     uuid FK → clients,
-  user_id       uuid FK → team_members,  -- NULL si appel sans JWT
+  user_id       uuid FK → team_members,
   model         text,
   message_type  text,
   tokens_input  int,
@@ -326,9 +388,9 @@ RETURNS TABLE (id, source_name, source_type, chunk_text, similarity)
 
 ---
 
-## 8. API Backend — Actions disponibles
+## 7. API Backend — Actions disponibles
 
-Toutes les requêtes : `POST https://clientchat-v2-1004127157825.europe-west1.run.app`  
+Toutes les requêtes : `POST https://clientchat-v2-1004127157825.europe-west1.run.app`
 Headers : `Content-Type: application/json` + `Authorization: Bearer <jwt>`
 
 | Action | Paramètres principaux | Réponse |
@@ -353,7 +415,7 @@ Headers : `Content-Type: application/json` + `Authorization: Bearer <jwt>`
 
 ---
 
-## 9. Variables d'environnement
+## 8. Variables d'environnement
 
 ### Backend (Cloud Run — jamais exposées au frontend)
 
@@ -361,11 +423,12 @@ Headers : `Content-Type: application/json` + `Authorization: Bearer <jwt>`
 |----------|-------------|
 | `SUPABASE_URL` | URL projet Supabase (`https://xxx.supabase.co`) |
 | `SUPABASE_SERVICE_KEY` | Clé `service_role` Supabase (bypass RLS, côté serveur uniquement) |
-| `ANTHROPIC_KEY` | Clé API Anthropic (`sk-ant-...`) |
-| `GOOGLE_SA_KEY` | JSON complet de la service account Google Drive (stringifié) |
+| `GOOGLE_API_KEY` | Clé API Google AI (Gemini 2.5 Flash / Pro) |
+| `ANTHROPIC_KEY` | Clé API Anthropic (Claude Haiku 4.5 — OCR PDF uniquement) |
+| `GOOGLE_SA_KEY` | JSON complet de la service account Google Drive + Gmail (stringifié) |
 | `API_KEY` | Clé HTTP legacy optionnelle (fallback transition si pas de JWT) |
 
-### Frontend (`db.js` — valeurs publiques dans le code)
+### Frontend (`src/lib/constants.js` — valeurs publiques dans le code)
 
 | Constante | Description |
 |-----------|-------------|
@@ -375,17 +438,24 @@ Headers : `Content-Type: application/json` + `Authorization: Bearer <jwt>`
 
 ---
 
-## 10. Installation locale
+## 9. Installation locale
 
 ### Frontend
 
 ```bash
-# Aucun serveur requis — ouvrir directement dans le navigateur
-open index.html
+# Installer les dépendances
+npm install
+
+# Démarrer le serveur de développement
+npm run dev
+# → http://localhost:5173/clientchat_v2/
+
+# Builder pour la production
+npm run build
 ```
 
-Le frontend pointe sur `BACKEND_URL` (Cloud Run) et `SB_URL` (Supabase) définis dans `db.js`.  
-Pour le login Google OAuth en local, l'URL de redirect `https://khadija-benayed.github.io/clientchat_v2` doit être autorisée dans les paramètres Supabase Auth.
+Le frontend pointe sur `BACKEND_URL` (Cloud Run) et `SB_URL` (Supabase) définis dans `src/lib/constants.js`.
+Pour le login Google OAuth en local, l'URL de redirect `http://localhost:5173` doit être autorisée dans les paramètres Supabase Auth.
 
 ### Backend (dev local)
 
@@ -396,6 +466,7 @@ pip install -r requirements.txt
 
 export SUPABASE_URL=https://erpjerfvswesipmdqxab.supabase.co
 export SUPABASE_SERVICE_KEY=eyJ...
+export GOOGLE_API_KEY=AIza...
 export ANTHROPIC_KEY=sk-ant-...
 export GOOGLE_SA_KEY='{"type":"service_account",...}'
 
@@ -403,20 +474,20 @@ uvicorn main:app --reload --port 8080
 # → http://localhost:8080/health
 ```
 
-Pour tester avec le frontend local, remplacer temporairement `BACKEND_URL` dans `db.js` par `http://localhost:8080`.
+Pour tester avec le frontend local, remplacer temporairement `BACKEND_URL` dans `src/lib/constants.js` par `http://localhost:8080`.
 
 ---
 
-## 11. Déploiement
+## 10. Déploiement
 
 ### Frontend
 
 ```bash
 git push origin main
 # → GitHub Actions détecte le push
-# → Copie index.html, styles.css, db.js, ui.js, app.js dans public/
-# → Déploie sur GitHub Pages
-# → Live en ~30s sur https://khadija-benayed.github.io/clientchat_v2/
+# → npm run build → génère dist/
+# → Déploie dist/ sur GitHub Pages
+# → Live en ~1 min sur https://khadija-benayed.github.io/clientchat_v2/
 ```
 
 ### Backend (Cloud Run — automatique)
@@ -435,6 +506,8 @@ git push origin main
 - Région : `europe-west1` | Image : `gcr.io/arctic-rite-497707-s6/clientchat-v2`
 - Mémoire : 1 Gi | CPU : 1 | Min instances : 0 | Max instances : 3
 
+> **Note cold start** : avec Min instances = 0, le backend "dort" si personne ne l'utilise. UptimeRobot ping `/health` toutes les 5 min pour éviter ça.
+
 ### Supabase Auth — configuration requise
 
 1. Dashboard → Authentication → Providers → Google : activer + credentials OAuth 2.0
@@ -443,7 +516,7 @@ git push origin main
 
 ---
 
-## 12. Raccourcis clavier
+## 11. Raccourcis clavier
 
 | Raccourci | Action |
 |-----------|--------|
@@ -458,7 +531,11 @@ git push origin main
 
 ---
 
-## 13. Contraintes & Décisions techniques
+## 12. Contraintes & Décisions techniques
+
+### Pourquoi Gemini pour le chat et Claude Haiku pour l'OCR PDF ?
+
+Gemini 2.5 Flash est le modèle principal : multilingue, rapide, économique. Claude Haiku 4.5 est conservé pour l'OCR PDF dans `extract_worker.py` car son pipeline vision est robuste et déjà validé en production. La migration Anthropic → Gemini s'est faite en avril 2026 pour des raisons de coût et de disponibilité API.
 
 ### Pourquoi FastAPI sur Cloud Run et non Supabase Edge Functions ?
 
@@ -470,9 +547,9 @@ git push origin main
 
 Multilingue (français natif), 384 dimensions, léger (~120 MB), compatible avec `vector(384)` déjà en production.
 
-### Pourquoi pas de build step / bundler côté front ?
+### Pourquoi React + Vite et non vanilla JS ?
 
-Vanilla pour minimiser la surface de maintenance. Pas de pipeline CI/CD front à gérer, déploiement GitHub Pages immédiat (push → live en 30s).
+Le frontend vanilla (`ui.js` ~1900 lignes, tout mélangé) devenait difficile à maintenir. La migration React s'est faite en conservant exactement les mêmes fonctionnalités et le même design CSS — seule la structure du code a changé (~20 composants, responsabilité unique). Vite assure un build en ~1s et un HMR instantané en développement.
 
 ### Authentification
 

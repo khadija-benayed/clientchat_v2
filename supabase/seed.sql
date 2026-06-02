@@ -130,18 +130,23 @@ CREATE INDEX IF NOT EXISTS tasks_due_date_idx
 
 -- ── Fonctions RPC ────────────────────────────────────────────────────────────
 
--- match_chunks v1 — utilisée par le pipeline RAG (Edge Function)
+-- match_chunks — pipeline RAG principal
 -- Retourne les N chunks les plus proches pour un client donné + base agence (client_id IS NULL).
+-- Colonnes retournées :
+--   source_file = alias de dc.source_name (nom du fichier Drive, toujours renseigné)
+--   content     = alias de dc.chunk_text  (texte du chunk)
+--   metadata    = NULL::jsonb             (toujours NULL — compatibilité API, ne pas accéder sans .get())
+--   similarity  = score cosine [0,1]
 CREATE OR REPLACE FUNCTION match_chunks(
   query_embedding vector(384),
-  p_client_id     uuid,
-  match_count     integer DEFAULT 5
+  match_count     integer,
+  p_client_id     uuid
 )
 RETURNS TABLE (
   id          uuid,
-  source_name text,
-  source_type text,
-  chunk_text  text,
+  source_file text,
+  content     text,
+  metadata    jsonb,
   similarity  double precision
 )
 LANGUAGE plpgsql
@@ -152,48 +157,12 @@ BEGIN
   RETURN QUERY
   SELECT
     dc.id,
-    dc.source_name,
-    dc.source_type,
-    dc.chunk_text,
+    dc.source_name  AS source_file,
+    dc.chunk_text   AS content,
+    NULL::jsonb     AS metadata,
     1 - (dc.embedding <=> query_embedding) AS similarity
   FROM document_chunks dc
   WHERE (dc.client_id = p_client_id OR dc.client_id IS NULL)
-  ORDER BY dc.embedding <=> query_embedding
-  LIMIT match_count;
-END;
-$$;
-
--- match_chunks v2 — surcharge avec seuil de similarité et client_id dans le retour
-CREATE OR REPLACE FUNCTION match_chunks(
-  query_embedding  vector(384),
-  match_threshold  double precision,
-  match_count      integer,
-  p_client_id      uuid
-)
-RETURNS TABLE (
-  id          uuid,
-  client_id   uuid,
-  source_type text,
-  source_name text,
-  chunk_text  text,
-  similarity  double precision
-)
-LANGUAGE plpgsql
-STABLE
-AS $$
-BEGIN
-  SET LOCAL hnsw.ef_search = 40;
-  RETURN QUERY
-  SELECT
-    dc.id,
-    dc.client_id,
-    dc.source_type,
-    dc.source_name,
-    dc.chunk_text,
-    1 - (dc.embedding <=> query_embedding) AS similarity
-  FROM document_chunks dc
-  WHERE (dc.client_id = p_client_id OR dc.client_id IS NULL)
-    AND 1 - (dc.embedding <=> query_embedding) > match_threshold
   ORDER BY dc.embedding <=> query_embedding
   LIMIT match_count;
 END;

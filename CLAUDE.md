@@ -2,36 +2,48 @@
 
 ## Stack technique
 
-- **Frontend** : HTML/CSS/JS vanilla — aucun framework, aucun bundler
-- **Styles** : `styles.css` pur, variables CSS (`--tx`, `--sur`, `--brd2`…) pour le thème clair/sombre
-- **Icônes** : Lucide (CDN) — appeler `lucide.createIcons()` après tout `innerHTML` contenant `<i data-lucide="...">`
+- **Frontend** : React 18 + Vite — composants JSX, hooks, build vers `dist/`
+- **Styles** : Tailwind CSS (utilitaires layout) + variables CSS (`--tx`, `--sur`, `--brd2`…) pour le thème clair/sombre — approche hybride, ne pas casser les classes CSS existantes
+- **Icônes** : `lucide-react` (import ES module, pas CDN)
 - **Polices** : DM Sans + DM Mono (Google Fonts)
-- **Base de données** : Supabase (PostgreSQL + pgvector) — client JS `@supabase/supabase-js@2` via CDN
+- **Base de données** : Supabase (PostgreSQL + pgvector) — `@supabase/supabase-js@2` via npm
 - **Auth** : Supabase Auth — Google OAuth (`signInWithOAuth`). JWT transmis au backend via `Authorization: Bearer`
-- **Backend** : Python FastAPI sur Google Cloud Run — point d'entrée unique `BACKEND_URL` dans `db.js`
-- **IA** : Claude Sonnet 4.6 (chat) + Haiku 4.5 (task_action, summarize) — appelé côté backend uniquement
+- **Backend** : Python FastAPI sur Google Cloud Run — point d'entrée unique `BACKEND_URL` dans `src/lib/constants.js`
+- **IA (chat/tasks/résumés)** : Gemini 2.5 Flash — appelé côté backend uniquement
+- **IA (brief structuré)** : Gemini 2.5 Pro — appelé côté backend uniquement
+- **IA (OCR PDF)** : Claude Haiku 4.5 — `extract_worker.py` uniquement (vision PDF)
 - **Embeddings / RAG** : `sentence-transformers` local — modèle `paraphrase-multilingual-MiniLM-L12-v2` (384 dims, multilingue) — chargé au démarrage du conteneur, zéro API externe
 - **Stockage documents** : Google Drive API v3 (service account) — export via backend Python
-- **Déploiement front** : GitHub Pages (push sur `main` → CI → `public/`)
+- **Déploiement front** : GitHub Pages (push sur `main` → CI → `npm run build` → `dist/`)
 - **Déploiement backend** : Cloud Build (`cloudbuild.yaml`) → Docker build → Cloud Run `clientchat-v2` (europe-west1)
 
 ## Architecture des fichiers
 
-- `index.html` — structure HTML + chargement des scripts (ordre : `db.js` → `ui.js` → `app.js`)
-- `db.js` — constantes globales (`BACKEND_URL`, `SB_URL`…), état global (`cur`, `tasks`, `session`, `_jwtToken`, `_currentUserId`), Supabase, auth Google (`signInWithGoogle`, `loadMyClients`), helpers utilitaires, Drive sync (`checkDriveUpdates`, `loadDocCache`)
-- `ui.js` — rendu DOM (chat, todo, modals, sources, KB, fiche client, welcome state, gestion membres), logique d'envoi `send()`, prompts Claude (`buildL1/L2/L3`), gestion des sources
-- `app.js` — initialisation (dark mode, sidebar, DnD tâches), boot auth (`onAuthStateChange`, `getSession`), raccourcis clavier globaux
-- `styles.css` — tout le CSS, variables de thème en `:root`
+- `src/main.jsx` — point d'entrée React (monte `<App />`)
+- `src/App.jsx` — composant racine, orchestre tout le state global via hooks
+- `src/index.css` — variables CSS + Tailwind + styles globaux
+- `src/lib/constants.js` — constantes globales (`BACKEND_URL`, `SB_URL`, `SB_KEY`), helpers utilitaires (`esc`, `formatDate`…)
+- `src/lib/supabase.js` — client Supabase singleton
+- `src/lib/backend.js` — `callBackend()`, `openBackendSSE()` — couche réseau (injecte JWT automatiquement)
+- `src/hooks/useAuth.js` — auth Supabase (`SIGNED_IN`, `TOKEN_REFRESHED`, `_jwtToken`, `_currentUserId`)
+- `src/hooks/useClients.js` — liste clients, sélection, tâches, Drive sync, Realtime Supabase
+- `src/hooks/useChat.js` — messages, `send()`, prompts L1/L2/L3, task updates
+- `src/hooks/useSync.js` — SSE streaming Drive sync + Email sync
+- `src/components/` — composants React par domaine (auth, layout, chat, tasks, settings, knowledge, shared)
 - `cloudbuild.yaml` — pipeline CI/CD : `docker build ./backend` → `gcloud run deploy`
-- `backend/main.py` — FastAPI : middleware JWT, toutes les actions (chat, RAG, Drive, KB, brief, session, membres)
-- `backend/requirements.txt` — dépendances Python (`fastapi`, `sentence-transformers`, `torch+cpu`, `anthropic`, `supabase`, `google-api-python-client`…)
+- `backend/main.py` — FastAPI : middleware JWT, toutes les actions (chat Gemini, RAG, Drive, KB, brief, session, membres)
+- `backend/extract_worker.py` — subprocess isolé pour extraction PDF/Office via Claude Haiku 4.5 (vision)
+- `backend/requirements.txt` — dépendances Python (`fastapi`, `sentence-transformers`, `torch+cpu`, `google-generativeai`, `anthropic`, `supabase`, `google-api-python-client`…)
 - `backend/Dockerfile` — `python:3.11-slim`, modèle sentence-transformers baked au build (cold start ~2s)
 - `supabase/seed.sql` — schéma PostgreSQL complet (tables + RPC `match_chunks`)
 
+Les fichiers `app.js.old`, `db.js.old`, `ui.js.old`, `styles.css.old` sont l'ancien frontend vanilla JS — conservés en référence, non utilisés en production.
+
 ## Commandes
 
-- **Lancer localement** : ouvrir `index.html` dans un navigateur (aucun serveur requis — pas de build)
-- **Déployer le front** : `git push origin main` → GitHub Actions déploie automatiquement sur GitHub Pages
+- **Lancer le frontend localement** : `npm run dev` → http://localhost:5173/clientchat_v2/
+- **Builder le frontend** : `npm run build` → génère `dist/`
+- **Déployer le front** : `git push origin main` → GitHub Actions → `npm run build` → GitHub Pages
 - **Déployer le backend** : `git push origin main` → Cloud Build trigger → build + deploy Cloud Run automatique
 - **Backend local** : `cd backend && uvicorn main:app --reload --port 8080` (avec les vars d'env exportées)
 - **Tests** : aucun framework de test — vérifier manuellement dans le navigateur
@@ -45,20 +57,19 @@
 - **IDs HTML** : `kebab-case` — ex. `todo-search`, `modal-settings`
 - **Classes CSS** : `kebab-case` — ex. `task-clickable`, `msg-badge`
 
-### Helpers globaux (définis dans `db.js`, utilisables partout)
-- `$(id)` → `document.getElementById(id)`
-- `esc(s)` → échappement HTML anti-XSS — **toujours utiliser pour afficher du contenu utilisateur**
-- `show(id)` / `hide(id)` → toggle classe `hide`
-- `openModal(id)` / `closeModal(id)` → toggle classe `open`
-- `callBackend(payload)` → wrapper `fetch` vers `BACKEND_URL` (POST JSON, injecte le JWT automatiquement via `getBackendHeaders()`, throw si HTTP non-2xx)
-- `getBackendHeaders()` → construit les headers HTTP : `Authorization: Bearer <jwt>` si connecté, sinon `X-Api-Key` (fallback transition)
-- `indexSourceBatched(payload)` → boucle sur `callBackend` avec `start_chunk` jusqu'à `has_more: false`
-- `setSyncDot(color, txt)` → indicateur de synchronisation dans la barre topbar
+### Helpers globaux (définis dans `src/lib/constants.js` et `src/lib/backend.js`)
+- `esc(s)` → échappement HTML anti-XSS — **toujours utiliser pour afficher du contenu utilisateur dans du HTML généré dynamiquement**
+- `callBackend(payload, jwtToken)` → wrapper `fetch` vers `BACKEND_URL` (POST JSON, injecte le JWT automatiquement, throw si HTTP non-2xx)
+- `openBackendSSE(payload, jwtToken, onEvent, onDone)` → stream SSE (Drive sync, email sync)
+- `indexSourceBatched(payload, jwtToken)` → boucle sur `callBackend` avec `start_chunk` jusqu'à `has_more: false`
+
+Dans les composants React, les modals sont des composants `<Modal>` — pas de DOM imperatif `openModal/closeModal`.
+Le thème sombre est géré via la classe `dark` sur `<html>` et les variables CSS `--tx`, `--sur`, `--brd2`.
 
 ### Auth — globaux importants
-- `_jwtToken` — JWT Supabase courant (mis à jour par `onAuthStateChange`)
-- `_currentUserId` — UUID Supabase Auth de l'utilisateur connecté
-- Ne jamais appeler `fetch(BACKEND_URL)` sans passer par `getBackendHeaders()` — le JWT doit toujours être transmis
+- `jwtToken` — JWT Supabase courant, exposé par `useAuth` et passé en props aux hooks/composants qui en ont besoin
+- `currentUserId` — UUID Supabase Auth de l'utilisateur connecté
+- Ne jamais appeler `fetch(BACKEND_URL)` directement — passer par `callBackend(payload, jwtToken)` — le JWT doit toujours être transmis
 
 ### Formatage
 - Indentation : **2 espaces**
@@ -76,19 +87,19 @@
 - Utiliser `createElement` + `.value` / `.textContent` pour les inputs dynamiques (éviter `value="..."` dans l'HTML)
 
 ### Patterns à suivre
-- Appels backend : toujours via `callBackend({action: '...', ...})`, jamais `fetch(BACKEND_URL, ...)` brut (sauf SSE `sync_drive` qui utilise `getBackendHeaders()` manuellement)
-- Icônes Lucide : `<i data-lucide="nom">` dans le HTML, puis `lucide.createIcons()` après injection
+- Appels backend : toujours via `callBackend({action: '...', ...}, jwtToken)`, jamais `fetch(BACKEND_URL, ...)` brut (sauf SSE `sync_drive` via `openBackendSSE`)
+- Icônes Lucide : importer depuis `lucide-react` — ex. `import { Settings } from 'lucide-react'` — pas de CDN ni `data-lucide`
 - Thème clair/sombre : utiliser les variables CSS `--tx`, `--sur`, `--brd2` — jamais de couleurs en dur
 - Persistance légère : `localStorage` avec préfixe `cc-` (ex. `cc-dark`, `cc-sess`, `cc-todo-w`)
-- Realtime Supabase : un seul canal actif par client (`rtChan`), toujours `removeChannel` avant d'en créer un nouveau
-- Modals : utiliser `openModal(id)` / `closeModal(id)` — ils configurent aussi le clic-backdrop automatiquement
+- Realtime Supabase : un seul canal actif par client (`rtChan`), toujours `removeChannel` avant d'en créer un nouveau (dans le `return` du `useEffect`)
+- Modals : utiliser le composant `<Modal>` partagé — pas de manipulation DOM impérative
+- State : le state global vit dans `App.jsx` et descend via props — pas de state local pour des données partagées
 
 ### Ce qu'il ne faut pas faire
-- Ne pas définir `EXPORTABLE_MIMETYPES` localement — utiliser la constante dans `db.js`
-- Ne pas écrire dans `innerHTML` sans `esc()` sur les données externes
-- Ne pas ajouter de listener `document.addEventListener('click', …)` par message — utiliser le handler partagé dans `app.js`
-- Ne pas appeler `lucide.createIcons()` sans avoir injecté les `<i data-lucide>` au préalable
-- Ne pas appeler `fetch(BACKEND_URL)` directement — passer par `callBackend()` ou `getBackendHeaders()`
+- Ne pas écrire dans `innerHTML` sans `esc()` sur les données externes (dans les rares cas de HTML généré dynamiquement)
+- Ne pas utiliser `document.getElementById` ou `document.addEventListener` directement — utiliser `useRef` et les event handlers React
+- Ne pas appeler `fetch(BACKEND_URL)` directement — passer par `callBackend()`
+- Ne pas importer `lucide` via CDN — utiliser `lucide-react` npm
 
 ## Variables d'environnement backend
 
@@ -98,8 +109,9 @@ Injectées dans Cloud Run (jamais dans le frontend) :
 |----------|-------------|
 | `SUPABASE_URL` | URL projet Supabase |
 | `SUPABASE_SERVICE_KEY` | Clé service role (accès complet) |
-| `ANTHROPIC_KEY` | Clé API Anthropic |
-| `GOOGLE_SA_KEY` | JSON service account Google Drive (stringifié) |
+| `GOOGLE_API_KEY` | Clé API Google AI (Gemini 2.5 Flash / Pro) |
+| `ANTHROPIC_KEY` | Clé API Anthropic (Claude Haiku 4.5 — OCR PDF, extract_worker.py uniquement) |
+| `GOOGLE_SA_KEY` | JSON service account Google Drive + Gmail (stringifié) |
 | `API_KEY` | Clé HTTP legacy (fallback transition, optionnelle) |
 
 ## Actions backend disponibles

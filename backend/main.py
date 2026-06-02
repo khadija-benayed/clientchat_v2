@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sentence_transformers import SentenceTransformer
 from supabase import create_client, Client
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -116,6 +117,15 @@ if not API_KEY:
 sb: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 genai.configure(api_key=GOOGLE_API_KEY)
 
+# Désactive tous les filtres de sécurité — app B2B interne, contenu métier légitime
+# (sans ça, Gemini bloque sur du contenu cosmétique/bien-être : finish_reason=SAFETY)
+_SAFETY_OFF = {
+    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+}
+
 # ── Gemini model IDs ──────────────────────────────────────────────────────────
 GEMINI_FLASH = "gemini-2.5-flash"
 GEMINI_PRO = "gemini-2.5-pro"
@@ -138,6 +148,17 @@ def calculate_cost(model_id: str, usage: Optional[dict]) -> float:
         return 0.0
     rates = GEMINI_PRICING.get(model_id, GEMINI_PRICING[GEMINI_FLASH])
     return usage.get("input_tokens", 0) * rates["input"] + usage.get("output_tokens", 0) * rates["output"]
+
+
+def _gemini_text(response) -> str:
+    """Extrait le texte d'une réponse Gemini. Lève ValueError avec un message clair si bloquée."""
+    if not response.candidates:
+        raise ValueError("Gemini n'a retourné aucun candidat (réponse vide)")
+    finish = response.candidates[0].finish_reason
+    finish_name = finish.name if hasattr(finish, "name") else str(finish)
+    if finish_name not in ("STOP", "FINISH_REASON_UNSPECIFIED"):
+        raise ValueError(f"Réponse bloquée par Gemini (finish_reason={finish_name})")
+    return response.text
 
 
 # ── Embedding (local, zero timeout) ──────────────────────────────────────────
@@ -591,13 +612,14 @@ async def summarize_session(body: dict):
                 "Tu reçois un historique de conversation et tu produis un résumé structuré."
             ),
             generation_config={"max_output_tokens": 600},
+            safety_settings=_SAFETY_OFF,
         )
         response = gemini.generate_content(
             "Résume cette session en 5 points max : décisions prises, infos importantes, "
             "actions à faire. Format : liste à tirets, sois factuel et concis. Ne mets pas de titre.\n\n"
             "Session :\n" + history_text
         )
-        summary_text = response.text
+        summary_text = _gemini_text(response)
     except Exception as e:
         return JSONResponse({"error": f"Erreur IA (résumé) : {e}"}, status_code=502)
 
@@ -745,9 +767,10 @@ async def generate_brief(body: dict):
         gemini = genai.GenerativeModel(
             model_name=GEMINI_PRO,
             generation_config={"max_output_tokens": 1000},
+            safety_settings=_SAFETY_OFF,
         )
         response = gemini.generate_content(brief_prompt)
-        raw_text = response.text
+        raw_text = _gemini_text(response)
     except Exception as e:
         return JSONResponse({"error": f"Erreur IA (brief) : {e}"}, status_code=502)
 
@@ -1336,9 +1359,10 @@ def summarize_with_llm(text: str) -> str:
                 "Si le thread ne contient aucune information métier pertinente, réponds uniquement : SKIP"
             ),
             generation_config={"max_output_tokens": 400},
+            safety_settings=_SAFETY_OFF,
         )
         response = gemini.generate_content(text)
-        return response.text.strip() if response.candidates else "SKIP"
+        return _gemini_text(response).strip()
     except Exception as e:
         print(f"summarize_with_llm error: {e}")
         return "SKIP"
@@ -1564,6 +1588,18 @@ async def chat(body: dict, user_id: Optional[str] = None):
                 "p_client_id": client_id,
             }).execute()
             chunks = result.data or []
+            # Normalize: deployed RPC aliases source_name→source_file, chunk_text→content,
+            # adds metadata jsonb (always NULL). Guard every field to be schema-agnostic.
+            chunks = [
+                {
+                    **c,
+                    "source_name": c.get("source_file") or c.get("source_name") or "",
+                    "chunk_text": c.get("content") or c.get("chunk_text") or "",
+                    "source_type": c.get("source_type") or "doc",
+                    "metadata": c.get("metadata"),  # always None — never access subkeys directly
+                }
+                for c in chunks
+            ]
 
             if chunks:
                 HIGH_THRESHOLD = 0.62
@@ -1656,9 +1692,10 @@ async def chat(body: dict, user_id: Optional[str] = None):
             model_name=chat_model,
             system_instruction=system_final,
             generation_config={"max_output_tokens": max_tokens},
+            safety_settings=_SAFETY_OFF,
         )
         response = gemini.generate_content(contents)
-        text = response.text
+        text = _gemini_text(response)
     except Exception as e:
         print(f"chat Gemini error: {e}")
         return JSONResponse({"error": f"Erreur IA : {e}"}, status_code=502)
