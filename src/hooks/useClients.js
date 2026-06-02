@@ -18,7 +18,7 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
 import supabase from '../lib/supabase';
-import { callBackend, indexSourceBatched } from '../lib/backend';
+import { callBackend } from '../lib/backend';
 import { EXPORTABLE_MIMETYPES } from '../lib/constants';
 
 /**
@@ -47,6 +47,9 @@ export function useClients({ jwtToken, currentUserId }) {
   // Indicateur de synchronisation Drive
   const [syncStatus, setSyncStatus] = useState({ color: '#52b788', label: 'synchronisé' });
   const [syncProgress, setSyncProgress] = useState(null); // { done, total } ou null
+
+  // Fichiers Drive détectés comme nouveaux/modifiés depuis la dernière sync
+  const [driveOutdated, setDriveOutdated] = useState(null); // { count, newCount, modifiedCount } ou null
 
   // Référence au canal Realtime Supabase (pas dans le state car pas besoin de re-rendu)
   const rtChanRef = useRef(null);
@@ -103,8 +106,9 @@ export function useClients({ jwtToken, currentUserId }) {
     // Souscrire au Realtime pour les tâches
     subscribeRealtime(freshClient.id);
 
-    // Vérifier les mises à jour Drive (async, non-bloquant)
-    checkDriveUpdates(freshClient).then(() => loadDocCache(freshClient));
+    // Vérifier silencieusement si des fichiers Drive ont changé (pas d'indexation)
+    setDriveOutdated(null);
+    checkDriveOutdated(freshClient).then(() => loadDocCache(freshClient));
 
   }, [jwtToken]); // eslint-disable-line
 
@@ -190,116 +194,47 @@ export function useClients({ jwtToken, currentUserId }) {
 
   // ── Drive updates ─────────────────────────────────────────────────────────
 
-  async function checkDriveUpdates(client) {
+  async function checkDriveOutdated(client) {
     if (!client?.drive_folder_id) return;
-    if (indexingRef.current) return;
-    indexingRef.current = true;
     try {
-      // 1. Métadonnées Drive (léger)
+      // 1. Métadonnées Drive (appel léger — pas de téléchargement de contenu)
       const metaData = await callBackend(
         { action: 'list_drive_metadata', folder_id: client.drive_folder_id }, jwtToken
       );
       if (!metaData.files?.length) return;
 
-      // 2. État actuel des chunks indexés en base
+      // 2. État des chunks indexés en base
       const { data: indexedRows } = await supabase
         .from('document_chunks')
-        .select('source_id, source_name, last_indexed_at')
+        .select('source_id, last_indexed_at')
         .eq('client_id', client.id)
-        .not('source_id', 'is', null)
-        .order('last_indexed_at', { ascending: false });
+        .not('source_id', 'is', null);
 
       const indexedMap = {};
       for (const row of (indexedRows || [])) {
         if (!indexedMap[row.source_id])
-          indexedMap[row.source_id] = { last_indexed_at: row.last_indexed_at };
+          indexedMap[row.source_id] = row.last_indexed_at;
       }
 
-      // 3. Classifier : nouveau / modifié / à jour
-      //    Tolérance 5 min pour éviter les faux positifs liés aux décalages
-      //    d'horloge entre Drive API et le serveur (modifiedTime ≈ last_indexed_at).
+      // 3. Compter les fichiers nouveaux / modifiés (tolérance 5 min)
       const TOLERANCE_MS = 5 * 60 * 1000;
-      const toIndex = [];
-      const driveIds = new Set();
+      let newCount = 0, modifiedCount = 0;
       for (const f of metaData.files) {
         if (!EXPORTABLE_MIMETYPES.includes(f.mimeType)) continue;
-        driveIds.add(f.id);
-        const known = indexedMap[f.id];
-        if (!known) {
-          toIndex.push({ ...f, reason: 'new' });
+        const lastIndexed = indexedMap[f.id];
+        if (!lastIndexed) {
+          newCount++;
         } else {
           const modT = new Date(f.modifiedTime).getTime();
-          const idxT = new Date(known.last_indexed_at).getTime();
-          if (modT > idxT + TOLERANCE_MS) toIndex.push({ ...f, reason: 'modified' });
+          const idxT = new Date(lastIndexed).getTime();
+          if (modT > idxT + TOLERANCE_MS) modifiedCount++;
         }
       }
 
-      // 4. Purger les zombies (en base mais supprimés du Drive)
-      const zombieIds = Object.keys(indexedMap).filter(id => !driveIds.has(id));
-      if (zombieIds.length) {
-        await supabase.from('document_chunks').delete()
-          .eq('client_id', client.id).in('source_id', zombieIds);
-      }
-
-      if (!toIndex.length) return;
-
-      // Seuls les fichiers NOUVEAUX (jamais indexés) sont comptés dans le badge.
-      // Les fichiers modifiés sont ré-indexés silencieusement en arrière-plan.
-      const newFiles  = toIndex.filter(f => f.reason === 'new');
-      const modified  = toIndex.filter(f => f.reason === 'modified');
-
-      if (newFiles.length > 0) setSyncProgress({ done: 0, total: newFiles.length });
-
-      const MAX_PER_RUN = 10;
-      let indexedNew = 0;
-
-      // Traiter d'abord les nouveaux fichiers (affichage badge)
-      for (const fileMeta of newFiles.slice(0, MAX_PER_RUN)) {
-        try {
-          const exportData = await callBackend({
-            action: 'export_single_file', file_id: fileMeta.id,
-            file_name: fileMeta.name, mime_type: fileMeta.mimeType,
-          }, jwtToken);
-          if (!exportData.file?.content?.trim()) continue;
-          const sourceType = fileMeta.mimeType.includes('spreadsheet') ? 'sheet' : 'doc';
-          await indexSourceBatched({
-            action: 'index_source', client_id: client.id,
-            source_type: sourceType, source_id: fileMeta.id,
-            source_name: fileMeta.name, content: exportData.file.content,
-            drive_modified_at: fileMeta.modifiedTime || null,
-          }, jwtToken);
-          indexedNew++;
-          setSyncProgress({ done: indexedNew, total: newFiles.length });
-        } catch (e) {
-          console.warn('checkDriveUpdates new file error:', e.message);
-        }
-      }
-
-      // Ré-indexer les fichiers modifiés silencieusement (sans badge)
-      const modifiedBatch = modified.slice(0, MAX_PER_RUN - Math.min(newFiles.length, MAX_PER_RUN));
-      for (const fileMeta of modifiedBatch) {
-        try {
-          const exportData = await callBackend({
-            action: 'export_single_file', file_id: fileMeta.id,
-            file_name: fileMeta.name, mime_type: fileMeta.mimeType,
-          }, jwtToken);
-          if (!exportData.file?.content?.trim()) continue;
-          const sourceType = fileMeta.mimeType.includes('spreadsheet') ? 'sheet' : 'doc';
-          await indexSourceBatched({
-            action: 'index_source', client_id: client.id,
-            source_type: sourceType, source_id: fileMeta.id,
-            source_name: fileMeta.name, content: exportData.file.content,
-            drive_modified_at: fileMeta.modifiedTime || null,
-          }, jwtToken);
-        } catch (e) {
-          console.warn('checkDriveUpdates modified file error:', e.message);
-        }
-      }
+      const count = newCount + modifiedCount;
+      if (count > 0) setDriveOutdated({ count, newCount, modifiedCount });
     } catch (e) {
-      console.warn('checkDriveUpdates error:', e.message);
-    } finally {
-      indexingRef.current = false;
-      setSyncProgress(null);
+      console.warn('checkDriveOutdated error:', e.message);
     }
   }
 
@@ -357,11 +292,12 @@ export function useClients({ jwtToken, currentUserId }) {
     docCache,
     syncStatus, setSyncStatus,
     syncProgress, setSyncProgress,
+    driveOutdated, clearDriveOutdated: () => setDriveOutdated(null),
     loadClients, selectClient,
     upsertTask, deleteTask, saveTaskOrder,
     loadTasksForClient,
     getMembers, getSources,
-    checkDriveUpdates, loadDocCache,
+    loadDocCache,
     indexingRef,
   };
 }

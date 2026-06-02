@@ -73,6 +73,7 @@ export default function App() {
     clients, setClients, currentClient, setCurrentClient,
     tasks, setTasks, summaries, docCache,
     syncStatus, setSyncStatus, syncProgress,
+    driveOutdated, clearDriveOutdated,
     selectClient, upsertTask, deleteTask, saveTaskOrder,
     getMembers, addSummary, loadClients, loadDocCache, indexingRef,
   } = clientStore;
@@ -200,6 +201,30 @@ export default function App() {
   }
   const [pendingChatMsg, setPendingChatMsg] = useState(null);
 
+  // ── Resync Drive depuis la bannière ──────────────────────────────────────
+  const [isResyncing, setIsResyncing] = useState(false);
+  async function triggerDriveResync() {
+    if (!currentClient?.drive_folder_id || isResyncing) return;
+    setIsResyncing(true);
+    clearDriveOutdated();
+    try {
+      const result = await syncHook.syncDrive({
+        folderId: currentClient.drive_folder_id,
+        clientId: currentClient.id,
+        incremental: true,
+        onMessage: handleSyncMessage,
+      });
+      const cachedNote = result.cached > 0 ? `, ${result.cached} déjà indexé(s)` : '';
+      const purgedNote = result.purged > 0 ? `, ${result.purged} supprimé(s)` : '';
+      handleSyncMessage({ type: 'ok', message: `✓ ${result.ok + result.cached} document(s) indexé(s)${cachedNote}${purgedNote}${result.errors ? ` (${result.errors} erreur(s))` : ''}.` });
+      await loadDocCache(currentClient);
+    } catch (e) {
+      handleSyncMessage({ type: 'error', message: '⚠ Erreur sync : ' + e.message });
+    } finally {
+      setIsResyncing(false);
+    }
+  }
+
   // ── Membres du client courant ─────────────────────────────────────────────
   const members = getMembers(currentClient);
 
@@ -252,6 +277,23 @@ export default function App() {
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenShortcuts={() => setShortcutsOpen(true)}
             />
+            {driveOutdated?.count > 0 && (
+              <div className="drive-outdated-banner">
+                <span>
+                  {driveOutdated.newCount > 0 && driveOutdated.modifiedCount > 0
+                    ? `${driveOutdated.newCount} nouveau(x) + ${driveOutdated.modifiedCount} modifié(s) dans Drive`
+                    : driveOutdated.newCount > 0
+                    ? `${driveOutdated.newCount} nouveau(x) fichier(s) dans Drive`
+                    : `${driveOutdated.modifiedCount} fichier(s) Drive modifié(s) depuis la dernière sync`}
+                </span>
+                <div className="drive-outdated-actions">
+                  <button className="drive-outdated-btn" onClick={triggerDriveResync} disabled={isResyncing}>
+                    {isResyncing ? '⟳ Sync…' : 'Resynchroniser'}
+                  </button>
+                  <button className="drive-outdated-dismiss" onClick={clearDriveOutdated} aria-label="Ignorer">✕</button>
+                </div>
+              </div>
+            )}
             <div className="workspace">
               <ChatPanel
                 client={currentClient}

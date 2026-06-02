@@ -211,6 +211,26 @@ body {
 
 .workspace { display: flex; flex: 1; overflow: hidden; }
 
+.drive-outdated-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 16px; font-size: 13px; color: var(--tx2); flex-shrink: 0;
+  background: rgba(248,155,28,.08); border-bottom: 1px solid rgba(248,155,28,.25);
+}
+.drive-outdated-actions { display: flex; align-items: center; gap: 6px; }
+.drive-outdated-btn {
+  padding: 4px 12px; border-radius: var(--rs); border: none;
+  background: var(--sb-orange); color: #fff; font-size: 12px; font-weight: 600;
+  cursor: pointer; font-family: 'DM Sans', sans-serif; transition: opacity .15s;
+}
+.drive-outdated-btn:hover:not(:disabled) { opacity: .88; }
+.drive-outdated-btn:disabled { opacity: .55; cursor: default; }
+.drive-outdated-dismiss {
+  padding: 3px 7px; border-radius: var(--rs); border: 1px solid var(--brd);
+  background: transparent; color: var(--tx3); font-size: 12px;
+  cursor: pointer; font-family: 'DM Sans', sans-serif; transition: opacity .15s;
+}
+.drive-outdated-dismiss:hover { color: var(--tx); }
+
 /* ─── TOPBAR ────────────────────────────────────────────────────────────── */
 .topbar {
   height: 52px; background: var(--sur);
