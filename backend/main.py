@@ -117,18 +117,18 @@ sb: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 genai.configure(api_key=GOOGLE_API_KEY)
 
 # ── Gemini model IDs ──────────────────────────────────────────────────────────
-GEMINI_FLASH = "gemini-2.0-flash"
-GEMINI_PRO = "gemini-1.5-flash"
+GEMINI_FLASH = "gemini-2.5-flash"
+GEMINI_PRO = "gemini-2.5-pro"
 
 # ── Cost calculation ──────────────────────────────────────────────────────────
 GEMINI_PRICING: dict[str, dict[str, float]] = {
     GEMINI_FLASH: {
-        "input": 0.075 / 1_000_000,
-        "output": 0.30 / 1_000_000,
+        "input": 0.15 / 1_000_000,
+        "output": 0.60 / 1_000_000,
     },
     GEMINI_PRO: {
         "input": 1.25 / 1_000_000,
-        "output": 5.00 / 1_000_000,
+        "output": 10.00 / 1_000_000,
     },
 }
 
