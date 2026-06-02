@@ -566,12 +566,8 @@ async def dispatcher(request: Request):
         return await get_me(request)
     if action == "summarize_session":
         return await summarize_session(body)
-    if action == "read_drive_folder":
-        return await read_drive_folder(body)
     if action == "list_drive_metadata":
         return await list_drive_metadata(body)
-    if action == "export_single_file":
-        return await export_single_file(body)
     if action == "generate_brief":
         return await generate_brief(body)
     if action == "index_source":
@@ -692,43 +688,6 @@ async def summarize_session(body: dict):
     return {"saved": True, "summary": summary_text}
 
 
-# ── read_drive_folder ─────────────────────────────────────────────────────────
-async def read_drive_folder(body: dict):
-    folder_id = body.get("folder_id") or body.get("message")
-    if not folder_id:
-        return JSONResponse({"error": "folder_id requis"}, status_code=400)
-
-    try:
-        drive, sa_email = get_drive_service()
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-    total_ref = [0]
-    all_files = _list_files_recursive(drive, folder_id, set(), 500, total_ref)
-
-    if not all_files:
-        return {
-            "files": [],
-            "message": f"Aucun fichier trouvé. Vérifie que le dossier est partagé avec {sa_email}.",
-        }
-
-    all_files.sort(key=lambda f: (_type_priority(f["mimeType"]), -_parse_modified(f).timestamp()))
-
-    results = []
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {
-            executor.submit(export_drive_file, f["id"], f["name"], f["mimeType"]): f
-            for f in all_files[:200]
-        }
-        for future in as_completed(futures):
-            r = future.result()
-            if r:
-                f = futures[future]
-                results.append({**r, "driveId": f["id"], "modifiedTime": f.get("modifiedTime", "")})
-
-    return {"files": results, "sa_email": sa_email}
-
-
 # ── list_drive_metadata ───────────────────────────────────────────────────────
 async def list_drive_metadata(body: dict):
     """Lightweight metadata-only listing — no file content download."""
@@ -754,25 +713,6 @@ async def list_drive_metadata(body: dict):
         for f in all_files
     ]
     return {"files": meta_files, "sa_email": sa_email}
-
-
-# ── export_single_file ────────────────────────────────────────────────────────
-async def export_single_file(body: dict):
-    file_id = body.get("file_id")
-    mime_type = body.get("mime_type")
-    file_name = body.get("file_name") or file_id
-
-    if not file_id or not mime_type:
-        return JSONResponse({"error": "file_id et mime_type requis"}, status_code=400)
-
-    result = export_drive_file(file_id, file_name, mime_type)
-    if not result:
-        return JSONResponse(
-            {"error": f"Type de fichier non supporté ou export échoué : {mime_type}"},
-            status_code=400,
-        )
-
-    return {"file": {**result, "driveId": file_id}}
 
 
 # ── generate_brief ────────────────────────────────────────────────────────────
