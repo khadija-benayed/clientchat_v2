@@ -1,7 +1,7 @@
 -- ════════════════════════════════════════════════════════════════════════════
 -- seed.sql — Schéma complet clientchat_v2
 -- Vérifié contre la base de production (erpjerfvswesipmdqxab) le 2026-05-22
--- Modèle d'embeddings : gte-small / Supabase.ai (384 dimensions)
+-- Modèle d'embeddings : paraphrase-multilingual-mpnet-base-v2 (768 dimensions)
 -- ════════════════════════════════════════════════════════════════════════════
 
 -- ── Extensions ───────────────────────────────────────────────────────────────
@@ -43,14 +43,14 @@ CREATE TABLE IF NOT EXISTS session_summaries (
   created_at    timestamptz             DEFAULT now()
 );
 
--- document_chunks : embeddings RAG — paraphrase-multilingual-MiniLM-L12-v2 (384 dims)
+-- document_chunks : embeddings RAG — paraphrase-multilingual-mpnet-base-v2 (768 dims)
 CREATE TABLE IF NOT EXISTS document_chunks (
   id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id        uuid        REFERENCES clients(id) ON DELETE CASCADE,  -- NULL = base agence
   source_type      text        NOT NULL,   -- 'doc' | 'sheet' | 'session' | 'pdf'
   source_name      text        NOT NULL,   -- nom affiché dans l'UI
   chunk_text       text        NOT NULL,
-  embedding        vector(384),
+  embedding        vector(768),
   fts              tsvector    GENERATED ALWAYS AS (to_tsvector('simple', coalesce(chunk_text, ''))) STORED,
   created_at       timestamptz             DEFAULT now(),
   last_indexed_at  timestamptz             DEFAULT now(),
@@ -103,10 +103,11 @@ ALTER TABLE document_chunks
 
 -- ── Index de performance ──────────────────────────────────────────────────────
 
--- Recherche vectorielle ivfflat cosinus — gte-small, 384 dims (lists=50)
-CREATE INDEX IF NOT EXISTS document_chunks_embedding_idx
-  ON document_chunks USING ivfflat (embedding vector_cosine_ops)
-  WITH (lists = 50);
+-- Recherche vectorielle HNSW cosinus — mpnet-base-v2, 768 dims
+-- HNSW : pas d'entraînement requis, meilleur rappel que ivfflat pour ce volume.
+CREATE INDEX IF NOT EXISTS document_chunks_embedding_hnsw_idx
+  ON document_chunks USING hnsw (embedding vector_cosine_ops)
+  WITH (m = 16, ef_construction = 64);
 
 -- Lookup rapide par source Drive (checkDriveUpdates, index_source)
 CREATE INDEX IF NOT EXISTS idx_document_chunks_source_id
@@ -146,9 +147,10 @@ CREATE INDEX IF NOT EXISTS document_chunks_fts_gin_idx
 
 -- ── Fonctions RPC ────────────────────────────────────────────────────────────
 
--- Supprime les anciennes surcharges avant de créer la nouvelle signature
+-- Supprime toutes les surcharges connues avant de créer la nouvelle signature
 DROP FUNCTION IF EXISTS match_chunks(vector, double precision, integer, uuid);
 DROP FUNCTION IF EXISTS match_chunks(vector, integer, uuid);
+DROP FUNCTION IF EXISTS match_chunks(vector, text, uuid, integer);
 
 -- match_chunks — hybrid search (pgvector cosine + FTS) fusionné par RRF
 --
@@ -161,7 +163,7 @@ DROP FUNCTION IF EXISTS match_chunks(vector, integer, uuid);
 -- Python passe des mots-clés ≥4 chars OR-joints ('budget OR projet') pour que
 -- websearch_to_tsquery produise 'budget'|'projet' (rappel large, pas stopwords).
 CREATE OR REPLACE FUNCTION match_chunks(
-  query_embedding  vector(384),
+  query_embedding  vector(768),
   query_text       text     DEFAULT NULL,
   p_client_id      uuid     DEFAULT NULL,
   match_count      integer  DEFAULT 150
@@ -181,7 +183,8 @@ DECLARE
   _k  constant integer := 60;   -- constante RRF standard
   _ts tsquery  := NULL;
 BEGIN
-  SET LOCAL ivfflat.probes = 20;  -- 20/50 listes visitées — meilleur rappel vectoriel
+  -- ef_search=40 : compromis rappel/latence pour HNSW (défaut pgvector = 40)
+  SET LOCAL hnsw.ef_search = 40;
 
   IF query_text IS NOT NULL AND length(trim(query_text)) > 0 THEN
     _ts := websearch_to_tsquery('simple', query_text);

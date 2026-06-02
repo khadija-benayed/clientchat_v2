@@ -46,7 +46,7 @@ _sync_state: dict = {}  # key: f"{client_id}|{folder_id}"
 
 
 def _load_biencoder() -> SentenceTransformer:
-    return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+    return SentenceTransformer("paraphrase-multilingual-mpnet-base-v2")
 
 
 def _load_crossencoder() -> CrossEncoder:
@@ -241,11 +241,11 @@ def _check_rate_limit(key: str) -> bool:
 
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
-def chunk_text(text: str, max_chars: int = 400, overlap: int = 80) -> list[str]:
+def chunk_text(text: str, max_chars: int = 1200, overlap: int = 200) -> list[str]:
     """
     Splits text into chunks preserving sentence boundaries.
     Priority: paragraph breaks → sentence ends → character limit.
-    max_chars=400 ≈ 100 tokens (MiniLM-L12 limit).
+    max_chars=1200 ≈ 300 tokens (well within mpnet-base-v2's 512-token limit).
     """
     normalized = re.sub(r"\r\n|\r", "\n", text).strip()
     if not normalized:
@@ -291,7 +291,7 @@ def chunk_text(text: str, max_chars: int = 400, overlap: int = 80) -> list[str]:
 
 def chunk_csv(text: str, max_chars: int = 500) -> list[str]:
     """
-    Chunks CSV with header repeated, capped at max_chars to fit MiniLM's 128-token limit.
+    Chunks CSV with header repeated in each chunk.
     Wide sheets (many columns) → fewer rows per chunk; narrow sheets → more rows per chunk.
     """
     lines = [l for l in text.split("\n") if l.strip()]
