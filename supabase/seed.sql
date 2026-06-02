@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS session_summaries (
   created_at    timestamptz             DEFAULT now()
 );
 
--- document_chunks : embeddings RAG — gte-small (384 dims)
+-- document_chunks : embeddings RAG — paraphrase-multilingual-MiniLM-L12-v2 (384 dims)
 CREATE TABLE IF NOT EXISTS document_chunks (
   id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id        uuid        REFERENCES clients(id) ON DELETE CASCADE,  -- NULL = base agence
@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS document_chunks (
   source_name      text        NOT NULL,   -- nom affiché dans l'UI
   chunk_text       text        NOT NULL,
   embedding        vector(384),
+  fts              tsvector    GENERATED ALWAYS AS (to_tsvector('simple', coalesce(chunk_text, ''))) STORED,
   created_at       timestamptz             DEFAULT now(),
   last_indexed_at  timestamptz             DEFAULT now(),
   source_id        text                    -- Google Drive file ID (stable, résistant au renommage)
@@ -95,6 +96,11 @@ ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS user_id uuid;
 -- Migration : stocke la date de modification Drive réelle (vs last_indexed_at = date de sync)
 ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS drive_modified_at timestamptz;
 
+-- Migration : colonne FTS générée pour le hybrid search (pgvector + FTS, fusion RRF)
+ALTER TABLE document_chunks
+  ADD COLUMN IF NOT EXISTS fts tsvector
+    GENERATED ALWAYS AS (to_tsvector('simple', coalesce(chunk_text, ''))) STORED;
+
 -- ── Index de performance ──────────────────────────────────────────────────────
 
 -- Recherche vectorielle ivfflat cosinus — gte-small, 384 dims (lists=50)
@@ -133,23 +139,32 @@ CREATE INDEX IF NOT EXISTS tasks_due_date_idx
   ON tasks (due_date)
   WHERE due_date IS NOT NULL;
 
+-- Hybrid search : index GIN sur le tsvector pré-calculé
+CREATE INDEX IF NOT EXISTS document_chunks_fts_gin_idx
+  ON document_chunks
+  USING gin(fts);
+
 -- ── Fonctions RPC ────────────────────────────────────────────────────────────
 
--- Supprime l'ancienne surcharge v2 (match_threshold) si elle existe encore en base
+-- Supprime les anciennes surcharges avant de créer la nouvelle signature
 DROP FUNCTION IF EXISTS match_chunks(vector, double precision, integer, uuid);
+DROP FUNCTION IF EXISTS match_chunks(vector, integer, uuid);
 
--- match_chunks — pipeline RAG principal
--- Retourne les N chunks les plus proches pour un client donné + base agence (client_id IS NULL).
--- Colonnes retournées :
---   source_file = alias de dc.source_name (nom du fichier Drive, toujours renseigné)
---   source_type = type du chunk : "doc", "session", "email", "kb"…
---   content     = alias de dc.chunk_text  (texte du chunk)
---   metadata    = NULL::jsonb             (toujours NULL — compatibilité API, ne pas accéder sans .get())
---   similarity  = score cosine [0,1]
+-- match_chunks — hybrid search (pgvector cosine + FTS) fusionné par RRF
+--
+-- Colonnes retournées (aliases conservés pour rétrocompatibilité Python) :
+--   source_file = alias dc.source_name
+--   content     = alias dc.chunk_text
+--   rrf_score   = score Reciprocal Rank Fusion (remplace similarity)
+--
+-- query_text DEFAULT NULL → rétrocompatible : NULL déclenche le path pure-semantic.
+-- Python passe des mots-clés ≥4 chars OR-joints ('budget OR projet') pour que
+-- websearch_to_tsquery produise 'budget'|'projet' (rappel large, pas stopwords).
 CREATE OR REPLACE FUNCTION match_chunks(
-  query_embedding vector(384),
-  match_count     integer,
-  p_client_id     uuid
+  query_embedding  vector(384),
+  query_text       text     DEFAULT NULL,
+  p_client_id      uuid     DEFAULT NULL,
+  match_count      integer  DEFAULT 150
 )
 RETURNS TABLE (
   id          uuid,
@@ -157,25 +172,83 @@ RETURNS TABLE (
   source_type text,
   content     text,
   metadata    jsonb,
-  similarity  double precision
+  rrf_score   double precision
 )
 LANGUAGE plpgsql
 STABLE
 AS $$
+DECLARE
+  _k  constant integer := 60;   -- constante RRF standard
+  _ts tsquery  := NULL;
 BEGIN
-  SET LOCAL ivfflat.probes = 20;  -- visit 20/50 lists (40 % de l'index) — meilleur rappel vectoriel
+  SET LOCAL ivfflat.probes = 20;  -- 20/50 listes visitées — meilleur rappel vectoriel
+
+  IF query_text IS NOT NULL AND length(trim(query_text)) > 0 THEN
+    _ts := websearch_to_tsquery('simple', query_text);
+  END IF;
+
+  -- ── Path pure-semantic (query_text absent ou aucun terme FTS valide) ──────────
+  IF _ts IS NULL THEN
+    RETURN QUERY
+    SELECT
+      dc.id,
+      dc.source_name                                               AS source_file,
+      dc.source_type,
+      dc.chunk_text                                               AS content,
+      NULL::jsonb                                                  AS metadata,
+      (1 - (dc.embedding <=> query_embedding))::double precision  AS rrf_score
+    FROM document_chunks dc
+    WHERE dc.client_id = p_client_id
+       OR dc.client_id IS NULL
+    ORDER BY dc.embedding <=> query_embedding
+    LIMIT match_count;
+    RETURN;
+  END IF;
+
+  -- ── Path hybrid : RRF(bras sémantique ∪ bras FTS) ────────────────────────────
   RETURN QUERY
+  WITH sem AS (
+    SELECT dc.id,
+           ROW_NUMBER() OVER (ORDER BY dc.embedding <=> query_embedding) AS rank
+    FROM   document_chunks dc
+    WHERE  dc.client_id = p_client_id
+        OR dc.client_id IS NULL
+    ORDER  BY dc.embedding <=> query_embedding
+    LIMIT  60
+  ),
+  kw_scored AS (
+    -- ts_rank_cd calculé une seule fois par ligne (via sous-requête)
+    SELECT dc.id,
+           ts_rank_cd(dc.fts, _ts) AS ts_score
+    FROM   document_chunks dc
+    WHERE  (dc.client_id = p_client_id OR dc.client_id IS NULL)
+      AND  dc.fts @@ _ts
+  ),
+  kw AS (
+    SELECT id,
+           ROW_NUMBER() OVER (ORDER BY ts_score DESC) AS rank
+    FROM   kw_scored
+    ORDER  BY ts_score DESC
+    LIMIT  60
+  ),
+  rrf AS (
+    SELECT COALESCE(s.id, k.id)                                   AS chunk_id,
+           COALESCE(1.0 / (_k + s.rank), 0.0)
+         + COALESCE(1.0 / (_k + k.rank), 0.0)                    AS score
+    FROM        sem  s
+    FULL OUTER JOIN kw k ON s.id = k.id
+  )
   SELECT
     dc.id,
     dc.source_name  AS source_file,
     dc.source_type,
     dc.chunk_text   AS content,
     NULL::jsonb     AS metadata,
-    1 - (dc.embedding <=> query_embedding) AS similarity
-  FROM document_chunks dc
-  WHERE (dc.client_id = p_client_id OR dc.client_id IS NULL)
-  ORDER BY dc.embedding <=> query_embedding
-  LIMIT match_count;
+    rrf.score::double precision
+  FROM        rrf
+  JOIN        document_chunks dc ON dc.id = rrf.chunk_id
+  ORDER BY    rrf.score DESC
+  LIMIT       match_count;
 END;
 $$;
 

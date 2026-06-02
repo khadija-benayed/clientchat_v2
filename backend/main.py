@@ -20,7 +20,7 @@ from typing import Optional
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 from supabase import create_client, Client
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
@@ -34,21 +34,35 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 # ── Model loading ─────────────────────────────────────────────────────────────
 model: Optional[SentenceTransformer] = None
+reranker: Optional[CrossEncoder] = None
 
-# Single-worker executor: model.encode() must never run in two threads at once.
-# Using the default pool allows concurrent chat + sync_drive → heap corruption.
+# Single-worker executors: model.encode() / reranker.predict() must never run
+# in two threads at once — concurrent inference corrupts the glibc heap (SIGABRT).
 _EMBED_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+_RERANK_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 
 # In-memory sync state — lets the frontend poll progress after an SSE drop.
 _sync_state: dict = {}  # key: f"{client_id}|{folder_id}"
 
 
+def _load_biencoder() -> SentenceTransformer:
+    return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+
+
+def _load_crossencoder() -> CrossEncoder:
+    return CrossEncoder("BAAI/bge-reranker-v2-m3")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global model
-    print("Loading sentence-transformers model...")
-    model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
-    print("Model loaded.")
+    global model, reranker
+    loop = asyncio.get_running_loop()
+    print("Loading models (bi-encoder + cross-encoder reranker)...")
+    model, reranker = await asyncio.gather(
+        loop.run_in_executor(None, _load_biencoder),
+        loop.run_in_executor(None, _load_crossencoder),
+    )
+    print("All models loaded.")
     yield
 
 
@@ -178,6 +192,20 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         raise RuntimeError("Model not loaded")
     embeddings = model.encode(texts, normalize_embeddings=True)
     return embeddings.tolist()
+
+
+def _rerank_chunks(query: str, chunks: list[dict]) -> list[dict]:
+    """Score (query, chunk_text) pairs with the cross-encoder, return sorted by score desc.
+    Falls back to input order if reranker is unavailable."""
+    if reranker is None or not chunks:
+        return chunks
+    pairs = [(query, c["chunk_text"]) for c in chunks]
+    scores = reranker.predict(pairs)
+    return sorted(
+        [dict(c, rerank_score=float(s)) for c, s in zip(chunks, scores)],
+        key=lambda c: c["rerank_score"],
+        reverse=True,
+    )
 
 
 # ── Supabase retry ───────────────────────────────────────────────────────────
@@ -525,7 +553,7 @@ def safe_extract(file_bytes: bytes, mime_type: str) -> str:
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    return {"ok": True, "model_loaded": model is not None}
+    return {"ok": True, "model_loaded": model is not None, "reranker_loaded": reranker is not None}
 
 
 @app.post("/")
@@ -1678,14 +1706,23 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     pass  # fall back to raw message
 
             query_emb = (await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, [query_for_embed]))[0]
+
+            # Mots-clés ≥4 chars extraits du message brut (pas du texte HyDE).
+            # Utilisés pour (1) la requête FTS et (2) le safety net post-retrieval.
+            # OR-joints : websearch_to_tsquery('simple', 'A OR B') → 'A'|'B' —
+            # évite qu'un stopword absent des documents bloque tout le bras FTS.
+            query_words = {w.lower() for w in re.findall(r'\w{4,}', message)}
+            _query_text = ' OR '.join(query_words) if query_words else None
+
             result = sb.rpc("match_chunks", {
                 "query_embedding": query_emb,
-                "match_count": 150,
+                "query_text": _query_text,
+                "match_count": 30,
                 "p_client_id": client_id,
             }).execute()
             chunks = result.data or []
-            # Normalize: deployed RPC aliases source_name→source_file, chunk_text→content,
-            # adds metadata jsonb (always NULL). Guard every field to be schema-agnostic.
+            # Normalize: RPC aliases source_name→source_file, chunk_text→content.
+            # rrf_score remplace similarity — non consommé ici (le reranker rescores).
             chunks = [
                 {
                     **c,
@@ -1697,16 +1734,9 @@ async def chat(body: dict, user_id: Optional[str] = None):
                 for c in chunks
             ]
 
-            # Source-name keyword boost: chunks from sources whose filename contains
-            # query words rank first, before the diversity cap is applied.
-            query_words = {w.lower() for w in re.findall(r'\w{4,}', message)}
-            def _name_overlap(chunk):
-                name = chunk["source_name"].lower()
-                return sum(1 for w in query_words if w in name)
-
             # Keyword-source safety net: if a source whose name matches the query
-            # isn't in the semantic results at all (scored below rank 150), fetch
-            # its chunks directly so the guaranteed-slots logic can include them.
+            # isn't in the semantic results (scored below rank 30), fetch its chunks
+            # directly and add them to the reranker pool.
             if query_words:
                 semantic_sources = {c["source_name"] for c in chunks}
                 try:
@@ -1734,41 +1764,28 @@ async def chat(body: dict, user_id: Optional[str] = None):
                         for row in (extra.data or []):
                             chunks.append({
                                 **row,
-                                "similarity": 0.0,  # unknown — will be ranked by name_overlap
+                                "rrf_score": 0.0,
                             })
                 except Exception as _kw_err:
                     print(f"keyword safety net error (non bloquant): {_kw_err}")
 
-            chunks.sort(key=lambda c: (_name_overlap(c), c["similarity"]), reverse=True)
+            # Cross-encoder reranking on the full pool (semantic top-30 + keyword safety
+            # net chunks). Diversity cap (2 per source) applied AFTER reranking so the
+            # reranker score, not insertion order, determines which chunk of a source wins.
+            reranked = await loop.run_in_executor(_RERANK_EXECUTOR, _rerank_chunks, message, chunks)
 
-            # Source diversity: cap at 2 chunks per source so one large file
-            # can't crowd out all other sources from the injected context.
             seen_src: dict = {}
             diverse: list = []
-            for c in chunks:
+            for c in reranked:
                 src = c["source_name"]
                 if seen_src.get(src, 0) < 2:
                     diverse.append(c)
                     seen_src[src] = seen_src.get(src, 0) + 1
-            chunks = diverse
 
-            if chunks:
-                FLOOR = 0.45
+            if diverse:
+                RERANK_THRESHOLD = 0.0
                 MAX_INJECT = 6
-                MIN_INJECT = 2
-                # Keyword-matched sources get guaranteed slots (already diversity-capped at
-                # 2 chunks/source), so they are never crowded out by higher-scoring semantic
-                # matches from unrelated files. Remaining slots are filled with the best
-                # semantic matches above the hard floor from non-keyword sources.
-                keyword_chunks = [c for c in chunks if _name_overlap(c) >= 2]
-                kw_sources = {c["source_name"] for c in keyword_chunks}
-                remaining = max(0, MAX_INJECT - len(keyword_chunks))
-                semantic_chunks = [
-                    c for c in chunks
-                    if c["source_name"] not in kw_sources and c["similarity"] >= FLOOR
-                ][:remaining]
-                combined = (keyword_chunks + semantic_chunks)[:MAX_INJECT]
-                to_inject = combined if len(combined) >= MIN_INJECT else chunks[:MIN_INJECT]
+                to_inject = [c for c in diverse if c.get("rerank_score", 0.0) >= RERANK_THRESHOLD][:MAX_INJECT]
 
                 doc_chunks = [c for c in to_inject if c["source_type"] != "session"]
                 session_chunks = [c for c in to_inject if c["source_type"] == "session"]
