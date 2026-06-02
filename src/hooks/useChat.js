@@ -95,7 +95,7 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
     const _needL3 = _isComplex;
 
     const systemPrompt =
-      buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr, tasks }) +
+      buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr, tasks, isAction: _isAction }) +
       (_needL2 ? buildL2(ctxForPrompt, summaries, docCache) : '') +
       (_needL3 ? buildL3(summaries) : '');
 
@@ -363,10 +363,16 @@ function buildClientContext(client) {
   return client.context || 'Non renseigné.';
 }
 
-function buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr, tasks }) {
+function buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr, tasks, isAction }) {
   const today = new Date().toLocaleDateString('fr-FR', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
   });
+  const responseInstruction = isAction
+    ? 'Réponds en français, concis et direct.'
+    : 'Réponds en français de façon précise et structurée. Pour les questions et analyses, développe ta réponse : sois complet, utilise des listes ou sections si utile, ne sois pas trop bref. Réponds directement à ce qui est demandé sans paraphraser la question.';
+  const part1Desc = isAction
+    ? 'ta réponse courte confirmant l\'action effectuée (1-2 phrases max).'
+    : 'ta réponse complète et précise. Cite tes sources entre parenthèses quand tu utilises un document : *(source : NomFichier)*.';
   return 'Tu es l\'assistant projet de l\'équipe sur ce client.\n'
     + 'Date du jour : ' + today + '.\n'
     + 'TO-DO ACTUELLE : ' + snap(tasks) + '\n'
@@ -375,8 +381,8 @@ function buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr, task
     + 'Initiales pour JSON : ' + mInitials + '. Statuts : todo, inprogress, blocked, waiting, done. Priorités : P1, P2, P3.\n'
     + '\nANALYSE AUTOMATIQUE DE CORRESPONDANCE :\n' + matchContext + '\n'
     + (historyStr ? '\nHISTORIQUE :\n' + historyStr + '\n' : '')
-    + '\nINSTRUCTIONS :\nRéponds en français, concis et direct. Ta réponse DOIT contenir exactement deux parties séparées par "---JSON---" :\n'
-    + '\nPARTIE 1 : ta réponse conversationnelle.\n'
+    + '\nINSTRUCTIONS :\n' + responseInstruction + ' Ta réponse DOIT contenir exactement deux parties séparées par "---JSON---" :\n'
+    + '\nPARTIE 1 : ' + part1Desc + '\n'
     + '\nPARTIE 2 : UN objet JSON valide :\n'
     + '{"updates":[],"new_tasks":[],"delete_ids":[],"clarification":false}\n'
     + '\nRègles JSON : SUIS L\'ANALYSE DE CORRESPONDANCE.\n'

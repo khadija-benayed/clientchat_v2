@@ -1640,7 +1640,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
 
             if chunks:
                 HIGH_THRESHOLD = 0.62
-                LOW_THRESHOLD = 0.35
+                LOW_THRESHOLD = 0.50
                 MAX_INJECT = 6
                 MIN_INJECT = 2
                 high_q = [c for c in chunks if c["similarity"] >= HIGH_THRESHOLD]
