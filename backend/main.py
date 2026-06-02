@@ -153,14 +153,17 @@ def calculate_cost(model_id: str, usage: Optional[dict]) -> float:
 _GEMINI_BLOCKED = {"SAFETY", "RECITATION", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII"}
 
 def _gemini_text(response) -> str:
-    """Extrait le texte d'une réponse Gemini. Lève ValueError uniquement si la réponse est bloquée."""
+    """Extrait le texte d'une réponse Gemini. Lève ValueError si bloquée ou sans contenu."""
     if not response.candidates:
         raise ValueError("Gemini n'a retourné aucun candidat (réponse vide)")
     finish = response.candidates[0].finish_reason
     finish_name = finish.name if hasattr(finish, "name") else str(finish)
     if finish_name in _GEMINI_BLOCKED:
         raise ValueError(f"Réponse bloquée par Gemini (finish_reason={finish_name})")
-    return response.text
+    try:
+        return response.text
+    except Exception:
+        raise ValueError(f"Gemini n'a retourné aucun texte (finish_reason={finish_name})")
 
 
 # ── Embedding (local, zero timeout) ──────────────────────────────────────────
@@ -768,7 +771,7 @@ async def generate_brief(body: dict):
     try:
         gemini = genai.GenerativeModel(
             model_name=GEMINI_PRO,
-            generation_config={"max_output_tokens": 1000},
+            generation_config={"max_output_tokens": 2048},
             safety_settings=_SAFETY_OFF,
         )
         response = gemini.generate_content(brief_prompt)

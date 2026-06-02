@@ -10,11 +10,10 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ── Tables ───────────────────────────────────────────────────────────────────
 
--- clients : espaces projets protégés par mot de passe
+-- clients : espaces projets (accès géré via client_members)
 CREATE TABLE IF NOT EXISTS clients (
   id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   name             text        NOT NULL,
-  password_hash    text        NOT NULL,
   context          text                    DEFAULT '',
   drive_folder_id  text                    DEFAULT '',
   members          text                    DEFAULT '',       -- JSON : [{initials, name}]
@@ -129,6 +128,9 @@ CREATE INDEX IF NOT EXISTS tasks_due_date_idx
   WHERE due_date IS NOT NULL;
 
 -- ── Fonctions RPC ────────────────────────────────────────────────────────────
+
+-- Supprime l'ancienne surcharge v2 (match_threshold) si elle existe encore en base
+DROP FUNCTION IF EXISTS match_chunks(vector, double precision, integer, uuid);
 
 -- match_chunks — pipeline RAG principal
 -- Retourne les N chunks les plus proches pour un client donné + base agence (client_id IS NULL).
