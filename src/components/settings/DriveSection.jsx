@@ -11,12 +11,16 @@
  * @param {object}   syncHook       - { syncDrive, generateBrief }
  * @param {string}   jwtToken
  */
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { FolderOpen, FileText } from 'lucide-react';
 import { callBackend, indexSourceBatched } from '../../lib/backend';
 import supabase from '../../lib/supabase';
 
 export default function DriveSection({ client, onClientUpdate, onSyncMessage, syncHook, onSyncComplete, indexingRef, jwtToken }) {
+  // Keep a ref so async functions always use the latest token, even after a JWT refresh mid-sync
+  const jwtRef = useRef(jwtToken);
+  useEffect(() => { jwtRef.current = jwtToken; }, [jwtToken]);
+
   const [showAddForm, setShowAddForm] = useState(null); // 'drive' | 'file' | null
   const [driveFolderId, setDriveFolderId] = useState('');
   const [driveName, setDriveName] = useState('');
@@ -95,7 +99,7 @@ export default function DriveSection({ client, onClientUpdate, onSyncMessage, sy
         // Générer la fiche client après sync
         const docsForBrief = await syncHook.generateBrief(client.id, onSyncMessage);
         if (docsForBrief) {
-          const data = await callBackend({ action: 'generate_brief', client_id: client.id, docs_content: docsForBrief }, jwtToken);
+          const data = await callBackend({ action: 'generate_brief', client_id: client.id, docs_content: docsForBrief }, jwtRef.current);
           if (data.brief) {
             onClientUpdate?.({ context: JSON.stringify(data.brief) });
             onSyncMessage?.({ type: 'ok', message: '✓ Fiche client générée avec succès.' });
