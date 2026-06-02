@@ -273,7 +273,17 @@ body {
 }
 .msg.u .bubble { background: var(--sb-navy); color: #fff; border-radius: var(--r) var(--r) 4px var(--r); }
 [data-theme="dark"] .msg.u .bubble { background: #2a4558; }
-.msg.a .bubble { background: var(--sur); border: 1px solid var(--brd); color: var(--tx); border-radius: var(--r) var(--r) var(--r) 4px; }
+.msg.a .bubble { background: var(--sur); border: 1px solid var(--brd); color: var(--tx); border-radius: var(--r) var(--r) var(--r) 4px; white-space: normal; }
+
+/* Markdown in assistant bubbles */
+.msg.a .bubble p { margin: 0 0 8px; }
+.msg.a .bubble p:last-child { margin-bottom: 0; }
+.msg.a .bubble ol, .msg.a .bubble ul { padding-left: 20px; margin: 4px 0 8px; }
+.msg.a .bubble li { margin: 3px 0; line-height: 1.55; }
+.msg.a .bubble strong { font-weight: 600; }
+.md-code { background: var(--sur2); border: 1px solid var(--brd2); border-radius: 3px; padding: 1px 5px; font-family: 'DM Mono', monospace; font-size: 0.88em; }
+.md-cite { color: var(--tx3); font-size: 0.85em; }
+
 .msg-time { font-size: 10px; color: var(--tx3); padding: 0 4px; }
 .msg-badge {
   font-size: 11px; background: var(--c-green-bg); color: var(--c-green);
