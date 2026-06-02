@@ -163,7 +163,7 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 BEGIN
-  SET LOCAL ivfflat.probes = 10;  -- visit 10/50 lists (20 % de l'index) — améliore le rappel vectoriel
+  SET LOCAL ivfflat.probes = 20;  -- visit 20/50 lists (40 % de l'index) — meilleur rappel vectoriel
   RETURN QUERY
   SELECT
     dc.id,

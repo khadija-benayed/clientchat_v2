@@ -885,9 +885,11 @@ async def index_source(body: dict):
         )
 
     # Embed all at once — local model, zero timeout risk.
-    # Prepend source_name so queries that mention the document by name score higher.
+    # Prepend source_name (capped at 60 chars) so queries that reference the doc by name
+    # score higher. Cap prevents long names from eating into MiniLM's 128-token limit.
     loop = asyncio.get_running_loop()
-    embed_inputs = [source_name + "\n" + c for c in chunks] if source_name else chunks
+    prefix = (source_name[:60] + "\n") if source_name else ""
+    embed_inputs = [prefix + c for c in chunks] if prefix else chunks
     embeddings = await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, embed_inputs)
 
     # Delete old chunks before inserting (source_id stable key for Drive, source_name fallback)
@@ -1332,8 +1334,8 @@ async def sync_drive(body: dict, request: Request):
                         yield f"data: {json.dumps({'file': f['name'], 'status': 'empty', 'progress': processed, 'total': total})}\n\n"
                         continue
 
-                    # Prepend filename so queries referencing the doc by name score higher.
-                    embed_inputs = [f["name"] + "\n" + c for c in chunks]
+                    # Prepend filename (capped) so queries referencing the doc by name score higher.
+                    embed_inputs = [f["name"][:60] + "\n" + c for c in chunks]
                     # Heartbeat during embedding (same pattern as downloads)
                     embed_task = asyncio.ensure_future(
                         loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, embed_inputs)
@@ -1630,13 +1632,14 @@ async def chat(body: dict, user_id: Optional[str] = None):
     system_with_rag = system
     sources_used: list[dict] = []
 
-    if message:
+    # Skip RAG entirely for task actions — they only need the task list, not documents.
+    if message and message_type != "task_action":
         try:
             loop = asyncio.get_running_loop()
             query_emb = (await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, [message]))[0]
             result = sb.rpc("match_chunks", {
                 "query_embedding": query_emb,
-                "match_count": 8,
+                "match_count": 15,
                 "p_client_id": client_id,
             }).execute()
             chunks = result.data or []
@@ -1648,10 +1651,21 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     "source_name": c.get("source_file") or c.get("source_name") or "",
                     "chunk_text": c.get("content") or c.get("chunk_text") or "",
                     "source_type": c.get("source_type") if c.get("source_type") is not None else "doc",
-                    "metadata": c.get("metadata"),  # always None — never access subkeys directly
+                    "metadata": c.get("metadata"),
                 }
                 for c in chunks
             ]
+
+            # Source diversity: cap at 2 chunks per source so one large file
+            # can't crowd out all other sources from the injected context.
+            seen_src: dict = {}
+            diverse: list = []
+            for c in chunks:
+                src = c["source_name"]
+                if seen_src.get(src, 0) < 2:
+                    diverse.append(c)
+                    seen_src[src] = seen_src.get(src, 0) + 1
+            chunks = diverse
 
             if chunks:
                 HIGH_THRESHOLD = 0.62
@@ -1692,8 +1706,8 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     )
                     system_with_rag += (
                         "\n\n[Historique pertinent]\nExtraits de sessions passées liés à la question. "
-                        "Utilise-les pour enrichir ta réponse mais ne les cite pas avec *(source : ...)* "
-                        "— ils font partie de l'historique des échanges, pas des documents de référence."
+                        "Utilise-les pour enrichir ta réponse mais ne les cite pas — "
+                        "ils font partie de l'historique des échanges, pas des documents de référence."
                         "\n\n" + sess_block
                     )
 
