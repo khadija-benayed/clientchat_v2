@@ -163,6 +163,12 @@ def _gemini_text(response) -> str:
     try:
         return response.text
     except Exception:
+        # MAX_TOKENS with thinking models (Gemini 2.5 Pro): response.text may throw
+        # if thinking consumed all tokens. Try extracting text parts directly.
+        parts = getattr(response.candidates[0].content, "parts", [])
+        text_parts = [p.text for p in parts if hasattr(p, "text") and not getattr(p, "thought", False)]
+        if text_parts:
+            return "".join(text_parts)
         raise ValueError(f"Gemini n'a retourné aucun texte (finish_reason={finish_name})")
 
 
@@ -762,8 +768,8 @@ async def generate_brief(body: dict):
         "- enjeux_principaux (array de strings, max 5)\n"
         "- kpis (array de strings, max 5)\n"
         "- equipe (array de strings)\n"
-        "- historique (string, 2-3 phrases)\n"
-        "- notes (string)\n\n"
+        "- historique (string, 2-3 phrases max)\n"
+        "- notes (string, 3-5 phrases max)\n\n"
         "Réponds UNIQUEMENT avec le JSON valide, sans texte autour, sans markdown.\n\n"
         "Documents :\n\n" + docs_text
     )
@@ -771,7 +777,7 @@ async def generate_brief(body: dict):
     try:
         gemini = genai.GenerativeModel(
             model_name=GEMINI_PRO,
-            generation_config={"max_output_tokens": 2048},
+            generation_config={"max_output_tokens": 8192},
             safety_settings=_SAFETY_OFF,
         )
         response = gemini.generate_content(brief_prompt)
