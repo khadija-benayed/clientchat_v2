@@ -134,6 +134,7 @@ CREATE INDEX IF NOT EXISTS tasks_due_date_idx
 -- Retourne les N chunks les plus proches pour un client donné + base agence (client_id IS NULL).
 -- Colonnes retournées :
 --   source_file = alias de dc.source_name (nom du fichier Drive, toujours renseigné)
+--   source_type = type du chunk : "doc", "session", "email", "kb"…
 --   content     = alias de dc.chunk_text  (texte du chunk)
 --   metadata    = NULL::jsonb             (toujours NULL — compatibilité API, ne pas accéder sans .get())
 --   similarity  = score cosine [0,1]
@@ -145,6 +146,7 @@ CREATE OR REPLACE FUNCTION match_chunks(
 RETURNS TABLE (
   id          uuid,
   source_file text,
+  source_type text,
   content     text,
   metadata    jsonb,
   similarity  double precision
@@ -158,6 +160,7 @@ BEGIN
   SELECT
     dc.id,
     dc.source_name  AS source_file,
+    dc.source_type,
     dc.chunk_text   AS content,
     NULL::jsonb     AS metadata,
     1 - (dc.embedding <=> query_embedding) AS similarity

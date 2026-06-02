@@ -150,13 +150,15 @@ def calculate_cost(model_id: str, usage: Optional[dict]) -> float:
     return usage.get("input_tokens", 0) * rates["input"] + usage.get("output_tokens", 0) * rates["output"]
 
 
+_GEMINI_BLOCKED = {"SAFETY", "RECITATION", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII"}
+
 def _gemini_text(response) -> str:
-    """Extrait le texte d'une réponse Gemini. Lève ValueError avec un message clair si bloquée."""
+    """Extrait le texte d'une réponse Gemini. Lève ValueError uniquement si la réponse est bloquée."""
     if not response.candidates:
         raise ValueError("Gemini n'a retourné aucun candidat (réponse vide)")
     finish = response.candidates[0].finish_reason
     finish_name = finish.name if hasattr(finish, "name") else str(finish)
-    if finish_name not in ("STOP", "FINISH_REASON_UNSPECIFIED"):
+    if finish_name in _GEMINI_BLOCKED:
         raise ValueError(f"Réponse bloquée par Gemini (finish_reason={finish_name})")
     return response.text
 
