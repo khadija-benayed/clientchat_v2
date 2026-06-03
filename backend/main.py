@@ -47,11 +47,11 @@ _sync_state: dict = {}  # key: f"{client_id}|{folder_id}"
 
 
 def _load_biencoder() -> SentenceTransformer:
-    return SentenceTransformer("paraphrase-multilingual-mpnet-base-v2")
+    return SentenceTransformer("paraphrase-multilingual-mpnet-base-v2", device="cpu")
 
 
 def _load_crossencoder() -> CrossEncoder:
-    return CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+    return CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", device="cpu")
 
 
 @asynccontextmanager
