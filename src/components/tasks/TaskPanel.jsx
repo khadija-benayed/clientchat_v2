@@ -14,17 +14,18 @@
  * @param {Function} onTaskReorder
  * @param {Function} onOpenCalendar
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Calendar } from 'lucide-react';
 import TaskFilters from './TaskFilters';
 import TaskBoard from './TaskBoard';
 
 export default function TaskPanel({
   tasks, members, activeFilter, onFilterChange,
-  highlightedIds, onTaskClick, onTaskReorder, onOpenCalendar,
+  highlightedIds, onTaskClick, onTaskReorder, onOpenCalendar, onAddTask,
 }) {
   const panelRef = useRef(null);
   const resizerRef = useRef(null);
+  const [newTitle, setNewTitle] = useState('');
 
   // Restaurer la largeur sauvegardée
   useEffect(() => {
@@ -97,6 +98,21 @@ export default function TaskPanel({
             highlightedIds={highlightedIds}
             onTaskClick={onTaskClick}
             onTaskReorder={onTaskReorder}
+          />
+        </div>
+        <div className="task-add-row">
+          <input
+            type="text"
+            className="task-add-input"
+            placeholder="+ Nouvelle tâche…"
+            value={newTitle}
+            onChange={e => setNewTitle(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && newTitle.trim()) {
+                onAddTask({ title: newTitle.trim(), prio: 'P2', status: 'todo' });
+                setNewTitle('');
+              }
+            }}
           />
         </div>
       </div>

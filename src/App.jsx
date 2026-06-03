@@ -341,6 +341,10 @@ export default function App() {
                 onTaskClick={id => setTaskModalId(id)}
                 onTaskReorder={saveTaskOrder}
                 onOpenCalendar={() => setCalOpen(true)}
+                onAddTask={async (task) => {
+                  const saved = await upsertTask({ ...task, client_id: currentClient.id });
+                  if (saved) setTasks(prev => [saved, ...prev]);
+                }}
               />
             </div>
           </>
