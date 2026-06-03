@@ -50,7 +50,7 @@ def _load_biencoder() -> SentenceTransformer:
 
 
 def _load_crossencoder() -> CrossEncoder:
-    return CrossEncoder("BAAI/bge-reranker-v2-m3")
+    return CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 
 @asynccontextmanager
