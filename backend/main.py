@@ -1875,21 +1875,33 @@ async def chat(body: dict, user_id: Optional[str] = None):
 
             reranked.sort(key=lambda c: c["final_score"], reverse=True)
 
+            safety_net_sources = {
+                c["source_name"] for c in chunks
+                if c.get("rrf_score") == 0.0
+            }
+
             seen_src: dict = {}
             diverse: list = []
             for c in reranked:
                 src = c["source_name"]
-                if seen_src.get(src, 0) < 2:
+                cap = 1 if src in safety_net_sources else 2
+                if seen_src.get(src, 0) < cap:
                     diverse.append(c)
                     seen_src[src] = seen_src.get(src, 0) + 1
 
             if diverse:
-                MAX_INJECT = 6
                 is_account_query = any(k in query_lower for k in CR_KEYWORDS)
                 inject_threshold = -2.0 if is_account_query else -1.0
-                to_inject = [c for c in diverse
-                             if c.get("final_score", c.get("rerank_score", 0.0)) >= inject_threshold
-                             ][:MAX_INJECT]
+                MAX_INJECT = 8 if is_account_query else 6
+
+                guaranteed = [c for c in diverse
+                              if c["source_name"] in safety_net_sources
+                              and c.get("final_score", c.get("rerank_score", 0.0)) >= inject_threshold]
+                normal = [c for c in diverse
+                          if c["source_name"] not in safety_net_sources
+                          and c.get("final_score", c.get("rerank_score", 0.0)) >= inject_threshold]
+
+                to_inject = (guaranteed + normal)[:MAX_INJECT]
 
                 doc_chunks = [c for c in to_inject if c["source_type"] != "session"]
                 session_chunks = [c for c in to_inject if c["source_type"] == "session"]
