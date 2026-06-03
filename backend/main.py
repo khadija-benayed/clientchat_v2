@@ -255,6 +255,19 @@ def chunk_text(text: str, max_chars: int = 1200, overlap: int = 200) -> list[str
     if not normalized:
         return []
 
+    lines = normalized.split('\n')
+    result_lines = []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('#') and i > 0:
+            result_lines.append('')
+        elif (stripped.startswith('* ') or stripped.startswith('- ')) and i > 0:
+            prev = lines[i - 1].strip()
+            if prev and not prev.startswith('* ') and not prev.startswith('- '):
+                result_lines.append('')
+        result_lines.append(line)
+    normalized = '\n'.join(result_lines)
+
     segments: list[str] = []
     for para in re.split(r"\n{2,}", normalized):
         p = para.strip()
@@ -264,11 +277,14 @@ def chunk_text(text: str, max_chars: int = 1200, overlap: int = 200) -> list[str
             segments.append(p)
         else:
             buf = ""
-            for sent in re.split(r"(?<=[.!?])\s+", p):
-                candidate = (buf + " " + sent) if buf else sent
+            for part in re.split(r"(?<=[.!?])\s+|\n", p):
+                part = part.strip()
+                if not part:
+                    continue
+                candidate = (buf + " " + part) if buf else part
                 if len(candidate) > max_chars and buf:
                     segments.append(buf.strip())
-                    buf = sent
+                    buf = part
                 else:
                     buf = candidate
             if buf.strip():
