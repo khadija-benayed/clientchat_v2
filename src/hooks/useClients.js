@@ -226,7 +226,7 @@ export function useClients({ jwtToken, currentUserId }) {
       }
 
       // 3. Compter les fichiers nouveaux / modifiés (tolérance 5 min)
-      const TOLERANCE_MS = 5 * 60 * 1000;
+      const TOLERANCE_MS = 24 * 60 * 60 * 1000;
       let newCount = 0, modifiedCount = 0;
       for (const f of metaData.files) {
         if (!EXPORTABLE_MIMETYPES.includes(f.mimeType)) continue;
@@ -241,6 +241,15 @@ export function useClients({ jwtToken, currentUserId }) {
       }
 
       const count = newCount + modifiedCount;
+      console.log('checkDriveOutdated — fichiers détectés:', metaData.files
+        .filter(f => EXPORTABLE_MIMETYPES.includes(f.mimeType))
+        .filter(f => {
+          const lastIndexed = indexedMap[f.id];
+          if (!lastIndexed) return true;
+          return new Date(f.modifiedTime).getTime() > new Date(lastIndexed).getTime() + TOLERANCE_MS;
+        })
+        .map(f => ({ name: f.name || f.title, modifiedTime: f.modifiedTime, lastIndexed: indexedMap[f.id] || null }))
+      );
       if (count > 0) setDriveOutdated({ count, newCount, modifiedCount });
     } catch (e) {
       console.warn('checkDriveOutdated error:', e.message);
