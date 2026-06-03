@@ -233,8 +233,11 @@ def _check_rate_limit(key: str) -> bool:
     now = time.time()
     cutoff = now - 60
     with _rate_lock:
-        bucket = [t for t in _rate_buckets[key] if t > cutoff]
+        bucket = [t for t in _rate_buckets.get(key, []) if t > cutoff]
+        if not bucket and key in _rate_buckets:
+            del _rate_buckets[key]
         if len(bucket) >= RATE_LIMIT:
+            _rate_buckets[key] = bucket
             return False
         bucket.append(now)
         _rate_buckets[key] = bucket

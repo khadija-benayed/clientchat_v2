@@ -94,9 +94,10 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
     const _needL2 = _isQuestion || _isComplex || (!_isAction && !_isQuestion && !_isComplex);
     const _needL3 = _isComplex;
 
+    const _needDocs = _isQuestion || _isComplex;
     const systemPrompt =
       buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr, tasks, isAction: _isAction }) +
-      (_needL2 ? buildL2(ctxForPrompt, summaries, docCache) : '') +
+      (_needL2 ? buildL2(ctxForPrompt, summaries, docCache, _needDocs) : '') +
       (_needL3 ? buildL3(summaries) : '');
 
     // ── Chat history pour Claude (multi-turn) ─────────────────────────────
@@ -395,7 +396,7 @@ function buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr, task
     + '{"updates":[],"new_tasks":[],"delete_ids":[],"clarification":false}';
 }
 
-function buildL2(ctxForPrompt, summaries, docCache) {
+function buildL2(ctxForPrompt, summaries, docCache, injectDocs = false) {
   const recent3 = summaries.slice(-3);
   let block = '\n\n[Contexte client]\n' + ctxForPrompt;
   if (recent3.length) {
@@ -405,7 +406,7 @@ function buildL2(ctxForPrompt, summaries, docCache) {
     });
     block += '\n\n[Sessions récentes — 3 dernières]\n' + lines.join('\n\n');
   }
-  if (docCache?.length) {
+  if (injectDocs && docCache?.length) {
     const MAX_CHARS = 80000;
     let cacheBlock = '\n\n[Documents Drive récents]\nQuand tu utilises une info, cite le fichier entre crochets : [NomDuFichier].\n';
     let total = 0;
