@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI):
         loop.run_in_executor(None, _load_biencoder),
         loop.run_in_executor(None, _load_crossencoder),
     )
-    print("All models loaded.")
+    print(f"All models loaded. Embedding dim: {len(model.encode('test'))}")
     yield
 
 
