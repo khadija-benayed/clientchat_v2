@@ -209,6 +209,17 @@ def _rerank_chunks(query: str, chunks: list[dict]) -> list[dict]:
     )
 
 
+def _temporal_score(drive_modified_at: str | None, decay_days: int = 180) -> float:
+    if not drive_modified_at:
+        return 0.5
+    try:
+        dt = datetime.fromisoformat(drive_modified_at.replace("Z", "+00:00"))
+        age_days = max(0, (datetime.now(timezone.utc) - dt).days)
+        return math.exp(-age_days / decay_days)
+    except Exception:
+        return 0.5
+
+
 # ── Supabase retry ───────────────────────────────────────────────────────────
 def _sb_insert(table: str, rows: list, max_attempts: int = 3) -> None:
     """Insert rows with up to max_attempts retries on transient network errors."""
@@ -937,8 +948,8 @@ async def index_source(body: dict):
         except Exception:
             pass
     prefix = (source_name[:60] + date_tag + "\n") if source_name else ""
-    embed_inputs = [prefix + c for c in chunks] if prefix else chunks
-    embeddings = await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, embed_inputs)
+    prefixed_chunks = [(prefix + c) if prefix else c for c in chunks]
+    embeddings = await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, prefixed_chunks)
 
     # Delete old chunks before inserting (source_id stable key for Drive, source_name fallback)
     try:
@@ -1392,10 +1403,10 @@ async def sync_drive(body: dict, request: Request):
                             _fdate = f" [{_fdt.strftime('%d/%m/%Y')}]"
                         except Exception:
                             pass
-                    embed_inputs = [f["name"][:60] + _fdate + "\n" + c for c in chunks]
+                    prefixed_chunks = [f["name"][:60] + _fdate + "\n" + c for c in chunks]
                     # Heartbeat during embedding (same pattern as downloads)
                     embed_task = asyncio.ensure_future(
-                        loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, embed_inputs)
+                        loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, prefixed_chunks)
                     )
                     while not embed_task.done():
                         await asyncio.wait({embed_task}, timeout=5.0)
@@ -1787,6 +1798,16 @@ async def chat(body: dict, user_id: Optional[str] = None):
             # reranker score, not insertion order, determines which chunk of a source wins.
             reranked = await loop.run_in_executor(_RERANK_EXECUTOR, _rerank_chunks, message, chunks)
 
+            temporal_keywords = {"récent", "dernier", "actuelle", "actuel", "aujourd", "maintenant", "nouveau", "dernière"}
+            query_lower = message.lower()
+            decay = 30 if any(k in query_lower for k in temporal_keywords) else 180
+
+            for c in reranked:
+                t = _temporal_score(c.get("drive_modified_at"), decay)
+                c["final_score"] = 0.7 * c.get("rerank_score", 0.0) + 0.3 * t
+
+            reranked.sort(key=lambda c: c["final_score"], reverse=True)
+
             seen_src: dict = {}
             diverse: list = []
             for c in reranked:
@@ -1796,9 +1817,8 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     seen_src[src] = seen_src.get(src, 0) + 1
 
             if diverse:
-                RERANK_THRESHOLD = 0.0
                 MAX_INJECT = 6
-                to_inject = [c for c in diverse if c.get("rerank_score", 0.0) >= RERANK_THRESHOLD][:MAX_INJECT]
+                to_inject = [c for c in diverse if c.get("final_score", c.get("rerank_score", 0.0)) >= -1.0][:MAX_INJECT]
 
                 doc_chunks = [c for c in to_inject if c["source_type"] != "session"]
                 session_chunks = [c for c in to_inject if c["source_type"] == "session"]

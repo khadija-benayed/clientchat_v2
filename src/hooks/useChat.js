@@ -381,10 +381,6 @@ function buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr, task
     + 'Initiales pour JSON : ' + mInitials + '. Statuts : todo, inprogress, blocked, waiting, done. Priorités : P1, P2, P3.\n'
     + '\nANALYSE AUTOMATIQUE DE CORRESPONDANCE :\n' + matchContext + '\n'
     + (historyStr ? '\nHISTORIQUE :\n' + historyStr + '\n' : '')
-    + '\nINSTRUCTIONS :\n' + responseInstruction + ' Ta réponse DOIT contenir exactement deux parties séparées par "---JSON---" :\n'
-    + '\nPARTIE 1 : ' + part1Desc + '\n'
-    + '\nPARTIE 2 : UN objet JSON valide :\n'
-    + '{"updates":[],"new_tasks":[],"delete_ids":[],"clarification":false}\n'
     + '\nRègles JSON : SUIS L\'ANALYSE DE CORRESPONDANCE.\n'
     + '- Ajouter note : {"id":X,"note":"texte"}\n'
     + '- Renommer : {"id":X,"new_title":"..."}\n'
@@ -392,7 +388,11 @@ function buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr, task
     + '- Échéance : {"id":X,"due_date":"YYYY-MM-DD"}\n'
     + '- Assignation : assignee=initiales. "à X et Y" → assignee="X+Y".\n'
     + '- fini/terminé → done | bloqué → blocked | en cours → inprogress\n'
-    + '- New : {"id":' + (maxId + 1) + ',"title":"...","prio":"P2","status":"todo","assignee":"","blocker":null,"note":null}';
+    + '- New : {"id":' + (maxId + 1) + ',"title":"...","prio":"P2","status":"todo","assignee":"","blocker":null,"note":null}\n'
+    + '\nINSTRUCTIONS :\n' + responseInstruction + ' Ta réponse DOIT contenir exactement deux parties séparées par "---JSON---" :\n'
+    + '\nPARTIE 1 : ' + part1Desc + '\n'
+    + '\nPARTIE 2 : UN objet JSON valide :\n'
+    + '{"updates":[],"new_tasks":[],"delete_ids":[],"clarification":false}';
 }
 
 function buildL2(ctxForPrompt, summaries, docCache) {
