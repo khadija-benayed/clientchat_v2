@@ -803,33 +803,64 @@ async def list_drive_metadata(body: dict):
 async def generate_brief(body: dict):
     client_id = body.get("client_id")
     docs_content = body.get("docs_content", [])
+    existing_brief = body.get("existing_brief")
 
     if not client_id or not docs_content:
         return JSONResponse(
             {"error": "client_id et docs_content (array non vide) requis"}, status_code=400
         )
 
-    TOKEN_BUDGET = 96_000  # ~24k tokens — fits 15-20 docs in Gemini Pro 1M window
+    TOKEN_BUDGET = 120_000
     total_chars = 0
     doc_blocks = []
     for doc in docs_content:
-        block = f"### {doc['filename']}\n{doc['content']}"
+        block = f"### {doc['filename']}"
+        if doc.get("modified_at"):
+            try:
+                dt = datetime.fromisoformat(doc["modified_at"].replace("Z", "+00:00"))
+                block += f" (modifié le {dt.strftime('%d/%m/%Y')})"
+            except Exception:
+                pass
+        block += f"\n{doc['content']}"
         if total_chars + len(block) > TOKEN_BUDGET:
             break
         doc_blocks.append(block)
         total_chars += len(block)
 
     docs_text = "\n\n---\n\n".join(doc_blocks)
+
+    if existing_brief:
+        try:
+            existing_brief_block = json.dumps(json.loads(existing_brief), ensure_ascii=False, indent=2)
+        except Exception:
+            existing_brief_block = existing_brief
+    else:
+        existing_brief_block = None
+
     brief_prompt = (
-        "À partir de ces documents, génère une fiche client JSON avec exactement ces champs :\n"
-        "- secteur (string)\n"
-        "- enjeux_principaux (array de strings, max 5)\n"
-        "- kpis (array de strings, max 5)\n"
-        "- equipe (array de strings)\n"
-        "- historique (string, 2-3 phrases max)\n"
-        "- notes (string, 3-5 phrases max)\n\n"
-        "Réponds UNIQUEMENT avec le JSON valide, sans texte autour, sans markdown.\n\n"
-        "Documents :\n\n" + docs_text
+        "Tu es un assistant qui génère une fiche client synthétique pour une agence data/marketing.\n\n"
+        + (
+            "[FICHE EXISTANTE - à enrichir et corriger si des infos sont outdatées]\n"
+            + existing_brief_block + "\n\n"
+            if existing_brief_block else ""
+        )
+        + "[DOCUMENTS CLIENT - classés du plus récent au plus ancien]\n"
+        + docs_text + "\n\n"
+        + "Génère une fiche client JSON avec exactement ces champs :\n"
+        "- secteur (string) : secteur d'activité principal\n"
+        "- enjeux_principaux (array, max 6) : enjeux métier et techniques actuels du client\n"
+        "- kpis (array, max 6) : indicateurs de performance suivis\n"
+        "- equipe (array) : UNIQUEMENT les personnes côté client (pas l'agence), "
+        "avec leur prénom et nom si disponibles\n"
+        "- historique (string, 3-4 phrases) : chronologie de la collaboration depuis le début, "
+        "avec les dates clés\n"
+        "- notes (string, 4-6 phrases) : contexte technique, stack, projets en cours et à venir, "
+        "points d'attention\n\n"
+        "Règles :\n"
+        "- Prioritise les informations des documents les plus récents\n"
+        "- Si la fiche existante contient une info absente des documents, conserve-la\n"
+        "- Pour l'équipe, inclure TOUS les contacts client mentionnés dans les documents\n"
+        "- Réponds UNIQUEMENT avec le JSON valide, sans texte autour, sans markdown"
     )
 
     try:

@@ -103,7 +103,12 @@ export default function ClientSettings({
     try {
       const docsContent = await syncHook.generateBrief(client.id, onSyncMessage);
       if (!docsContent) { onSyncMessage?.({ type: 'error', message: '⚠ Aucun document indexé. Lance d\'abord une sync Drive.' }); return; }
-      const data = await callBackend({ action: 'generate_brief', client_id: client.id, docs_content: docsContent }, jwtToken);
+      const data = await callBackend({
+        action: 'generate_brief',
+        client_id: client.id,
+        docs_content: docsContent,
+        existing_brief: client?.context || null,
+      }, jwtToken);
       if (data.brief) { setBrief(data.brief); onClientUpdate?.({ context: JSON.stringify(data.brief) }); }
       else throw new Error(data.error || 'Fiche non générée');
     } catch (e) { onSyncMessage?.({ type: 'error', message: '⚠ ' + e.message }); }

@@ -148,7 +148,7 @@ export function useSync({ jwtToken }) {
   const generateBrief = useCallback(async (clientId, onMessage) => {
     const { data: chunkRows } = await supabase
       .from('document_chunks')
-      .select('source_name, chunk_text')
+      .select('source_name, chunk_text, drive_modified_at')
       .eq('client_id', clientId)
       .in('source_type', ['doc', 'sheet', 'pdf', 'txt', 'csv', 'ppt'])
       .order('last_indexed_at', { ascending: false })
@@ -157,18 +157,28 @@ export function useSync({ jwtToken }) {
     if (!chunkRows?.length) return null;
 
     const bySrc = {};
+    const srcDate = {};
     for (const row of chunkRows) {
       if (!bySrc[row.source_name]) bySrc[row.source_name] = '';
-      if (bySrc[row.source_name].length < 6000)
+      if (!srcDate[row.source_name] || row.drive_modified_at > srcDate[row.source_name])
+        srcDate[row.source_name] = row.drive_modified_at || '';
+      if (bySrc[row.source_name].length < 8000)
         bySrc[row.source_name] += (bySrc[row.source_name] ? '\n' : '') + row.chunk_text;
     }
-    const docsContent = Object.entries(bySrc).slice(0, 15)
-      .map(([name, text]) => ({ filename: name, content: text.slice(0, 6000) }));
+
+    const docsContent = Object.entries(bySrc)
+      .sort(([a], [b]) => (srcDate[b] || '').localeCompare(srcDate[a] || ''))
+      .slice(0, 20)
+      .map(([name, text]) => ({
+        filename: name,
+        modified_at: srcDate[name] || null,
+        content: text.slice(0, 8000),
+      }));
 
     if (!docsContent.length) return null;
     onMessage?.({ type: 'info', message: '⏳ Génération de la fiche client en cours…' });
 
-    return docsContent; // retourne les docs, l'appelant fait callBackend generate_brief
+    return docsContent;
   }, []);
 
   return {
