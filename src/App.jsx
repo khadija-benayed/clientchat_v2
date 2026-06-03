@@ -74,7 +74,7 @@ export default function App() {
     clients, setClients, currentClient, setCurrentClient,
     tasks, setTasks, summaries, docCache,
     syncStatus, setSyncStatus, syncProgress,
-    driveOutdated, clearDriveOutdated,
+    driveOutdated, clearDriveOutdated, checkDriveOutdated,
     selectClient, upsertTask, deleteTask, saveTaskOrder,
     getMembers, addSummary, loadClients, loadDocCache, indexingRef,
   } = clientStore;
@@ -237,6 +237,7 @@ export default function App() {
       const purgedNote = result.purged > 0 ? `, ${result.purged} supprimé(s)` : '';
       handleSyncMessage({ type: 'ok', message: `✓ ${result.ok + result.cached} document(s) indexé(s)${cachedNote}${purgedNote}${result.errors ? ` (${result.errors} erreur(s))` : ''}.` });
       await loadDocCache(currentClient);
+      await checkDriveOutdated(currentClient);
     } catch (e) {
       handleSyncMessage({ type: 'error', message: '⚠ Erreur sync : ' + e.message });
     } finally {

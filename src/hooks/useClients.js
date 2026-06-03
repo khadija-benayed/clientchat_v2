@@ -302,6 +302,7 @@ export function useClients({ jwtToken, currentUserId }) {
     syncStatus, setSyncStatus,
     syncProgress, setSyncProgress,
     driveOutdated, clearDriveOutdated: () => setDriveOutdated(null),
+    checkDriveOutdated,
     loadClients, selectClient,
     upsertTask, deleteTask, saveTaskOrder,
     loadTasksForClient,
