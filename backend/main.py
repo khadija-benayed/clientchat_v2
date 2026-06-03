@@ -26,6 +26,7 @@ import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError as _GHttpError
 from googleapiclient.http import MediaIoBaseDownload
 
 # Disable HuggingFace tokenizer's internal Rust thread pool — it conflicts with
@@ -330,6 +331,56 @@ def get_drive_service() -> tuple:
     return drive, sa_info.get("client_email", "")
 
 
+def _export_large_sheet(file_id: str, file_name: str) -> Optional[str]:
+    """Fallback for Google Sheets that exceed the Drive API 10 MB export limit.
+    Lists all visible tabs via the Sheets API, exports each as CSV via authenticated
+    HTTP, and prefixes every block with [Fichier] + [Onglet] for RAG context.
+    """
+    from google.auth.transport.requests import AuthorizedSession
+
+    if not GOOGLE_SA_KEY:
+        return None
+    sa_info = json.loads(GOOGLE_SA_KEY)
+    creds = service_account.Credentials.from_service_account_info(
+        sa_info,
+        scopes=[
+            "https://www.googleapis.com/auth/drive.readonly",
+            "https://www.googleapis.com/auth/spreadsheets.readonly",
+        ],
+    )
+    sheets_svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
+    meta = sheets_svc.spreadsheets().get(
+        spreadsheetId=file_id,
+        fields="sheets.properties(sheetId,title,hidden)",
+    ).execute()
+
+    tabs = [
+        (s["properties"]["sheetId"], s["properties"]["title"])
+        for s in meta.get("sheets", [])
+        if not s["properties"].get("hidden", False)
+    ]
+    if not tabs:
+        return None
+
+    session = AuthorizedSession(creds)
+    parts = []
+    for gid, title in tabs:
+        url = (
+            f"https://docs.google.com/spreadsheets/d/{file_id}"
+            f"/export?format=csv&gid={gid}"
+        )
+        resp = session.get(url, timeout=30)
+        if resp.status_code != 200:
+            print(f"  CSV tab '{title}' → HTTP {resp.status_code}, skipped")
+            continue
+        csv_text = resp.text.strip()
+        if not csv_text:
+            continue
+        parts.append(f"[Fichier : {file_name}] [Onglet : {title}]\n{csv_text}")
+
+    return ("\n\n".join(parts))[:20_000] if parts else None
+
+
 # ── Gmail (domain-wide delegation) ───────────────────────────────────────────
 def get_gmail_service(user_email: str):
     """Gmail API service impersonating a Google Workspace user. Requires DWD on SA."""
@@ -392,27 +443,49 @@ def export_drive_file(file_id: str, file_name: str, mime_type: str) -> Optional[
         if mime_type == "application/vnd.google-apps.spreadsheet":
             import io
             import openpyxl
-            req = drive.files().export_media(
-                fileId=file_id,
-                mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-            raw = _download_bytes(req)
-            wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
-            parts = []
-            for sheet_name in wb.sheetnames:
-                ws = wb[sheet_name]
-                rows = []
-                for row in ws.iter_rows(values_only=True):
-                    cells = [str(c) if c is not None else "" for c in row]
-                    if any(cells):
-                        rows.append("\t".join(cells))
-                if rows:
-                    parts.append(f"=== {sheet_name} ===\n" + "\n".join(rows))
-            wb.close()
-            content = "\n\n".join(parts)[:20_000]
-            if not content.strip():
-                print(f"Sheet export empty for {file_name}")
-            return {"filename": file_name, "type": "csv", "content": content}
+            try:
+                req = drive.files().export_media(
+                    fileId=file_id,
+                    mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+                raw = _download_bytes(req)
+                wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+                parts = []
+                for sheet_name in wb.sheetnames:
+                    ws = wb[sheet_name]
+                    rows = []
+                    for row in ws.iter_rows(values_only=True):
+                        cells = [str(c) if c is not None else "" for c in row]
+                        if any(cells):
+                            rows.append("\t".join(cells))
+                    if rows:
+                        parts.append(
+                            f"[Fichier : {file_name}] [Onglet : {sheet_name}]\n"
+                            + "\n".join(rows)
+                        )
+                wb.close()
+                content = "\n\n".join(parts)[:20_000]
+                if not content.strip():
+                    print(f"Sheet export empty for {file_name}")
+                return {"filename": file_name, "type": "csv", "content": content}
+            except _GHttpError as http_err:
+                reason = (
+                    http_err.error_details[0].get("reason", "")
+                    if http_err.error_details
+                    else str(http_err)
+                )
+                if reason in ("exportSizeLimitExceeded", "cannotExportFile"):
+                    print(
+                        f"Sheet too large for xlsx export ({reason}), "
+                        f"falling back to per-tab CSV: {file_name}"
+                    )
+                    content = _export_large_sheet(file_id, file_name)
+                    if content:
+                        return {"filename": file_name, "type": "csv", "content": content}
+                    print(f"Per-tab CSV fallback also failed for {file_name}")
+                else:
+                    print(f"Sheet export HttpError for {file_name}: {http_err}")
+                return None
 
         if mime_type in ("application/vnd.google-apps.document", "application/vnd.google-apps.presentation"):
             req = drive.files().export_media(fileId=file_id, mimeType="text/plain")
