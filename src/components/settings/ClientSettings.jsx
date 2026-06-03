@@ -215,8 +215,10 @@ function BriefDisplay({ brief }) {
     const label = (v) => {
       if (typeof v === 'string') return v;
       if (typeof v === 'object' && v !== null) {
-        return v.nom || v.name || v.prenom
-          || v.prenom_nom || Object.values(v).filter(Boolean).join(' ') || '?';
+        return v.prenom_nom
+          || [v.prenom, v.nom].filter(Boolean).join(' ')
+          || v.nom || v.name
+          || Object.values(v).filter(Boolean).join(' ') || '?';
       }
       return String(v);
     };

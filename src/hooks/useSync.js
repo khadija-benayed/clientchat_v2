@@ -152,7 +152,8 @@ export function useSync({ jwtToken }) {
       .eq('client_id', clientId)
       .in('source_type', ['doc', 'sheet', 'pdf', 'txt', 'csv', 'ppt'])
       .order('last_indexed_at', { ascending: false })
-      .order('source_name');
+      .order('source_name')
+      .limit(2000);
 
     if (!chunkRows?.length) return null;
 

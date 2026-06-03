@@ -13,63 +13,10 @@
  * @param {string}   clientName  - Nom du client (affiché dans "Claude · NomClient")
  * @param {Function} onSaveToKb  - Appelée avec le texte pour ouvrir la modal KB
  */
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { Layers } from 'lucide-react';
-
-// ── Markdown renderer ─────────────────────────────────────────────────────────
-// Handles what Gemini 2.5 Flash actually outputs: bold, italic, inline code,
-// ordered/bullet lists, and [citation] tags. No external dependency needed.
-
-function parseInline(text, baseKey) {
-  const parts = [];
-  const re = /\*\*(.+?)\*\*|\*(.+?)\*|`([^`]+)`|\[([^\]]+)\](?!\()/g;
-  let last = 0, m;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) parts.push(text.slice(last, m.index));
-    if (m[1] !== undefined) parts.push(<strong key={baseKey + m.index}>{m[1]}</strong>);
-    else if (m[2] !== undefined) parts.push(<em key={baseKey + m.index}>{m[2]}</em>);
-    else if (m[3] !== undefined) parts.push(<code key={baseKey + m.index} className="md-code">{m[3]}</code>);
-    else if (m[4] !== undefined) parts.push(<span key={baseKey + m.index} className="md-cite">[{m[4]}]</span>);
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) parts.push(text.slice(last));
-  return parts.flatMap((p, i) =>
-    typeof p !== 'string' ? p :
-    p.split('\n').flatMap((seg, j, arr) =>
-      j < arr.length - 1 ? [seg, <br key={`${baseKey}-${i}-${j}`} />] : [seg]
-    )
-  );
-}
-
-function renderMarkdown(text) {
-  if (!text) return null;
-  const lines = text.split('\n');
-  const result = [];
-  let i = 0, key = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (!line.trim()) { i++; continue; }
-    if (/^\d+\.\s+/.test(line)) {
-      const items = [];
-      while (i < lines.length && /^\d+\.\s+/.test(lines[i]))
-        items.push(lines[i++].replace(/^\d+\.\s+/, ''));
-      result.push(<ol key={key++}>{items.map((t, j) => <li key={j}>{parseInline(t, key * 1000 + j)}</li>)}</ol>);
-      continue;
-    }
-    if (/^[-*]\s+/.test(line)) {
-      const items = [];
-      while (i < lines.length && /^[-*]\s+/.test(lines[i]))
-        items.push(lines[i++].replace(/^[-*]\s+/, ''));
-      result.push(<ul key={key++}>{items.map((t, j) => <li key={j}>{parseInline(t, key * 1000 + j)}</li>)}</ul>);
-      continue;
-    }
-    const paraLines = [];
-    while (i < lines.length && lines[i].trim() && !/^\d+\.\s+/.test(lines[i]) && !/^[-*]\s+/.test(lines[i]))
-      paraLines.push(lines[i++]);
-    if (paraLines.length) result.push(<p key={key++}>{parseInline(paraLines.join('\n'), key * 1000)}</p>);
-  }
-  return result.length ? result : text;
-}
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 // Icônes des types de sources
 function SourceIcon({ type }) {
@@ -88,6 +35,25 @@ function formatTime(date) {
   if (d.toDateString() === yesterday.toDateString()) return 'Hier ' + hm;
   return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }) + ' ' + hm;
 }
+
+const mdComponents = {
+  p: ({ children }) => {
+    const processText = (child) => {
+      if (typeof child !== 'string') return child;
+      const parts = child.split(/(\[[^\]]+\])/g);
+      return parts.map((part, i) =>
+        /^\[[^\]]+\]$/.test(part)
+          ? <span key={i} className="md-cite">{part}</span>
+          : part
+      );
+    };
+    return <p>{React.Children.map(children, processText)}</p>;
+  },
+  code: ({ inline, children }) =>
+    inline
+      ? <code className="md-code">{children}</code>
+      : <pre className="md-pre"><code>{children}</code></pre>,
+};
 
 export default function MessageBubble({ msg, clientName, onSaveToKb }) {
   const [kbSaved, setKbSaved] = useState(false);
@@ -114,7 +80,17 @@ export default function MessageBubble({ msg, clientName, onSaveToKb }) {
       )}
 
       {/* Bulle de texte */}
-      <div className="bubble">{isUser ? msg.text : renderMarkdown(msg.text)}</div>
+      <div className="bubble">
+        {isUser
+          ? msg.text
+          : <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={mdComponents}
+            >
+              {msg.text}
+            </ReactMarkdown>
+        }
+      </div>
 
       {/* Badge modification de tâches */}
       {msg.badge && (

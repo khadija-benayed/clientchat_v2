@@ -209,17 +209,6 @@ def _rerank_chunks(query: str, chunks: list[dict]) -> list[dict]:
     )
 
 
-def _temporal_score(drive_modified_at: str | None, decay_days: int = 180) -> float:
-    if not drive_modified_at:
-        return 0.5
-    try:
-        dt = datetime.fromisoformat(drive_modified_at.replace("Z", "+00:00"))
-        age_days = max(0, (datetime.now(timezone.utc) - dt).days)
-        return math.exp(-age_days / decay_days)
-    except Exception:
-        return 0.5
-
-
 # ── Supabase retry ───────────────────────────────────────────────────────────
 def _sb_insert(table: str, rows: list, max_attempts: int = 3) -> None:
     """Insert rows with up to max_attempts retries on transient network errors."""
@@ -599,6 +588,16 @@ def _parse_modified(f: dict) -> datetime:
         return datetime.min.replace(tzinfo=timezone.utc)
 
 
+def _temporal_score(drive_modified_at: str | None, decay_days: int = 180) -> float:
+    if not drive_modified_at:
+        return 0.5
+    dt = _parse_modified({"modifiedTime": drive_modified_at})
+    if dt == datetime.min.replace(tzinfo=timezone.utc):
+        return 0.5
+    age_days = (datetime.now(timezone.utc) - dt).days
+    return math.exp(-age_days / decay_days)
+
+
 # ── Local file extraction ──────────────────────────────────────────────────────
 def _download_bytes(req) -> bytes:
     buf = io.BytesIO()
@@ -802,6 +801,8 @@ async def list_drive_metadata(body: dict):
 # ── generate_brief ────────────────────────────────────────────────────────────
 AGENCY_DOMAIN = "smart-bees.fr"
 AGENCY_NAME = "Smart Bees"
+CR_KEYWORDS = frozenset({"news", "nouvelles", "réunion", "point",
+                         "suivi", "compte", "rendu", "notes", "évoqué", "discuté", "abordé"})
 
 
 async def generate_brief(body: dict):
@@ -913,9 +914,9 @@ async def generate_brief(body: dict):
         normalized = []
         for member in brief["equipe"]:
             if isinstance(member, dict):
-                name = (member.get("nom") or member.get("name") or
-                        member.get("prenom_nom") or
+                name = (member.get("prenom_nom") or
                         " ".join(filter(None, [member.get("prenom"), member.get("nom")])) or
+                        member.get("nom") or member.get("name") or
                         " ".join(str(v) for v in member.values() if v))
                 member = name.strip()
             if isinstance(member, str) and member.strip():
@@ -1766,9 +1767,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
             if len(message.strip()) > 25:
                 try:
                     _hyde_model = genai.GenerativeModel(GEMINI_FLASH)
-                    cr_keywords = {"news", "nouvelles", "réunion", "point", "suivi",
-                                   "compte", "rendu", "notes", "évoqué", "discuté", "abordé"}
-                    is_cr_query = any(k in message.lower() for k in cr_keywords)
+                    is_cr_query = any(k in message.lower() for k in CR_KEYWORDS)
                     if is_cr_query:
                         hyde_prompt = (
                             f"Écris en 2-3 phrases un extrait de compte-rendu de réunion "
@@ -1886,9 +1885,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
 
             if diverse:
                 MAX_INJECT = 6
-                account_keywords = {"news", "nouvelles", "réunion", "point", "suivi",
-                                    "compte", "rendu", "notes", "dernières", "dernier"}
-                is_account_query = any(k in query_lower for k in account_keywords)
+                is_account_query = any(k in query_lower for k in CR_KEYWORDS)
                 inject_threshold = -2.0 if is_account_query else -1.0
                 to_inject = [c for c in diverse
                              if c.get("final_score", c.get("rerank_score", 0.0)) >= inject_threshold
