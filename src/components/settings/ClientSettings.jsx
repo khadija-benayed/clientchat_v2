@@ -212,7 +212,17 @@ export default function ClientSettings({
 function BriefDisplay({ brief }) {
   const arrayField = (arr) => {
     if (!Array.isArray(arr) || !arr.length) return <span style={{ color: 'var(--tx3)', fontStyle: 'italic' }}>—</span>;
-    return <div className="brief-field-value tags">{arr.map((v, i) => <span key={i} className="brief-tag">{String(v)}</span>)}</div>;
+    const label = (v) => {
+      if (typeof v === 'string') return v;
+      if (typeof v === 'object' && v !== null) {
+        return v.nom || v.name || v.prenom
+          || v.prenom_nom || Object.values(v).filter(Boolean).join(' ') || '?';
+      }
+      return String(v);
+    };
+    return <div className="brief-field-value tags">
+      {arr.map((v, i) => <span key={i} className="brief-tag">{label(v)}</span>)}
+    </div>;
   };
   const fields = [
     { label: 'Secteur', value: brief.secteur, isText: true },

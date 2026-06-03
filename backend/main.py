@@ -800,6 +800,10 @@ async def list_drive_metadata(body: dict):
 
 
 # ── generate_brief ────────────────────────────────────────────────────────────
+AGENCY_DOMAIN = "smart-bees.fr"
+AGENCY_NAME = "Smart Bees"
+
+
 async def generate_brief(body: dict):
     client_id = body.get("client_id")
     docs_content = body.get("docs_content", [])
@@ -850,8 +854,10 @@ async def generate_brief(body: dict):
         "- secteur (string) : secteur d'activité principal\n"
         "- enjeux_principaux (array, max 6) : enjeux métier et techniques actuels du client\n"
         "- kpis (array, max 6) : indicateurs de performance suivis\n"
-        "- equipe (array) : UNIQUEMENT les personnes côté client (pas l'agence), "
-        "avec leur prénom et nom si disponibles\n"
+        "- equipe (array of strings) : UNIQUEMENT les personnes côté client, "
+        "PAS les membres de l'agence Smart Bees (emails @smart-bees.fr). "
+        "Chaque élément doit être une STRING simple 'Prénom Nom' ou 'Prénom Nom - Rôle'. "
+        "Ne jamais retourner d'objets JSON dans ce tableau.\n"
         "- historique (string, 3-4 phrases) : chronologie de la collaboration depuis le début, "
         "avec les dates clés\n"
         "- notes (string, 4-6 phrases) : contexte technique, stack, projets en cours et à venir, "
@@ -901,6 +907,21 @@ async def generate_brief(body: dict):
             {"error": "Génération échouée — Gemini n'a pas retourné un JSON valide. Réessaie."},
             status_code=422,
         )
+
+    # Normalise equipe : force array of strings, retire les membres agence
+    if "equipe" in brief and isinstance(brief["equipe"], list):
+        normalized = []
+        for member in brief["equipe"]:
+            if isinstance(member, dict):
+                name = (member.get("nom") or member.get("name") or
+                        member.get("prenom_nom") or
+                        " ".join(filter(None, [member.get("prenom"), member.get("nom")])) or
+                        " ".join(str(v) for v in member.values() if v))
+                member = name.strip()
+            if isinstance(member, str) and member.strip():
+                if AGENCY_DOMAIN not in member.lower() and AGENCY_NAME.lower() not in member.lower():
+                    normalized.append(member.strip())
+        brief["equipe"] = normalized
 
     expected_keys = ["secteur", "enjeux_principaux", "kpis", "equipe", "historique", "notes"]
     missing = [k for k in expected_keys if k not in brief]
@@ -1461,11 +1482,11 @@ async def sync_drive(body: dict, request: Request):
                         "source_type": result["type"],
                         "source_name": f["name"],
                         "source_id": f["id"],
-                        "chunk_text": chunk,
+                        "chunk_text": pc,
                         "embedding": emb,
                         "last_indexed_at": now,
                         **({"drive_modified_at": f["modifiedTime"]} if f.get("modifiedTime") else {}),
-                    } for chunk, emb in zip(chunks, embeddings)]
+                    } for pc, emb in zip(prefixed_chunks, embeddings)]
 
                     _sb_insert("document_chunks", rows)
                     ok += 1
@@ -1745,10 +1766,26 @@ async def chat(body: dict, user_id: Optional[str] = None):
             if len(message.strip()) > 25:
                 try:
                     _hyde_model = genai.GenerativeModel(GEMINI_FLASH)
+                    cr_keywords = {"news", "nouvelles", "réunion", "point", "suivi",
+                                   "compte", "rendu", "notes", "évoqué", "discuté", "abordé"}
+                    is_cr_query = any(k in message.lower() for k in cr_keywords)
+                    if is_cr_query:
+                        hyde_prompt = (
+                            f"Écris en 2-3 phrases un extrait de compte-rendu de réunion "
+                            f"professionnel qui contiendrait la réponse à cette question : "
+                            f"« {message} »\n"
+                            f"L'extrait doit ressembler à des notes de réunion avec des points "
+                            f"d'avancement, des décisions prises, des actions à suivre.\n"
+                            f"Réponds uniquement avec l'extrait, sans introduction."
+                        )
+                    else:
+                        hyde_prompt = (
+                            f"Écris en 2-3 phrases un extrait de document professionnel "
+                            f"qui contiendrait la réponse à cette question : « {message} »\n"
+                            f"Réponds uniquement avec l'extrait, sans introduction ni explication."
+                        )
                     _hyde_resp = _hyde_model.generate_content(
-                        f"Écris en 2-3 phrases un extrait de document professionnel "
-                        f"qui contiendrait la réponse à cette question : « {message} »\n"
-                        f"Réponds uniquement avec l'extrait, sans introduction ni explication.",
+                        hyde_prompt,
                         generation_config=genai.types.GenerationConfig(
                             max_output_tokens=120,
                             temperature=0.0,
@@ -1810,7 +1847,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     for src in missing_kw_sources[:5]:
                         extra = (
                             sb.table("document_chunks")
-                            .select("source_name, chunk_text, source_type, client_id")
+                            .select("source_name, chunk_text, source_type, client_id, drive_modified_at")
                             .eq("client_id", client_id)
                             .eq("source_name", src)
                             .limit(2)
@@ -1849,7 +1886,13 @@ async def chat(body: dict, user_id: Optional[str] = None):
 
             if diverse:
                 MAX_INJECT = 6
-                to_inject = [c for c in diverse if c.get("final_score", c.get("rerank_score", 0.0)) >= -1.0][:MAX_INJECT]
+                account_keywords = {"news", "nouvelles", "réunion", "point", "suivi",
+                                    "compte", "rendu", "notes", "dernières", "dernier"}
+                is_account_query = any(k in query_lower for k in account_keywords)
+                inject_threshold = -2.0 if is_account_query else -1.0
+                to_inject = [c for c in diverse
+                             if c.get("final_score", c.get("rerank_score", 0.0)) >= inject_threshold
+                             ][:MAX_INJECT]
 
                 doc_chunks = [c for c in to_inject if c["source_type"] != "session"]
                 session_chunks = [c for c in to_inject if c["source_type"] == "session"]
