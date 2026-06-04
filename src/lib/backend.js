@@ -66,6 +66,57 @@ export async function openBackendSSE(payload, jwtToken) {
 }
 
 /**
+ * Stream le chat via SSE — chaque token Gemini est reçu progressivement.
+ * @param {object}   payload              - Corps JSON (action, message, etc.)
+ * @param {string}   jwtToken             - JWT Supabase
+ * @param {Function} callbacks.onToken    - Appelée avec chaque fragment de texte
+ * @param {Function} callbacks.onDone     - Appelée en fin de stream avec { sources, tasks_json, reply_text }
+ * @param {Function} callbacks.onError    - Appelée avec le message d'erreur
+ */
+export async function streamChatSSE(payload, jwtToken, { onToken, onDone, onError }) {
+  let resp;
+  try {
+    resp = await openBackendSSE(payload, jwtToken);
+  } catch (e) {
+    onError(e.message || 'Erreur réseau');
+    return;
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+
+      for (const line of lines) {
+        // trimEnd() supprime les \r éventuels (\r\n → \n après split)
+        const trimmed = line.trimEnd();
+        if (!trimmed.startsWith('data: ')) continue;
+        try {
+          const event = JSON.parse(trimmed.slice(6));
+          if (event.type === 'token') { onToken(event.text); }
+          else if (event.type === 'done') { onDone(event); return; }
+          else if (event.type === 'error') { onError(event.message); return; }
+        } catch (_) {}
+      }
+    }
+    // Stream fermé par le serveur sans événement 'done' (déconnexion, timeout…)
+    onError('Réponse incomplète — connexion interrompue');
+  } catch (e) {
+    onError(e.message || 'Erreur de streaming');
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/**
  * Indexation par batches — appelle index_source en boucle jusqu'à has_more=false.
  * Le backend local embed en une passe, donc en pratique un seul appel suffit.
  */

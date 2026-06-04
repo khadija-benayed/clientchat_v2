@@ -30,7 +30,7 @@ export default function ChatPanel({
   onTasksUpdate, onSessionSave, onOpenKbModal, onSetSyncStatus,
   pendingChatMsg, onPendingChatMsgConsumed,
 }) {
-  const { messages, isLoading, sendMessage, addMessage, clearMessages, triggerSessionSave } =
+  const { messages, isLoading, isSending, sendMessage, addMessage, clearMessages, triggerSessionSave } =
     useChat({ client, tasks, summaries, docCache, jwtToken, onTasksUpdate, onSessionSave });
 
   // Vider le chat quand le client change
@@ -80,7 +80,7 @@ export default function ChatPanel({
       />
       <ChatInput
         onSend={handleSend}
-        disabled={isLoading}
+        disabled={isLoading || isSending}
       />
     </div>
   );

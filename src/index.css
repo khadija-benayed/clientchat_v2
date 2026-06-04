@@ -303,13 +303,13 @@ body {
 .msg.a .bubble strong { font-weight: 600; }
 .md-code { background: var(--sur2); border: 1px solid var(--brd2); border-radius: 3px; padding: 1px 5px; font-family: 'DM Mono', monospace; font-size: 0.88em; }
 .md-cite { color: var(--tx3); font-size: 0.85em; }
-.bubble pre.md-pre { background: var(--bg2); border: 0.5px solid var(--border); border-radius: 6px; padding: 12px; overflow-x: auto; font-size: 13px; margin: 8px 0; }
+.bubble pre.md-pre { background: var(--sur2); border: 0.5px solid var(--brd); border-radius: 6px; padding: 12px; overflow-x: auto; font-size: 13px; margin: 8px 0; }
 .bubble h1, .bubble h2, .bubble h3 { font-weight: 600; margin: 12px 0 4px; }
 .bubble h3 { font-size: 14px; }
 .bubble h2 { font-size: 15px; }
 .bubble table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 8px 0; }
-.bubble th, .bubble td { border: 0.5px solid var(--border); padding: 6px 10px; text-align: left; }
-.bubble th { background: var(--bg2); font-weight: 500; }
+.bubble th, .bubble td { border: 0.5px solid var(--brd); padding: 6px 10px; text-align: left; }
+.bubble th { background: var(--sur2); font-weight: 500; }
 
 .msg-time { font-size: 10px; color: var(--tx3); padding: 0 4px; }
 .msg-badge {
@@ -329,6 +329,14 @@ body {
 .dp:nth-child(2) { animation-delay: .15s; }
 .dp:nth-child(3) { animation-delay: .30s; }
 @keyframes bounce { 0%,80%,100%{transform:translateY(0)} 40%{transform:translateY(-6px)} }
+
+/* Curseur clignotant pendant le streaming Gemini */
+.stream-cursor {
+  color: var(--tx3); margin-left: 1px;
+  display: inline-block; vertical-align: text-bottom;
+  animation: stream-blink .8s step-end infinite;
+}
+@keyframes stream-blink { 0%,100%{opacity:1} 50%{opacity:0} }
 
 /* Sources RAG — chip layout */
 .msg-sources { margin-top: 6px; }
@@ -385,7 +393,7 @@ body {
   font-family: 'DM Sans', sans-serif; font-size: 14px;
   background: var(--sur2); color: var(--tx); outline: none;
   line-height: 1.45; max-height: 120px; overflow-y: auto;
-  transition: border-color .15s;
+  transition: border-color .15s; margin-bottom: 0;
 }
 .chat-ta:focus { border-color: var(--sb-blue-md); }
 .send {
@@ -430,6 +438,21 @@ body {
   transition: all .12s;
 }
 .btn-cal:hover { background: var(--sur3); color: var(--tx); }
+
+/* Bouton "+" nouvelle tâche */
+.btn-add-task {
+  width: 26px; height: 26px; border-radius: 6px;
+  border: 1px solid rgba(248,155,28,.35);
+  background: rgba(248,155,28,.10);
+  color: var(--sb-orange); cursor: pointer; display: flex;
+  align-items: center; justify-content: center;
+  transition: all .15s;
+}
+.btn-add-task:hover {
+  background: rgba(248,155,28,.20);
+  border-color: rgba(248,155,28,.65);
+  box-shadow: 0 0 0 3px rgba(248,155,28,.10);
+}
 .filters { display: flex; gap: 4px; flex-wrap: wrap; }
 .fil {
   font-size: 11px; padding: 3px 10px; border-radius: 20px;
@@ -456,6 +479,7 @@ body {
   padding: 6px 2px;
   outline: none;
   transition: border-color 0.15s;
+  margin-bottom: 0;
 }
 .task-add-input::placeholder { color: var(--tx3); }
 .task-add-input:focus {
@@ -813,6 +837,10 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
   color: var(--tx3); font-size: 14px; transition: color .12s;
 }
 .kb-del:hover { color: var(--red); }
+
+/* ─── NEW TASK FORM (modal création) ───────────────────────────────────── */
+.new-task-form { display: flex; flex-direction: column; gap: 16px; }
+.new-task-field { display: flex; flex-direction: column; }
 
 /* ─── TASK MODAL ────────────────────────────────────────────────────────── */
 .task-modal-head { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }

@@ -1,23 +1,8 @@
-/**
- * src/components/tasks/TaskPanel.jsx — Panneau droit des tâches
- *
- * Contient le header (titre "To-do" + bouton calendrier), les filtres,
- * et le tableau de tâches. Gère aussi le panneau de redimensionnement.
- *
- * Props :
- * @param {Array}    tasks          - Tâches du client
- * @param {Array}    members        - Membres de l'équipe
- * @param {string}   activeFilter
- * @param {Function} onFilterChange
- * @param {Array}    highlightedIds
- * @param {Function} onTaskClick
- * @param {Function} onTaskReorder
- * @param {Function} onOpenCalendar
- */
 import { useEffect, useRef, useState } from 'react';
-import { Calendar } from 'lucide-react';
+import { Calendar, Plus } from 'lucide-react';
 import TaskFilters from './TaskFilters';
 import TaskBoard from './TaskBoard';
+import Modal from '../shared/Modal';
 
 export default function TaskPanel({
   tasks, members, activeFilter, onFilterChange,
@@ -25,7 +10,15 @@ export default function TaskPanel({
 }) {
   const panelRef = useRef(null);
   const resizerRef = useRef(null);
+
+  // Modal "nouvelle tâche"
+  const [isAddOpen, setIsAddOpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');
+  const [newStatus, setNewStatus] = useState('todo');
+  const [newPrio, setNewPrio] = useState('P2');
+  const [newAssignee, setNewAssignee] = useState('');
+  const [newDue, setNewDue] = useState('');
+  const [newBlocker, setNewBlocker] = useState('');
 
   // Restaurer la largeur sauvegardée
   useEffect(() => {
@@ -70,6 +63,37 @@ export default function TaskPanel({
     };
   }, []);
 
+  function openAddModal() {
+    setNewTitle('');
+    setNewStatus('todo');
+    setNewPrio('P2');
+    setNewAssignee('');
+    setNewDue('');
+    setNewBlocker('');
+    setIsAddOpen(true);
+  }
+
+  function handleCreate() {
+    if (!newTitle.trim()) return;
+    onAddTask({
+      title: newTitle.trim(),
+      status: newStatus,
+      prio: newPrio,
+      assignee: newAssignee || null,
+      due_date: newDue || null,
+      blocker: newStatus === 'blocked' ? (newBlocker.trim() || null) : null,
+    });
+    setIsAddOpen(false);
+  }
+
+  const dateInputStyle = {
+    marginBottom: 0,
+    fontFamily: "'DM Mono', monospace",
+    fontSize: '12px',
+    padding: '6px 8px',
+    width: '100%',
+  };
+
   return (
     <>
       <div className="resizer" ref={resizerRef} />
@@ -77,7 +101,14 @@ export default function TaskPanel({
         <div className="todo-head">
           <div className="todo-top">
             <span className="todo-title">To-do</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <button
+                className="btn-add-task"
+                onClick={openAddModal}
+                title="Nouvelle tâche"
+              >
+                <Plus size={14} strokeWidth={2.5} />
+              </button>
               <button className="btn-cal" onClick={onOpenCalendar} title="Vue calendrier">
                 <Calendar size={14} />
               </button>
@@ -100,22 +131,100 @@ export default function TaskPanel({
             onTaskReorder={onTaskReorder}
           />
         </div>
-        <div className="task-add-row">
-          <input
-            type="text"
-            className="task-add-input"
-            placeholder="+ Nouvelle tâche…"
-            value={newTitle}
-            onChange={e => setNewTitle(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && newTitle.trim()) {
-                onAddTask({ title: newTitle.trim(), prio: 'P2', status: 'todo' });
-                setNewTitle('');
-              }
-            }}
-          />
-        </div>
       </div>
+
+      <Modal
+        isOpen={isAddOpen}
+        onClose={() => setIsAddOpen(false)}
+        title="Nouvelle tâche"
+        maxWidth="460px"
+      >
+        <div className="new-task-form">
+          {/* Titre */}
+          <div className="new-task-field">
+            <label>Titre</label>
+            <input
+              type="text"
+              value={newTitle}
+              onChange={e => setNewTitle(e.target.value)}
+              placeholder="De quoi s'agit-il ?"
+              autoFocus
+              style={{ marginBottom: 0 }}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) handleCreate(); }}
+            />
+          </div>
+
+          {/* Statut + Priorité + Assigné + Échéance */}
+          <div className="task-meta">
+            <div>
+              <div className="task-meta-label">Statut</div>
+              <select value={newStatus} onChange={e => setNewStatus(e.target.value)} style={{ marginBottom: 0 }}>
+                <option value="todo">À faire</option>
+                <option value="inprogress">En cours</option>
+                <option value="waiting">En attente</option>
+                <option value="blocked">Bloqué</option>
+                <option value="done">Fait</option>
+              </select>
+            </div>
+            <div>
+              <div className="task-meta-label">Priorité</div>
+              <select value={newPrio} onChange={e => setNewPrio(e.target.value)} style={{ marginBottom: 0 }}>
+                <option value="P1">P1 — Urgent</option>
+                <option value="P2">P2 — Normal</option>
+                <option value="P3">P3 — Bas</option>
+              </select>
+            </div>
+            <div>
+              <div className="task-meta-label">Assigné à</div>
+              <select value={newAssignee} onChange={e => setNewAssignee(e.target.value)} style={{ marginBottom: 0 }}>
+                <option value="">—</option>
+                {members.map(m => (
+                  <option key={m.initials} value={m.initials}>
+                    {m.initials} — {m.name || m.initials}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <div className="task-meta-label">Échéance</div>
+              <input
+                type="date"
+                value={newDue}
+                onChange={e => setNewDue(e.target.value)}
+                style={dateInputStyle}
+              />
+            </div>
+          </div>
+
+          {/* Blocage (affiché si statut = bloqué) */}
+          {newStatus === 'blocked' && (
+            <div className="new-task-field">
+              <label>Raison du blocage</label>
+              <input
+                type="text"
+                value={newBlocker}
+                onChange={e => setNewBlocker(e.target.value)}
+                placeholder="Qu'est-ce qui bloque ?"
+                style={{ marginBottom: 0 }}
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="modal-foot">
+          <button className="btn btn-sec" onClick={() => setIsAddOpen(false)}>
+            Annuler
+          </button>
+          <button
+            className="btn"
+            style={{ width: 'auto' }}
+            disabled={!newTitle.trim()}
+            onClick={handleCreate}
+          >
+            Créer la tâche
+          </button>
+        </div>
+      </Modal>
     </>
   );
 }

@@ -22,13 +22,15 @@
  * @param {Function}    params.onSessionSave - Callback(summaryText) après sauvegarde de session
  */
 import { useState, useRef, useCallback } from 'react';
-import { callBackend } from '../lib/backend';
+import { callBackend, streamChatSSE } from '../lib/backend';
 
 export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksUpdate, onSessionSave }) {
   // Tableau des messages affichés dans le chat
   const [messages, setMessages] = useState([]);
   // true pendant l'appel backend (affiche le "thinking...")
   const [isLoading, setIsLoading] = useState(false);
+  // true du premier envoi jusqu'à la fin du stream — désactive le bouton Send
+  const [isSending, setIsSending] = useState(false);
   // Compteur d'échanges pour déclencher la sauvegarde de session
   const exchangeCountRef = useRef(0);
   const sessionSavedRef = useRef(false);
@@ -60,7 +62,8 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
   // ── Envoi d'un message ────────────────────────────────────────────────────
 
   const sendMessage = useCallback(async (text, fileAttachment = null) => {
-    if (!text?.trim() || !client) return;
+    if (!text?.trim() || !client || isSending) return;
+    setIsSending(true);
 
     exchangeCountRef.current++;
     resetInactivityTimer();
@@ -106,61 +109,98 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
       .slice(-6)
       .map(m => ({ role: m.role === 'u' ? 'u' : 'a', text: m.text || '' }));
 
+    const streamId = Date.now() + Math.random();
+    let accum = '';
+    let firstToken = true;
+
+    const messageType = _isAction ? 'task_action' : 'chat';
+    const payload = {
+      system: systemPrompt,
+      message: text,
+      message_type: messageType,
+      client_id: client.id,
+      chat_history: chatHistory,
+    };
+    if (fileAttachment?.data && fileAttachment?.mediaType) {
+      payload.file = { data: fileAttachment.data, mediaType: fileAttachment.mediaType };
+    }
+
     try {
-      const messageType = _isAction ? 'task_action' : 'chat';
-      const payload = {
-        system: systemPrompt,
-        message: text,
-        message_type: messageType,
-        client_id: client.id,
-        chat_history: chatHistory,
-      };
-      if (fileAttachment?.data && fileAttachment?.mediaType) {
-        payload.file = { data: fileAttachment.data, mediaType: fileAttachment.mediaType };
-      }
+      await new Promise((resolve, reject) => {
+        streamChatSSE(payload, jwtToken, {
+          onToken(chunk) {
+            accum += chunk;
+            // Cacher la partie JSON si le modèle a commencé à l'écrire
+            const sepIdx = accum.indexOf('---JSON---');
+            const display = sepIdx >= 0 ? accum.slice(0, sepIdx) : accum;
 
-      const data = await callBackend(payload, jwtToken);
-      if (data.error) throw new Error(data.error);
-
-      const raw = data.text || '';
-      const sources = data.sources_used || [];
-
-      // ── Découper texte et JSON de tâches ─────────────────────────────────
-      const parts = raw.split('---JSON---');
-      const replyText = parts[0].trim();
-      const jsonStr = (parts[1] || '').trim();
-
-      const msgId = Date.now();
-      addMessage('a', replyText, { id: msgId, sources });
-
-      // ── Appliquer les modifications de tâches depuis le JSON ──────────────
-      if (jsonStr) {
-        try {
-          const match = jsonStr.replace(/```json|```/g, '').trim().match(/\{[\s\S]*\}/);
-          if (match) {
-            const p = JSON.parse(match[0]);
-            if (!p.clarification && onTasksUpdate) {
-              const updatedTasks = applyTaskUpdates(tasks, p, client?.id);
-              if (updatedTasks) onTasksUpdate(updatedTasks, p);
+            if (firstToken) {
+              firstToken = false;
+              setIsLoading(false);
+              setMessages(prev => [...prev, {
+                id: streamId, role: 'a', text: display,
+                time: new Date(), streaming: true,
+              }]);
+            } else {
+              setMessages(prev => prev.map(m =>
+                m.id === streamId ? { ...m, text: display } : m
+              ));
             }
-          }
-        } catch (e) {
-          console.error('JSON parse tasks:', e);
-        }
-      }
+          },
 
-      // Sauvegarde automatique de session après 5 échanges ou toutes les 10
-      const count = exchangeCountRef.current;
-      if (!sessionSavedRef.current && (count === 5 || (count > 5 && count % 10 === 0))) {
-        triggerSessionSave();
-      }
+          onDone({ sources, tasks_json, reply_text }) {
+            // Finaliser le message avec le texte propre et les sources
+            setMessages(prev => prev.map(m =>
+              m.id === streamId
+                ? { ...m, text: reply_text || '', sources: sources || [], streaming: false }
+                : m
+            ));
 
-    } catch (e) {
-      addMessage('a', 'Erreur : ' + e.message);
+            // ── Appliquer les modifications de tâches depuis le JSON ────────
+            const jsonStr = (tasks_json || '').trim();
+            if (jsonStr) {
+              try {
+                const match = jsonStr.replace(/```json|```/g, '').trim().match(/\{[\s\S]*\}/);
+                if (match) {
+                  const p = JSON.parse(match[0]);
+                  if (!p.clarification && onTasksUpdate) {
+                    const updatedTasks = applyTaskUpdates(tasks, p, client?.id);
+                    if (updatedTasks) onTasksUpdate(updatedTasks, p);
+                  }
+                }
+              } catch (e) {
+                console.error('JSON parse tasks:', e);
+              }
+            }
+
+            // Sauvegarde automatique de session après 5 échanges ou toutes les 10
+            const count = exchangeCountRef.current;
+            if (!sessionSavedRef.current && (count === 5 || (count > 5 && count % 10 === 0))) {
+              triggerSessionSave();
+            }
+
+            resolve();
+          },
+
+          onError(msg) {
+            if (firstToken) {
+              addMessage('a', 'Erreur : ' + msg);
+            } else {
+              setMessages(prev => prev.map(m =>
+                m.id === streamId ? { ...m, text: 'Erreur : ' + msg, streaming: false } : m
+              ));
+            }
+            reject(new Error(msg));
+          },
+        });
+      });
+    } catch (_) {
+      // Erreur déjà gérée dans onError
     } finally {
       setIsLoading(false);
+      setIsSending(false);
     }
-  }, [client, tasks, summaries, docCache, jwtToken, messages, addMessage, onTasksUpdate]); // eslint-disable-line
+  }, [client, tasks, summaries, docCache, jwtToken, messages, addMessage, onTasksUpdate, isSending]); // eslint-disable-line
 
   async function triggerSessionSave() {
     if (!client || sessionSavedRef.current || exchangeCountRef.current < 3) return;
@@ -178,7 +218,7 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
     } catch { sessionSavedRef.current = false; }
   }
 
-  return { messages, isLoading, sendMessage, addMessage, clearMessages, triggerSessionSave };
+  return { messages, isLoading, isSending, sendMessage, addMessage, clearMessages, triggerSessionSave };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

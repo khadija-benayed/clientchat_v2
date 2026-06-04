@@ -83,12 +83,15 @@ export default function MessageBubble({ msg, clientName, onSaveToKb }) {
       <div className="bubble">
         {isUser
           ? msg.text
-          : <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={mdComponents}
-            >
-              {msg.text}
-            </ReactMarkdown>
+          : <>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={mdComponents}
+              >
+                {msg.text}
+              </ReactMarkdown>
+              {msg.streaming && <span className="stream-cursor" aria-hidden="true">▋</span>}
+            </>
         }
       </div>
 

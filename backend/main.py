@@ -2012,39 +2012,77 @@ async def chat(body: dict, user_id: Optional[str] = None):
 
     contents = history_contents + [{"role": "user", "parts": current_parts}]
 
-    try:
-        gemini = genai.GenerativeModel(
-            model_name=chat_model,
-            system_instruction=system_final,
-            generation_config={"max_output_tokens": max_tokens},
-            safety_settings=_SAFETY_OFF,
-        )
-        response = gemini.generate_content(contents)
-        text = _gemini_text(response)
-    except Exception as e:
-        print(f"chat Gemini error: {e}")
-        return JSONResponse({"error": f"Erreur IA : {e}"}, status_code=502)
+    # ── Streaming SSE — tokens envoyés au fur et à mesure ────────────────────
+    loop = asyncio.get_running_loop()
 
-    usage_meta = response.usage_metadata
-    usage = {
-        "input_tokens": usage_meta.prompt_token_count if usage_meta else 0,
-        "output_tokens": usage_meta.candidates_token_count if usage_meta else 0,
-    }
+    async def generate():
+        q: asyncio.Queue = asyncio.Queue()
 
-    # Log usage — non-blocking
-    try:
-        log_row: dict = {
-            "client_id": client_id or None,
-            "model": chat_model,
-            "message_type": message_type,
-            "tokens_input": usage["input_tokens"],
-            "tokens_output": usage["output_tokens"],
-            "cost_usd": calculate_cost(chat_model, usage),
-        }
-        if user_id:
-            log_row["user_id"] = user_id
-        sb.table("usage_logs").insert(log_row).execute()
-    except Exception as e:
-        print(f"usage_logs insert error (non bloquant): {e}")
+        def _sync_stream():
+            try:
+                gm = genai.GenerativeModel(
+                    model_name=chat_model,
+                    system_instruction=system_final,
+                    generation_config={"max_output_tokens": max_tokens},
+                    safety_settings=_SAFETY_OFF,
+                )
+                resp = gm.generate_content(contents, stream=True)
+                for chunk in resp:
+                    try:
+                        t = chunk.text
+                        if t:
+                            loop.call_soon_threadsafe(q.put_nowait, ("tok", t))
+                    except Exception:
+                        pass
+                loop.call_soon_threadsafe(q.put_nowait, ("done", resp))
+            except Exception as exc:
+                loop.call_soon_threadsafe(q.put_nowait, ("err", str(exc)))
 
-    return {"text": text, "sources_used": sources_used}
+        threading.Thread(target=_sync_stream, daemon=True).start()
+
+        accumulated = ""
+        stream_resp = None
+
+        while True:
+            kind, data = await q.get()
+            if kind == "tok":
+                accumulated += data
+                yield f"data: {json.dumps({'type': 'token', 'text': data})}\n\n"
+            elif kind == "done":
+                stream_resp = data
+                break
+            elif kind == "err":
+                print(f"chat stream error: {data}")
+                yield f"data: {json.dumps({'type': 'error', 'message': f'Erreur IA : {data}'})}\n\n"
+                return
+
+        # Séparer le texte affiché et le JSON de tâches
+        parts = accumulated.split("---JSON---")
+        reply_text = parts[0].strip()
+        tasks_json = parts[1].strip() if len(parts) > 1 else ""
+
+        yield f"data: {json.dumps({'type': 'done', 'sources': sources_used, 'tasks_json': tasks_json, 'reply_text': reply_text})}\n\n"
+
+        # Log usage — non-bloquant
+        try:
+            usage_meta = stream_resp.usage_metadata if stream_resp else None
+            in_tok = usage_meta.prompt_token_count if usage_meta else 0
+            out_tok = usage_meta.candidates_token_count if usage_meta else 0
+            log_row: dict = {
+                "client_id": client_id or None,
+                "model": chat_model,
+                "message_type": message_type,
+                "tokens_input": in_tok,
+                "tokens_output": out_tok,
+                "cost_usd": calculate_cost(chat_model, {"input_tokens": in_tok, "output_tokens": out_tok}),
+            }
+            if user_id:
+                log_row["user_id"] = user_id
+            sb.table("usage_logs").insert(log_row).execute()
+        except Exception as exc:
+            print(f"usage_logs insert error (non bloquant): {exc}")
+
+    return StreamingResponse(generate(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
