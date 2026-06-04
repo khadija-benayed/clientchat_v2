@@ -671,9 +671,9 @@ async def dispatcher(request: Request):
     if action == "list_drive_metadata":
         return await list_drive_metadata(body)
     if action == "generate_brief":
-        return await generate_brief(body)
+        return await generate_brief(body, user_id)
     if action == "index_source":
-        return await index_source(body)
+        return await index_source(body, user_id)
     if action == "delete_source_chunks":
         return await delete_source_chunks(body)
     if action == "save_to_kb":
@@ -688,6 +688,16 @@ async def dispatcher(request: Request):
         return await set_member_role(body, user_id)
     if action == "claim_ownership":
         return await claim_ownership(body, user_id)
+    if action == "upsert_task":
+        return await upsert_task(body, user_id)
+    if action == "delete_task":
+        return await delete_task(body, user_id)
+    if action == "delete_client":
+        return await delete_client(body, user_id)
+    if action == "create_invitation":
+        return await create_invitation(body, user_id)
+    if action == "join_client_via_token":
+        return await join_client_via_token(body, user_id)
     if action == "sync_drive":
         return await sync_drive(body, request)
     if action == "sync_state":
@@ -824,7 +834,7 @@ CR_KEYWORDS = frozenset({"news", "nouvelles", "réunion", "point",
                          "suivi", "compte", "rendu", "notes", "évoqué", "discuté", "abordé"})
 
 
-async def generate_brief(body: dict):
+async def generate_brief(body: dict, user_id: Optional[str] = None):
     client_id = body.get("client_id")
     docs_content = body.get("docs_content", [])
     existing_brief = body.get("existing_brief")
@@ -833,6 +843,7 @@ async def generate_brief(body: dict):
         return JSONResponse(
             {"error": "client_id et docs_content (array non vide) requis"}, status_code=400
         )
+    await _assert_role(user_id, client_id, ["owner", "admin", "member"])
 
     TOKEN_BUDGET = 120_000
     total_chars = 0
@@ -971,12 +982,14 @@ async def generate_brief(body: dict):
 
 
 # ── index_source ──────────────────────────────────────────────────────────────
-async def index_source(body: dict):
+async def index_source(body: dict, user_id: Optional[str] = None):
     """
     Chunks + embeds (local) + upserts document chunks.
     start_chunk > 0 is a no-op: local embedding processes all chunks in one batch.
     """
     client_id = body.get("client_id")
+    if client_id:
+        await _assert_role(user_id, client_id, ["owner", "admin", "member"])
     source_type = body.get("source_type")
     source_name = body.get("source_name")
     source_id = body.get("source_id")
@@ -1149,6 +1162,20 @@ def _count_owners(client_id: str) -> int:
     return r.count or 0
 
 
+async def _assert_role(user_id: Optional[str], client_id: str, allowed_roles: list):
+    """Lève HTTP 403 si user_id n'est pas membre de client_id avec l'un des rôles autorisés.
+    Les appels sans user_id (clé API legacy) passent sans vérification."""
+    if not user_id:
+        return
+    row = sb.table("client_members") \
+        .select("role") \
+        .eq("member_id", user_id) \
+        .eq("client_id", client_id) \
+        .maybe_single().execute()
+    if not row.data or row.data["role"] not in allowed_roles:
+        raise HTTPException(status_code=403, detail="Accès refusé")
+
+
 # ── get_client_members ────────────────────────────────────────────────────────
 async def get_client_members(body: dict, user_id: Optional[str]):
     client_id = body.get("client_id")
@@ -1303,6 +1330,141 @@ async def claim_ownership(body: dict, user_id: Optional[str]):
     return {"claimed": True}
 
 
+# ── upsert_task ───────────────────────────────────────────────────────────────
+async def upsert_task(body: dict, user_id: Optional[str]):
+    client_id = body.get("client_id")
+    task      = body.get("task", {})
+    if not client_id:
+        return JSONResponse({"error": "client_id requis"}, status_code=400)
+    await _assert_role(user_id, client_id, ["owner", "admin", "member"])
+    task_id = task.get("id")
+    if task_id and task_id > 0:
+        sb.table("tasks").update({
+            "title": task.get("title"), "prio": task.get("prio"),
+            "status": task.get("status"), "assignee": task.get("assignee"),
+            "blocker": task.get("blocker"), "note": task.get("note"),
+            "due_date": task.get("due_date") or None,
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }).eq("id", task_id).eq("client_id", client_id).execute()
+    else:
+        result = sb.table("tasks").insert({
+            "client_id": client_id, "title": task.get("title"),
+            "prio": task.get("prio") or "P2", "status": task.get("status") or "todo",
+            "assignee": task.get("assignee") or "", "blocker": task.get("blocker") or None,
+            "note": task.get("note") or None, "due_date": task.get("due_date") or None,
+        }).execute()
+        task = {**task, "id": result.data[0]["id"]}
+    return JSONResponse({"task": task})
+
+
+# ── delete_task ────────────────────────────────────────────────────────────────
+async def delete_task(body: dict, user_id: Optional[str]):
+    task_id   = body.get("task_id")
+    client_id = body.get("client_id")
+    if not task_id or not client_id:
+        return JSONResponse({"error": "task_id et client_id requis"}, status_code=400)
+    await _assert_role(user_id, client_id, ["owner", "admin"])
+    sb.table("tasks").delete().eq("id", task_id).eq("client_id", client_id).execute()
+    return JSONResponse({"ok": True})
+
+
+# ── delete_client ──────────────────────────────────────────────────────────────
+async def delete_client(body: dict, user_id: Optional[str]):
+    client_id = body.get("client_id")
+    if not client_id:
+        return JSONResponse({"error": "client_id requis"}, status_code=400)
+    await _assert_role(user_id, client_id, ["owner"])
+    sb.table("clients").delete().eq("id", client_id).execute()
+    return JSONResponse({"ok": True})
+
+
+# ── create_invitation ─────────────────────────────────────────────────────────
+async def create_invitation(body: dict, user_id: Optional[str]):
+    client_id     = body.get("client_id")
+    invited_email = body.get("invited_email", "").strip().lower()
+    role          = body.get("role", "member")
+
+    if not client_id or not invited_email:
+        return JSONResponse({"error": "client_id et invited_email requis"}, status_code=400)
+    if not user_id:
+        return JSONResponse({"error": "JWT requis pour créer une invitation"}, status_code=401)
+    if role not in ("owner", "member"):
+        return JSONResponse({"error": "Rôle invalide — valeurs acceptées : owner, member"}, status_code=400)
+
+    # Seul un owner peut inviter un autre owner
+    if role == "owner":
+        await _assert_role(user_id, client_id, ["owner"])
+    else:
+        await _assert_role(user_id, client_id, ["owner", "admin"])
+
+    inv = sb.table("client_invitations").insert({
+        "client_id":     client_id,
+        "created_by":    user_id,
+        "invited_email": invited_email,
+        "role":          role,
+    }).execute()
+
+    token      = inv.data[0]["token"]
+    invite_url = f"https://khadija-benayed.github.io/clientchat_v2/#/join/{token}"
+    return JSONResponse({"token": token, "url": invite_url, "expires_at": inv.data[0]["expires_at"]})
+
+
+# ── join_client_via_token ─────────────────────────────────────────────────────
+async def join_client_via_token(body: dict, user_id: Optional[str]):
+    token = body.get("token", "").strip()
+    if not token:
+        return JSONResponse({"error": "Token requis"}, status_code=400)
+    if not user_id:
+        return JSONResponse({"error": "JWT requis"}, status_code=401)
+
+    now_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    inv = sb.table("client_invitations") \
+        .select("*") \
+        .eq("token", token) \
+        .is_("used_at", "null") \
+        .gt("expires_at", now_iso) \
+        .maybe_single().execute()
+
+    if not inv.data:
+        return JSONResponse({"error": "Invitation invalide ou expirée"}, status_code=403)
+
+    inv_data = inv.data
+
+    # Vérifier que l'email correspond
+    try:
+        user_obj   = sb.auth.admin.get_user(user_id)
+        user_email = user_obj.user.email.lower()
+    except Exception:
+        return JSONResponse({"error": "Impossible de vérifier l'identité"}, status_code=503)
+
+    if user_email != inv_data["invited_email"]:
+        return JSONResponse(
+            {"error": f"Ce lien est réservé à {inv_data['invited_email']}"},
+            status_code=403,
+        )
+
+    # Marquer l'invitation comme utilisée de façon atomique (fix TOCTOU)
+    # Le filtre .is_("used_at", "null") garantit qu'un seul appel concurrent réussit.
+    claimed = sb.table("client_invitations").update({
+        "used_at": now_iso,
+        "used_by": user_id,
+    }).eq("id", inv_data["id"]).is_("used_at", "null").execute()
+
+    if not claimed.data:
+        return JSONResponse({"error": "Invitation déjà utilisée"}, status_code=409)
+
+    # Ajouter le membre (upsert — idempotent si doublon résiduel)
+    sb.table("client_members").upsert({
+        "client_id": inv_data["client_id"],
+        "member_id": user_id,
+        "role":      inv_data["role"],
+    }, on_conflict="client_id,member_id").execute()
+
+    client = sb.table("clients").select("*").eq("id", inv_data["client_id"]).single().execute()
+    return JSONResponse({"client": client.data})
+
+
 # ── sync_drive ────────────────────────────────────────────────────────────────
 async def sync_drive(body: dict, request: Request):
     folder_id = body.get("folder_id")
@@ -1312,6 +1474,8 @@ async def sync_drive(body: dict, request: Request):
 
     if not folder_id:
         return JSONResponse({"error": "folder_id requis"}, status_code=400)
+    if client_id:
+        await _assert_role(getattr(request.state, "user_id", None), client_id, ["owner", "admin", "member"])
 
     try:
         drive, sa_email = get_drive_service()
@@ -1798,6 +1962,9 @@ async def chat(body: dict, user_id: Optional[str] = None):
     chat_history = body.get("chat_history", [])
     file_data = body.get("file")
     message_type = body.get("message_type", "chat")
+
+    if client_id:
+        await _assert_role(user_id, client_id, ["owner", "admin", "member"])
 
     # Both task_action and chat use Gemini Flash; only generate_brief uses Pro
     chat_model = GEMINI_FLASH

@@ -132,7 +132,28 @@ BEGIN
 END;
 $$;
 
--- ── 7. Table sync_ignored (nouvelle — fichiers Drive exclus de la détection) ──
+-- ── 7. Contrainte UNIQUE sur client_members (fix TOCTOU join_client_via_token) ─
+-- Si la table existait déjà sans contrainte, on l'ajoute proprement.
+ALTER TABLE client_members
+  ADD CONSTRAINT IF NOT EXISTS client_members_client_member_unique
+  UNIQUE (client_id, member_id);
+
+-- ── 8. Table client_invitations (nouvelle) ────────────────────────────────────
+CREATE TABLE IF NOT EXISTS client_invitations (
+  id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id      uuid        NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  created_by     uuid,
+  invited_email  text        NOT NULL,
+  role           text        NOT NULL DEFAULT 'member',
+  token          uuid        NOT NULL DEFAULT gen_random_uuid() UNIQUE,
+  expires_at     timestamptz NOT NULL DEFAULT (now() + interval '7 days'),
+  used_at        timestamptz,
+  used_by        uuid,
+  created_at     timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS client_invitations_token_idx ON client_invitations (token);
+
+-- ── 9. Table sync_ignored (nouvelle — fichiers Drive exclus de la détection) ──
 CREATE TABLE IF NOT EXISTS sync_ignored (
   id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   source_id   text        NOT NULL UNIQUE,

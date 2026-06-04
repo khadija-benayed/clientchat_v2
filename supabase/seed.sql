@@ -21,6 +21,32 @@ CREATE TABLE IF NOT EXISTS clients (
   sources          jsonb                   DEFAULT '[]'      -- sources Drive + manuelles
 );
 
+-- client_members : rôles par espace client (owner | member)
+CREATE TABLE IF NOT EXISTS client_members (
+  id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id  uuid        NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  member_id  uuid        NOT NULL,   -- team_members.id (pas de FK — hors seed scope)
+  role       text        NOT NULL DEFAULT 'member',  -- 'owner' | 'member'
+  created_at timestamptz DEFAULT now(),
+  UNIQUE (client_id, member_id)
+);
+CREATE INDEX IF NOT EXISTS client_members_member_id_idx ON client_members (member_id);
+
+-- client_invitations : tokens d'invitation par email
+CREATE TABLE IF NOT EXISTS client_invitations (
+  id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id      uuid        NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  created_by     uuid,                   -- nullable (clé API legacy)
+  invited_email  text        NOT NULL,
+  role           text        NOT NULL DEFAULT 'member',
+  token          uuid        NOT NULL DEFAULT gen_random_uuid() UNIQUE,
+  expires_at     timestamptz NOT NULL DEFAULT (now() + interval '7 days'),
+  used_at        timestamptz,
+  used_by        uuid,
+  created_at     timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS client_invitations_token_idx ON client_invitations (token);
+
 -- tasks : to-do par client
 CREATE TABLE IF NOT EXISTS tasks (
   id          serial      PRIMARY KEY,

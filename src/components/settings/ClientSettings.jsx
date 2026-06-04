@@ -117,8 +117,7 @@ export default function ClientSettings({
 
   async function deleteClient() {
     if (!confirm(`Supprimer définitivement "${client.name}" et toutes ses tâches ?\n\nCette action est irréversible.`)) return;
-    await supabase.from('tasks').delete().eq('client_id', client.id);
-    await supabase.from('clients').delete().eq('id', client.id);
+    await callBackend({ action: 'delete_client', client_id: client.id }, jwtToken);
     onDeleteClient?.(client.id);
     onClose();
   }

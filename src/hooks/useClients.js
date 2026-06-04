@@ -125,28 +125,21 @@ export function useClients({ jwtToken, currentUserId }) {
   }, []);
 
   const upsertTask = useCallback(async (task) => {
-    if (task.id && task.id > 0) {
-      await supabase.from('tasks').update({
-        title: task.title, prio: task.prio, status: task.status,
-        assignee: task.assignee, blocker: task.blocker, note: task.note,
-        due_date: task.due_date || null,
-        updated_at: new Date().toISOString(),
-      }).eq('id', task.id);
-    } else {
-      const { data } = await supabase.from('tasks').insert({
-        client_id: currentClient?.id, title: task.title,
-        prio: task.prio || 'P2', status: task.status || 'todo',
-        assignee: task.assignee || '', blocker: task.blocker || null,
-        note: task.note || null, due_date: task.due_date || null,
-      }).select().single();
-      if (data) task.id = data.id;
-    }
-    return task;
-  }, [currentClient]);
+    const data = await callBackend({
+      action: 'upsert_task',
+      client_id: currentClient?.id,
+      task,
+    }, jwtToken);
+    return data.task || task;
+  }, [currentClient, jwtToken]);
 
   const deleteTask = useCallback(async (id) => {
-    await supabase.from('tasks').delete().eq('id', id);
-  }, []);
+    await callBackend({
+      action: 'delete_task',
+      client_id: currentClient?.id,
+      task_id: id,
+    }, jwtToken);
+  }, [currentClient, jwtToken]);
 
   /** Sauvegarde l'ordre des tâches après un drag & drop */
   const saveTaskOrder = useCallback((reorderedTasks) => {
