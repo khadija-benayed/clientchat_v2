@@ -37,12 +37,14 @@ export default function ClientSettings({
   const [pendingUpdates, setPendingUpdates] = useState({});
 
   // Invitation state
-  const [canInvite, setCanInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('member');
   const [inviteLink, setInviteLink] = useState(null);
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteError, setInviteError] = useState('');
+
+  // Dérivé directement depuis myRole — pas de state pour éviter le re-render parasite
+  const canInvite = myRole === 'owner';
 
   useEffect(() => {
     if (!isOpen || !client) return;
@@ -52,10 +54,8 @@ export default function ClientSettings({
     setCtx(b ? '' : (client.context || '').replace(/\n*---\s*Contenu Drive[\s\S]*$/, '').trim());
     setPendingUpdates({});
     setTab('params');
-    // Vérifier si l'utilisateur peut inviter (basé sur myRole transmis par App)
     setInviteEmail(''); setInviteRole('member'); setInviteLink(null); setInviteError('');
-    setCanInvite(myRole === 'owner' || myRole === 'admin');
-  }, [isOpen, client?.id, myRole]); // eslint-disable-line
+  }, [isOpen, client?.id]); // eslint-disable-line
 
   function getBrief(c) {
     if (!c?.context) return null;
@@ -185,7 +185,7 @@ export default function ClientSettings({
                     />
                     <select value={inviteRole} onChange={e => setInviteRole(e.target.value)} style={{ marginBottom: 0, flex: '0 0 auto' }}>
                       <option value="member">Membre</option>
-                      <option value="admin">Admin</option>
+                      <option value="owner">Owner</option>
                     </select>
                     <button className="btn btn-sec" style={{ width: 'auto', padding: '7px 14px', flex: '0 0 auto' }}
                       onClick={createInvitation} disabled={inviteLoading || !inviteEmail}>

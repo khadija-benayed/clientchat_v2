@@ -160,7 +160,7 @@ export default function App() {
       .then(data => {
         if (data?.client) {
           setClients(prev => {
-            const u = [data.client, ...prev];
+            const u = [data.client, ...prev.filter(c => c.id !== data.client.id)];
             localStorage.setItem('cc-sess', JSON.stringify(u));
             return u;
           });

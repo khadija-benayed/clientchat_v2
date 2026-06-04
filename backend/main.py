@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from sentence_transformers import SentenceTransformer, CrossEncoder
@@ -1363,7 +1363,7 @@ async def delete_task(body: dict, user_id: Optional[str]):
     client_id = body.get("client_id")
     if not task_id or not client_id:
         return JSONResponse({"error": "task_id et client_id requis"}, status_code=400)
-    await _assert_role(user_id, client_id, ["owner", "admin"])
+    await _assert_role(user_id, client_id, ["owner", "admin", "member"])
     sb.table("tasks").delete().eq("id", task_id).eq("client_id", client_id).execute()
     return JSONResponse({"ok": True})
 
@@ -1405,7 +1405,8 @@ async def create_invitation(body: dict, user_id: Optional[str]):
     }).execute()
 
     token      = inv.data[0]["token"]
-    invite_url = f"https://khadija-benayed.github.io/clientchat_v2/#/join/{token}"
+    base_url   = os.getenv("FRONTEND_URL", "https://khadija-benayed.github.io/clientchat_v2")
+    invite_url = f"{base_url}/#/join/{token}"
     return JSONResponse({"token": token, "url": invite_url, "expires_at": inv.data[0]["expires_at"]})
 
 

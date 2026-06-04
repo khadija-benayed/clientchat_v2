@@ -93,7 +93,7 @@ export function useClients({ jwtToken, currentUserId }) {
         .select('role')
         .eq('client_id', freshClient.id)
         .eq('member_id', currentUserId)
-        .single();
+        .maybeSingle();
       setMyRole(myMembership?.role || 'member');
     }
 
@@ -234,11 +234,19 @@ export function useClients({ jwtToken, currentUserId }) {
       }
 
       // 3. Exclure les fichiers explicitement ignorés (ineligible, vides, exports échoués…)
-      const { data: ignoredRows } = await supabase
-        .from('sync_ignored')
-        .select('source_id')
-        .eq('client_id', client.id);
-      const ignoredSet = new Set((ignoredRows || []).map(r => r.source_id));
+      const ignoredSet = new Set();
+      let ignoredOffset = 0;
+      while (true) {
+        const { data: ignoredRows } = await supabase
+          .from('sync_ignored')
+          .select('source_id')
+          .eq('client_id', client.id)
+          .range(ignoredOffset, ignoredOffset + PAGE - 1);
+        if (!ignoredRows?.length) break;
+        for (const row of ignoredRows) ignoredSet.add(row.source_id);
+        if (ignoredRows.length < PAGE) break;
+        ignoredOffset += PAGE;
+      }
 
       // 4. Compter les fichiers nouveaux / modifiés (tolérance 5 min)
       const TOLERANCE_MS = 24 * 60 * 60 * 1000;
