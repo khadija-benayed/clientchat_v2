@@ -21,7 +21,7 @@
  * @param {Function}    params.onTasksUpdate - Callback(newTasks) quand les tâches changent
  * @param {Function}    params.onSessionSave - Callback(summaryText) après sauvegarde de session
  */
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useMemo } from 'react';
 import { callBackend, streamChatSSE } from '../lib/backend';
 
 export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksUpdate, onSessionSave }) {
@@ -38,6 +38,29 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
   // RAF — batche les mises à jour de texte streaming (1 re-render / frame au lieu de 1 / token)
   const rafIdRef = useRef(null);
   const pendingDisplayRef = useRef('');
+  // Ref pour le guard anti-double-envoi (évite la lecture d'une closure périmée sur isSending)
+  const isSendingRef = useRef(false);
+
+  function cancelPendingRaf() {
+    if (rafIdRef.current) { cancelAnimationFrame(rafIdRef.current); rafIdRef.current = null; }
+  }
+
+  // Membres et index recalculés uniquement quand client.members change (pas à chaque envoi)
+  const members = useMemo(
+    () => { try { return JSON.parse(client?.members || '[]'); } catch { return []; } },
+    [client?.members] // eslint-disable-line
+  );
+
+  const memberIndex = useMemo(() => {
+    const idx = {};
+    for (const m of members) {
+      const ini = m.initials.toUpperCase();
+      idx[norm(m.initials)] = ini;
+      norm(m.name || m.initials).split(/\s+/).filter(w => w.length > 1)
+        .forEach(w => { idx[w] = ini; });
+    }
+    return idx;
+  }, [members]);
 
   /** Remet le timer d'inactivité à zéro (sauvegarde après 10 min sans message) */
   function resetInactivityTimer() {
@@ -65,7 +88,8 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
   // ── Envoi d'un message ────────────────────────────────────────────────────
 
   const sendMessage = useCallback(async (text, fileAttachment = null) => {
-    if (!text?.trim() || !client || isSending) return;
+    if (!text?.trim() || !client || isSendingRef.current) return;
+    isSendingRef.current = true;
     setIsSending(true);
 
     exchangeCountRef.current++;
@@ -75,7 +99,6 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
     addMessage('u', text, fileAttachment ? { file: fileAttachment } : {});
     setIsLoading(true);
 
-    const members = getMembers(client);
     const mStr = members.map(m => m.initials + '=' + (m.name || m.initials)).join(', ');
     const mFull = members.map(m => 'initiales:' + m.initials + ' nom:"' + (m.name || m.initials) + '"').join(', ');
     const mInitials = members.map(m => m.initials).join(', ') || 'KB, PH';
@@ -88,7 +111,7 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
     }).filter(Boolean).join('\n');
 
     // ── Correspondance déterministe tâche↔message ─────────────────────────
-    const matchContext = computeMatchContext(text, tasks, members);
+    const matchContext = computeMatchContext(text, tasks, memberIndex, members);
 
     // ── Contexte client pour le prompt ────────────────────────────────────
     const ctxForPrompt = buildClientContext(client);
@@ -160,11 +183,7 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
           },
 
           onDone({ sources, tasks_json, reply_text }) {
-            // Annuler le RAF en attente pour ne pas écraser le texte final
-            if (rafIdRef.current) {
-              cancelAnimationFrame(rafIdRef.current);
-              rafIdRef.current = null;
-            }
+            cancelPendingRaf();
             // Finaliser le message avec le texte propre et les sources
             setMessages(prev => prev.map(m =>
               m.id === streamId
@@ -199,10 +218,7 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
           },
 
           onError(msg) {
-            if (rafIdRef.current) {
-              cancelAnimationFrame(rafIdRef.current);
-              rafIdRef.current = null;
-            }
+            cancelPendingRaf();
             if (firstToken) {
               addMessage('a', 'Erreur : ' + msg);
             } else {
@@ -217,14 +233,12 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
     } catch (_) {
       // Erreur déjà gérée dans onError
     } finally {
-      if (rafIdRef.current) {
-        cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = null;
-      }
+      cancelPendingRaf();
+      isSendingRef.current = false;
       setIsLoading(false);
       setIsSending(false);
     }
-  }, [client, tasks, summaries, docCache, jwtToken, messages, addMessage, onTasksUpdate, isSending]); // eslint-disable-line
+  }, [client, tasks, summaries, docCache, jwtToken, messages, addMessage, onTasksUpdate, members, memberIndex]); // eslint-disable-line
 
   async function triggerSessionSave() {
     if (!client || sessionSavedRef.current || exchangeCountRef.current < 3) return;
@@ -248,10 +262,6 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
 // ═══════════════════════════════════════════════════════════════════════════
 // FONCTIONS UTILITAIRES (extraites de ui.js)
 // ═══════════════════════════════════════════════════════════════════════════
-
-function getMembers(client) {
-  try { return JSON.parse(client?.members || '[]'); } catch { return []; }
-}
 
 /** Détecte si le message est une action sur une tâche */
 function isTaskAction(msg) {
@@ -305,20 +315,12 @@ function wordMatches(hay, need) {
  * Détermine si le message utilisateur correspond à une tâche unique (UNIQUE),
  * plusieurs (AMBIGUÏTÉ), aucune, ou une déjà dans le bon état (DÉJÀ FAIT).
  */
-function computeMatchContext(txt, tasks, members) {
+function computeMatchContext(txt, tasks, memberIndex, members) {
   const STOP = new Set(['pour','dans','avec','mais','donc','faut','cette','tache','veux',
     'faudrait','changer','change','mettre','passer','assigner','assigne','modifier',
     'supprime','supprimer','renomme','ajoute','creer','liste','titre','prio','statut',
     'status','faire','fait','bloque','attente','cours','relecture','coté','cote','stp',
     'svp','merci','bien','juste','aussi','puis','voila','déjà','deja']);
-
-  const memberIndex = {};
-  for (const m of members) {
-    const ini = m.initials.toUpperCase();
-    memberIndex[norm(m.initials)] = ini;
-    norm(m.name || m.initials).split(/\s+/).filter(w => w.length > 1)
-      .forEach(w => { memberIndex[w] = ini; });
-  }
 
   const msgNorm = norm(txt);
   const msgWords = msgNorm.split(/\s+/).filter(w => w.length > 3 && !STOP.has(w));

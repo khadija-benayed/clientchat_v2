@@ -2031,7 +2031,8 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     generation_config={"max_output_tokens": max_tokens},
                     safety_settings=_SAFETY_OFF,
                 )
-                resp = gm.generate_content(contents, stream=True)
+                resp = gm.generate_content(contents, stream=True,
+                                           request_options={"timeout": 120})
                 for chunk in resp:
                     if cancel_event.is_set():
                         break  # Déconnexion détectée — on arrête de lire Gemini
@@ -2054,7 +2055,11 @@ async def chat(body: dict, user_id: Optional[str] = None):
             stream_resp = None
 
             while True:
-                kind, data = await q.get()
+                try:
+                    kind, data = await asyncio.wait_for(q.get(), timeout=120.0)
+                except asyncio.TimeoutError:
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Timeout IA'})}\n\n"
+                    return
                 if kind == "tok":
                     accumulated += data
                     yield f"data: {json.dumps({'type': 'token', 'text': data})}\n\n"

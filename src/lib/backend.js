@@ -99,12 +99,11 @@ export async function streamChatSSE(payload, jwtToken, { onToken, onDone, onErro
         // trimEnd() supprime les \r éventuels (\r\n → \n après split)
         const trimmed = line.trimEnd();
         if (!trimmed.startsWith('data: ')) continue;
-        try {
-          const event = JSON.parse(trimmed.slice(6));
-          if (event.type === 'token') { onToken(event.text); }
-          else if (event.type === 'done') { onDone(event); return; }
-          else if (event.type === 'error') { onError(event.message); return; }
-        } catch (_) {}
+        let event;
+        try { event = JSON.parse(trimmed.slice(6)); } catch (_) { continue; }
+        if (event.type === 'token') { onToken(event.text); }
+        else if (event.type === 'done') { onDone(event); return; }
+        else if (event.type === 'error') { onError(event.message); return; }
       }
     }
     // Stream fermé par le serveur sans événement 'done' (déconnexion, timeout…)
