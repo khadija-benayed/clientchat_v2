@@ -874,9 +874,12 @@ async def generate_brief(body: dict):
         "- secteur (string) : secteur d'activité principal\n"
         "- enjeux_principaux (array, max 6) : enjeux métier et techniques actuels du client\n"
         "- kpis (array, max 6) : indicateurs de performance suivis\n"
-        "- equipe (array of strings) : UNIQUEMENT les personnes côté client, "
-        "PAS les membres de l'agence Smart Bees (emails @smart-bees.fr). "
-        "Chaque élément doit être une STRING simple 'Prénom Nom' ou 'Prénom Nom - Rôle'. "
+        "- equipe (array of strings) : UNIQUEMENT les personnes physiques côté client "
+        "(humains avec un prénom et idéalement un nom), PAS les membres de l'agence "
+        "Smart Bees, PAS les outils, plateformes, services ou entreprises (ex: Dacker, "
+        "Segment, GA4, CommerceTools ne sont PAS des personnes). "
+        "Chaque élément doit être une STRING au format 'Prénom Nom' ou "
+        "'Prénom Nom - Rôle' ou 'Prénom Nom (email@domaine.com)' si l'email est disponible. "
         "Ne jamais retourner d'objets JSON dans ce tableau.\n"
         "- historique (string, 3-4 phrases) : chronologie de la collaboration depuis le début, "
         "avec les dates clés\n"
@@ -930,6 +933,9 @@ async def generate_brief(body: dict):
 
     # Normalise equipe : force array of strings, retire les membres agence
     if "equipe" in brief and isinstance(brief["equipe"], list):
+        _TOOL_KW = {'reporting', 'dashboard', 'analytics', 'tracking',
+                    'segment', 'ga4', 'gtm', 'adjust', 'klaviyo', 'dacker'}
+        _agency  = AGENCY_NAME.lower()
         normalized = []
         for member in brief["equipe"]:
             if isinstance(member, dict):
@@ -938,9 +944,14 @@ async def generate_brief(body: dict):
                         member.get("nom") or member.get("name") or
                         " ".join(str(v) for v in member.values() if v))
                 member = name.strip()
-            if isinstance(member, str) and member.strip():
-                if AGENCY_DOMAIN not in member.lower() and AGENCY_NAME.lower() not in member.lower():
-                    normalized.append(member.strip())
+            if not (isinstance(member, str) and member.strip()):
+                continue
+            m_low = member.lower()
+            if AGENCY_DOMAIN in m_low or _agency in m_low:
+                continue
+            if any(kw in m_low for kw in _TOOL_KW):
+                continue
+            normalized.append(member.strip())
         brief["equipe"] = normalized
 
     expected_keys = ["secteur", "enjeux_principaux", "kpis", "equipe", "historique", "notes"]

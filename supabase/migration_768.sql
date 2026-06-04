@@ -132,4 +132,15 @@ BEGIN
 END;
 $$;
 
+-- ── 7. Table sync_ignored (nouvelle — fichiers Drive exclus de la détection) ──
+CREATE TABLE IF NOT EXISTS sync_ignored (
+  id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_id   text        NOT NULL UNIQUE,
+  client_id   uuid        REFERENCES clients(id) ON DELETE CASCADE,
+  source_name text        NOT NULL,
+  reason      text        NOT NULL,
+  ignored_at  timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS sync_ignored_client_id_idx ON sync_ignored (client_id);
+
 COMMIT;

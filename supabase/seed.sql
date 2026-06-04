@@ -90,6 +90,18 @@ CREATE TABLE IF NOT EXISTS usage_logs (
   cost_usd      numeric,
   created_at    timestamptz             DEFAULT now()
 );
+-- sync_ignored : fichiers Drive exclus de la détection de nouveautés
+--   (inéligibles IA, vides, exports échoués, timeouts…)
+CREATE TABLE IF NOT EXISTS sync_ignored (
+  id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_id   text        NOT NULL UNIQUE,   -- Drive file ID (clé du upsert)
+  client_id   uuid        REFERENCES clients(id) ON DELETE CASCADE,
+  source_name text        NOT NULL,
+  reason      text        NOT NULL,          -- ineligible_ai | export_error | timeout | empty | skipped | error
+  ignored_at  timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS sync_ignored_client_id_idx ON sync_ignored (client_id);
+
 -- Migration : ajoute user_id si la table existe déjà en production
 ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS user_id uuid;
 
