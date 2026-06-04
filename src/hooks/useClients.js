@@ -51,6 +51,9 @@ export function useClients({ jwtToken, currentUserId }) {
   // Fichiers Drive détectés comme nouveaux/modifiés depuis la dernière sync
   const [driveOutdated, setDriveOutdated] = useState(null); // { count, newCount, modifiedCount } ou null
 
+  // Rôle du membre connecté sur le client courant ('owner' | 'admin' | 'member')
+  const [myRole, setMyRole] = useState('member');
+
   // Référence au canal Realtime Supabase (pas dans le state car pas besoin de re-rendu)
   const rtChanRef = useRef(null);
   const indexingRef = useRef(false);
@@ -81,6 +84,18 @@ export function useClients({ jwtToken, currentUserId }) {
     const { data } = await supabase.from('clients').select('*').eq('id', client.id).single();
     const freshClient = data || client;
     setCurrentClient(freshClient);
+
+    // Charger le rôle du membre connecté sur ce client
+    setMyRole('member');
+    if (currentUserId) {
+      const { data: myMembership } = await supabase
+        .from('client_members')
+        .select('role')
+        .eq('client_id', freshClient.id)
+        .eq('member_id', currentUserId)
+        .single();
+      setMyRole(myMembership?.role || 'member');
+    }
 
     // Mettre à jour la liste locale + localStorage
     setClients(prev => {
@@ -319,6 +334,7 @@ export function useClients({ jwtToken, currentUserId }) {
     getMembers, getSources,
     loadDocCache,
     indexingRef,
+    myRole,
   };
 }
 

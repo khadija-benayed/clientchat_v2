@@ -45,6 +45,16 @@ export default function App() {
   // ── Auth ──────────────────────────────────────────────────────────────────
   const { user, jwtToken, currentUserId, authReady, signInWithGoogle, logout } = useAuth();
 
+  // ── Capture token d'invitation dans l'URL au boot ─────────────────────────
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash.includes('/join/')) {
+      const token = hash.split('/join/').pop().split('?')[0];
+      localStorage.setItem('pendingInviteToken', token);
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+  }, []);
+
   // ── Dark mode ─────────────────────────────────────────────────────────────
   const [isDark, setIsDark] = useState(() => {
     const saved = localStorage.getItem('cc-dark');
@@ -77,6 +87,7 @@ export default function App() {
     driveOutdated, clearDriveOutdated, checkDriveOutdated,
     selectClient, upsertTask, deleteTask, saveTaskOrder,
     getMembers, addSummary, loadClients, loadDocCache, indexingRef,
+    myRole,
   } = clientStore;
 
   // ── Sync ──────────────────────────────────────────────────────────────────
@@ -138,6 +149,26 @@ export default function App() {
     setSyncStatus({ color: '#EF9F27', label: 'chargement…' });
     await selectClient(client);
   }, [selectClient]); // eslint-disable-line
+
+  // ── Auto-join après login si token en attente ─────────────────────────────
+  useEffect(() => {
+    if (!user || !jwtToken) return;
+    const pending = localStorage.getItem('pendingInviteToken');
+    if (!pending) return;
+    localStorage.removeItem('pendingInviteToken');
+    callBackend({ action: 'join_client_via_token', token: pending }, jwtToken)
+      .then(data => {
+        if (data?.client) {
+          setClients(prev => {
+            const u = [data.client, ...prev];
+            localStorage.setItem('cc-sess', JSON.stringify(u));
+            return u;
+          });
+          handleSelectClient(data.client);
+        }
+      })
+      .catch(e => console.error('Auto-join failed:', e));
+  }, [user, jwtToken]); // eslint-disable-line
 
   function handleLeaveClient(e, clientId) {
     e.stopPropagation();
@@ -356,6 +387,7 @@ export default function App() {
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         client={currentClient}
+        myRole={myRole}
         onClientUpdate={handleClientUpdate}
         onSyncMessage={handleSyncMessage}
         onDeleteClient={id => {
@@ -408,8 +440,7 @@ export default function App() {
         }} />
 
       <JoinClientModal isOpen={joinClientOpen} onClose={() => setJoinClientOpen(false)}
-        existingIds={clients.map(c => c.id)}
-        currentUserId={currentUserId}
+        jwtToken={jwtToken}
         onJoined={client => {
           setClients(prev => { const u = [client, ...prev]; localStorage.setItem('cc-sess', JSON.stringify(u)); return u; });
           handleSelectClient(client);

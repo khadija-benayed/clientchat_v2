@@ -24,7 +24,7 @@ import { callBackend } from '../../lib/backend';
 import supabase from '../../lib/supabase';
 
 export default function ClientSettings({
-  isOpen, onClose, client, onClientUpdate, onSyncMessage,
+  isOpen, onClose, client, myRole, onClientUpdate, onSyncMessage,
   onDeleteClient, onOpenGmailPrefs, syncHook, onSyncComplete, indexingRef, jwtToken,
 }) {
   const [tab, setTab] = useState('params');
@@ -36,6 +36,14 @@ export default function ClientSettings({
   // Buffer des modifications en attente (flush à "Enregistrer")
   const [pendingUpdates, setPendingUpdates] = useState({});
 
+  // Invitation state
+  const [canInvite, setCanInvite] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState('member');
+  const [inviteLink, setInviteLink] = useState(null);
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [inviteError, setInviteError] = useState('');
+
   useEffect(() => {
     if (!isOpen || !client) return;
     // Initialiser le contexte manuel
@@ -44,7 +52,10 @@ export default function ClientSettings({
     setCtx(b ? '' : (client.context || '').replace(/\n*---\s*Contenu Drive[\s\S]*$/, '').trim());
     setPendingUpdates({});
     setTab('params');
-  }, [isOpen, client?.id]); // eslint-disable-line
+    // Vérifier si l'utilisateur peut inviter (basé sur myRole transmis par App)
+    setInviteEmail(''); setInviteRole('member'); setInviteLink(null); setInviteError('');
+    setCanInvite(myRole === 'owner' || myRole === 'admin');
+  }, [isOpen, client?.id, myRole]); // eslint-disable-line
 
   function getBrief(c) {
     if (!c?.context) return null;
@@ -122,6 +133,25 @@ export default function ClientSettings({
     onClose();
   }
 
+  async function createInvitation() {
+    setInviteLoading(true);
+    setInviteError('');
+    try {
+      const data = await callBackend({
+        action: 'create_invitation',
+        client_id: client.id,
+        invited_email: inviteEmail,
+        role: inviteRole,
+      }, jwtToken);
+      if (data.error) { setInviteError(data.error); return; }
+      setInviteLink(data.url);
+    } catch (e) {
+      setInviteError(e.message);
+    } finally {
+      setInviteLoading(false);
+    }
+  }
+
   const hasDrive = (() => {
     try { return JSON.parse(client?.sources || '[]').some(s => s.type === 'drive' && s.folder_id); } catch { return false; }
   })();
@@ -139,6 +169,51 @@ export default function ClientSettings({
       {tab === 'params' ? (
         <div id="settings-panel-params">
           <MembersSection client={client} onMembersChange={m => onClientUpdate?.({ members: m })} jwtToken={jwtToken} />
+
+          {canInvite && (
+            <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid var(--brd)' }}>
+              <label>Inviter un membre</label>
+              {!inviteLink ? (
+                <>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                    <input
+                      type="email"
+                      value={inviteEmail}
+                      onChange={e => setInviteEmail(e.target.value)}
+                      placeholder="email@domaine.com"
+                      style={{ flex: '1 1 180px', marginBottom: 0 }}
+                    />
+                    <select value={inviteRole} onChange={e => setInviteRole(e.target.value)} style={{ marginBottom: 0, flex: '0 0 auto' }}>
+                      <option value="member">Membre</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                    <button className="btn btn-sec" style={{ width: 'auto', padding: '7px 14px', flex: '0 0 auto' }}
+                      onClick={createInvitation} disabled={inviteLoading || !inviteEmail}>
+                      {inviteLoading ? '…' : 'Générer le lien'}
+                    </button>
+                  </div>
+                  {inviteError && <div className="err" style={{ marginTop: '6px' }}>{inviteError}</div>}
+                </>
+              ) : (
+                <>
+                  <input type="text" readOnly value={inviteLink} style={{ marginBottom: '6px', fontFamily: "'DM Mono', monospace", fontSize: '12px' }} />
+                  <div style={{ fontSize: '12px', color: 'var(--tx3)', marginBottom: '8px' }}>
+                    Expire dans 7 jours · Usage unique · Réservé à {inviteEmail}
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button className="btn btn-sec" style={{ width: 'auto', padding: '7px 14px' }}
+                      onClick={() => navigator.clipboard.writeText(inviteLink)}>
+                      Copier
+                    </button>
+                    <button className="btn btn-sec" style={{ width: 'auto', padding: '7px 14px' }}
+                      onClick={() => { setInviteLink(null); setInviteEmail(''); setInviteRole('member'); }}>
+                      Nouveau lien
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
 
           <label style={{ marginTop: '16px' }}>Contexte client</label>
           <textarea value={ctx} onChange={e => setCtx(e.target.value)}
@@ -170,14 +245,16 @@ export default function ClientSettings({
             )}
           </div>
 
-          {/* Danger zone */}
-          <div style={{ marginTop: '24px', paddingTop: '16px', borderTop: '1px solid var(--brd)' }}>
-            <button className="btn" style={{ width: 'auto', background: 'var(--rbg)', color: 'var(--red)', border: '1px solid var(--red)' }}
-              onClick={deleteClient}>
-              Supprimer ce client
-            </button>
-            <div className="note-txt" style={{ marginTop: '6px' }}>Supprime définitivement le client et toutes ses tâches. Irréversible.</div>
-          </div>
+          {/* Danger zone — owner uniquement */}
+          {myRole === 'owner' && (
+            <div style={{ marginTop: '24px', paddingTop: '16px', borderTop: '1px solid var(--brd)' }}>
+              <button className="btn" style={{ width: 'auto', background: 'var(--rbg)', color: 'var(--red)', border: '1px solid var(--red)' }}
+                onClick={deleteClient}>
+                Supprimer ce client
+              </button>
+              <div className="note-txt" style={{ marginTop: '6px' }}>Supprime définitivement le client et toutes ses tâches. Irréversible.</div>
+            </div>
+          )}
 
           <div className="modal-foot">
             <button className="btn btn-sec" onClick={onClose}>Annuler</button>
