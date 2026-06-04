@@ -1386,6 +1386,18 @@ async def sync_drive(body: dict, request: Request):
             _sync_state[state_key].update({"processed": processed, "ok": ok,
                                            "cached": cached, "errors": errors, **kw})
 
+        def _ignore(file_id, file_name, reason):
+            try:
+                sb.table('sync_ignored').upsert({
+                    'source_id':   file_id,
+                    'client_id':   client_id,
+                    'source_name': file_name,
+                    'reason':      reason,
+                    'ignored_at':  time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                }, on_conflict='source_id').execute()
+            except Exception:
+                pass
+
         for i in range(0, total, BATCH_SIZE):
             batch = files_to_process[i:i + BATCH_SIZE]
 
@@ -1447,23 +1459,27 @@ async def sync_drive(body: dict, request: Request):
                 if f["id"] in timed_out_ids:
                     errors += 1
                     _upd()
+                    _ignore(f['id'], f['name'], 'timeout')
                     yield f"data: {json.dumps({'file': f['name'], 'status': 'timeout', 'progress': processed, 'total': total})}\n\n"
                     continue
 
                 if result is None:
                     skipped += 1
+                    _ignore(f['id'], f['name'], 'skipped')
                     yield f"data: {json.dumps({'file': f['name'], 'mimeType': f['mimeType'], 'status': 'skipped', 'progress': processed, 'total': total})}\n\n"
                     continue
 
                 try:
                     content = result["content"]
                     if not content.strip():
+                        _ignore(f['id'], f['name'], 'empty')
                         yield f"data: {json.dumps({'file': f['name'], 'status': 'empty', 'progress': processed, 'total': total})}\n\n"
                         continue
 
                     is_csv = result["type"] == "csv"
                     chunks = chunk_csv(content) if is_csv else chunk_text(content)
                     if not chunks:
+                        _ignore(f['id'], f['name'], 'empty')
                         yield f"data: {json.dumps({'file': f['name'], 'status': 'empty', 'progress': processed, 'total': total})}\n\n"
                         continue
 
@@ -1514,9 +1530,17 @@ async def sync_drive(body: dict, request: Request):
                     yield f"data: {json.dumps({'file': f['name'], 'status': 'ok', 'chunks': len(chunks), 'progress': processed, 'total': total})}\n\n"
 
                 except Exception as e:
+                    err_str = str(e).lower()
+                    reason = (
+                        'ineligible_ai'  if 'ineligible' in err_str or 'generative ai' in err_str
+                        else 'export_error' if '403' in err_str or 'export' in err_str
+                        else 'timeout'    if 'timeout' in err_str or 'cancel' in err_str
+                        else 'error'
+                    )
+                    _ignore(f['id'], f['name'], reason)
                     errors += 1
                     _upd()
-                    yield f"data: {json.dumps({'file': f['name'], 'status': 'error', 'error': str(e), 'progress': processed, 'total': total})}\n\n"
+                    yield f"data: {json.dumps({'file': f['name'], 'status': 'ignored', 'reason': reason, 'progress': processed, 'total': total})}\n\n"
 
         _sync_state[state_key]["done"] = True
         yield f"data: {json.dumps({'status': 'done', 'total': total, 'ok': ok, 'cached': cached, 'errors': errors, 'purged': purged_count})}\n\n"

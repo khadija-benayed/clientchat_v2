@@ -99,7 +99,7 @@ export default function DriveSection({ client, onClientUpdate, onSyncMessage, sy
         // Générer la fiche client après sync
         const docsForBrief = await syncHook.generateBrief(client.id, onSyncMessage);
         if (docsForBrief) {
-          const data = await callBackend({ action: 'generate_brief', client_id: client.id, docs_content: docsForBrief }, jwtRef.current);
+          const data = await callBackend({ action: 'generate_brief', client_id: client.id, docs_content: docsForBrief, existing_brief: client?.context || null }, jwtRef.current);
           if (data.brief) {
             onClientUpdate?.({ context: JSON.stringify(data.brief) });
             onSyncMessage?.({ type: 'ok', message: '✓ Fiche client générée avec succès.' });

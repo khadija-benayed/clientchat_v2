@@ -225,11 +225,19 @@ export function useClients({ jwtToken, currentUserId }) {
         offset += PAGE;
       }
 
-      // 3. Compter les fichiers nouveaux / modifiés (tolérance 5 min)
+      // 3. Exclure les fichiers explicitement ignorés (ineligible, vides, exports échoués…)
+      const { data: ignoredRows } = await supabase
+        .from('sync_ignored')
+        .select('source_id')
+        .eq('client_id', client.id);
+      const ignoredSet = new Set((ignoredRows || []).map(r => r.source_id));
+
+      // 4. Compter les fichiers nouveaux / modifiés (tolérance 5 min)
       const TOLERANCE_MS = 24 * 60 * 60 * 1000;
       let newCount = 0, modifiedCount = 0;
       for (const f of metaData.files) {
         if (!EXPORTABLE_MIMETYPES.includes(f.mimeType)) continue;
+        if (ignoredSet.has(f.id)) continue;
         const lastIndexed = indexedMap[f.id];
         if (!lastIndexed) {
           newCount++;
@@ -242,7 +250,7 @@ export function useClients({ jwtToken, currentUserId }) {
 
       const count = newCount + modifiedCount;
       console.log('checkDriveOutdated — fichiers détectés:', metaData.files
-        .filter(f => EXPORTABLE_MIMETYPES.includes(f.mimeType))
+        .filter(f => EXPORTABLE_MIMETYPES.includes(f.mimeType) && !ignoredSet.has(f.id))
         .filter(f => {
           const lastIndexed = indexedMap[f.id];
           if (!lastIndexed) return true;
