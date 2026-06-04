@@ -128,7 +128,12 @@ body {
   transition: width .2s, min-width .2s;
   overflow: hidden;
 }
-.sidebar.collapsed { width: 0; min-width: 0; border-right: none; }
+.sidebar.collapsed { width: 40px; min-width: 40px; }
+.sidebar.collapsed .sb-brand,
+.sidebar.collapsed .sb-section,
+.sidebar.collapsed #cli-list,
+.sidebar.collapsed .sb-bot { display: none; }
+.sidebar.collapsed .sb-top { justify-content: center; border-bottom: none; padding: 10px 8px; }
 .sb-top {
   padding: 16px 14px 10px;
   display: flex; align-items: center; justify-content: space-between;
