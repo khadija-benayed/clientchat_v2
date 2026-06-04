@@ -35,6 +35,9 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
   const exchangeCountRef = useRef(0);
   const sessionSavedRef = useRef(false);
   const inactivityTimerRef = useRef(null);
+  // RAF — batche les mises à jour de texte streaming (1 re-render / frame au lieu de 1 / token)
+  const rafIdRef = useRef(null);
+  const pendingDisplayRef = useRef('');
 
   /** Remet le timer d'inactivité à zéro (sauvegarde après 10 min sans message) */
   function resetInactivityTimer() {
@@ -141,14 +144,27 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
                 id: streamId, role: 'a', text: display,
                 time: new Date(), streaming: true,
               }]);
-            } else {
-              setMessages(prev => prev.map(m =>
-                m.id === streamId ? { ...m, text: display } : m
-              ));
+              return;
+            }
+
+            // Batche les updates : 1 re-render par frame (≈16ms) au lieu de 1 par token
+            pendingDisplayRef.current = display;
+            if (!rafIdRef.current) {
+              rafIdRef.current = requestAnimationFrame(() => {
+                rafIdRef.current = null;
+                setMessages(prev => prev.map(m =>
+                  m.id === streamId ? { ...m, text: pendingDisplayRef.current } : m
+                ));
+              });
             }
           },
 
           onDone({ sources, tasks_json, reply_text }) {
+            // Annuler le RAF en attente pour ne pas écraser le texte final
+            if (rafIdRef.current) {
+              cancelAnimationFrame(rafIdRef.current);
+              rafIdRef.current = null;
+            }
             // Finaliser le message avec le texte propre et les sources
             setMessages(prev => prev.map(m =>
               m.id === streamId
@@ -183,6 +199,10 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
           },
 
           onError(msg) {
+            if (rafIdRef.current) {
+              cancelAnimationFrame(rafIdRef.current);
+              rafIdRef.current = null;
+            }
             if (firstToken) {
               addMessage('a', 'Erreur : ' + msg);
             } else {
@@ -197,6 +217,10 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
     } catch (_) {
       // Erreur déjà gérée dans onError
     } finally {
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
       setIsLoading(false);
       setIsSending(false);
     }
