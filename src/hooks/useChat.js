@@ -436,7 +436,7 @@ function buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr, task
   });
   const responseInstruction = isAction
     ? 'Réponds en français, concis et direct.'
-    : 'Réponds en français de façon précise et structurée. Pour les questions et analyses, développe ta réponse : sois complet, utilise des listes ou sections si utile, ne sois pas trop bref. Réponds directement à ce qui est demandé sans paraphraser la question.';
+    : 'Réponds en français de façon précise et structurée. Pour les questions et analyses, développe ta réponse : sois complet, utilise des listes ou sections si utile, ne sois pas trop bref. Réponds directement à ce qui est demandé sans paraphraser la question.\nFORMATAGE MARKDOWN — règles strictes : (1) N\'utilise JAMAIS les backticks (`) pour des noms de fichiers, noms de campagnes, paramètres UTM, noms d\'événements ou tout identifiant non-technique — écris-les en texte ordinaire. Les backticks sont réservés uniquement au code source (SQL, JSON, Python…). (2) N\'utilise le **gras** que pour les titres de sections ou les termes véritablement clés — pas pour surligner les noms de fichiers ou les identifiants. (3) Sois homogène : si tu italicises ou mets en gras un élément, applique la même règle à tous les éléments du même type dans toute ta réponse.';
   const part1Desc = isAction
     ? 'ta réponse courte confirmant l\'action effectuée (1-2 phrases max).'
     : 'ta réponse complète et précise. Cite tes sources entre crochets quand tu utilises un document : [NomFichier].';
