@@ -157,17 +157,21 @@ export default function App() {
     if (!pending) return;
     callBackend({ action: 'join_client_via_token', token: pending }, jwtToken)
       .then(data => {
-        localStorage.removeItem('pendingInviteToken');
         if (data?.client) {
+          localStorage.removeItem('pendingInviteToken');
           setClients(prev => {
             const u = [data.client, ...prev.filter(c => c.id !== data.client.id)];
             localStorage.setItem('cc-sess', JSON.stringify(u));
             return u;
           });
           handleSelectClient(data.client);
+        } else {
+          // 200 but no client key — unexpected payload, discard to avoid infinite retry
+          localStorage.removeItem('pendingInviteToken');
         }
       })
       .catch(e => console.error('Auto-join failed:', e));
+      // Don't remove token in catch — wrong-account 403 should let the user retry after re-login
   }, [user, jwtToken]); // eslint-disable-line
 
   function handleLeaveClient(e, clientId) {
@@ -433,7 +437,7 @@ export default function App() {
         currentUserId={currentUserId} jwtToken={jwtToken} />
 
       <NewClientModal isOpen={newClientOpen} onClose={() => setNewClientOpen(false)}
-        currentUserId={currentUserId}
+        currentUserId={currentUserId} jwtToken={jwtToken}
         onCreated={client => {
           setClients(prev => { const u = [client, ...prev.filter(c => c.id !== client.id)]; localStorage.setItem('cc-sess', JSON.stringify(u)); return u; });
           handleSelectClient(client);

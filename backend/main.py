@@ -21,7 +21,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from sentence_transformers import SentenceTransformer, CrossEncoder
-from supabase import create_client, Client
+from supabase import create_client as _make_sb_client, Client
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from google.oauth2 import service_account
@@ -133,7 +133,7 @@ API_KEY = os.environ.get("API_KEY", "")
 if not API_KEY:
     print("WARNING: API_KEY not set — authentication check disabled")
 
-sb: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+sb: Client = _make_sb_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 genai.configure(api_key=GOOGLE_API_KEY)
 
 # Désactive tous les filtres de sécurité — app B2B interne, contenu métier légitime
@@ -710,6 +710,8 @@ async def dispatcher(request: Request):
         return await upsert_task(body, user_id)
     if action == "delete_task":
         return await delete_task(body, user_id)
+    if action == "create_client":
+        return await create_client(body, user_id)
     if action == "delete_client":
         return await delete_client(body, user_id)
     if action == "create_invitation":
@@ -1170,9 +1172,9 @@ async def save_to_kb(body: dict):
 
 # ── client_members helpers ────────────────────────────────────────────────────
 def _is_owner(user_id: Optional[str], client_id: str) -> bool:
-    """Returns True if user_id is an owner of client_id. API-key callers (user_id=None) bypass."""
+    """Returns True if user_id is an owner of client_id. Unauthenticated callers (user_id=None) are never owners."""
     if not user_id:
-        return True
+        return False
     r = sb.table("client_members").select("role").eq("client_id", client_id).eq("member_id", user_id).maybe_single().execute()
     return bool(r.data and r.data.get("role") == "owner")
 
@@ -1180,6 +1182,32 @@ def _is_owner(user_id: Optional[str], client_id: str) -> bool:
 def _count_owners(client_id: str) -> int:
     r = sb.table("client_members").select("id", count="exact").eq("client_id", client_id).eq("role", "owner").execute()
     return r.count or 0
+
+
+def _append_member_to_client_json(client_id: str, user_id: str) -> None:
+    """Appends the user to clients.members JSON if not already present. Non-blocking best-effort."""
+    try:
+        tm = sb.table("team_members").select("full_name, email").eq("id", user_id).maybe_single().execute()
+        if not tm.data:
+            return
+        row = sb.table("clients").select("members").eq("id", client_id).maybe_single().execute()
+        if not row.data:
+            return
+        current = row.data.get("members") or []
+        if isinstance(current, str):
+            current = json.loads(current) if current else []
+        if any(m.get("member_id") == user_id for m in current):
+            return
+        used = {m.get("initials", "") for m in current}
+        parts = (tm.data.get("full_name") or tm.data.get("email") or "?").strip().split()
+        base = (parts[0][0] + parts[1][0]).upper() if len(parts) >= 2 else parts[0][:2].upper() if parts else "?"
+        ini, n = base, 2
+        while ini in used:
+            ini = base + str(n); n += 1
+        current.append({"initials": ini, "name": tm.data.get("full_name") or tm.data.get("email") or "?", "member_id": user_id})
+        sb.table("clients").update({"members": json.dumps(current)}).eq("id", client_id).execute()
+    except Exception:
+        pass
 
 
 async def _assert_role(user_id: Optional[str], client_id: str, allowed_roles: list):
@@ -1347,6 +1375,7 @@ async def claim_ownership(body: dict, user_id: Optional[str]):
         ).execute()
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+    _append_member_to_client_json(client_id, user_id)
     return {"claimed": True}
 
 
@@ -1389,6 +1418,32 @@ async def delete_task(body: dict, user_id: Optional[str]):
 
 
 # ── delete_client ──────────────────────────────────────────────────────────────
+async def create_client(body: dict, user_id: Optional[str]):
+    """Creates a client row + initial client_members rows atomically. Requires JWT."""
+    if not user_id:
+        return JSONResponse({"error": "JWT requis pour créer un client"}, status_code=401)
+    name = (body.get("name") or "").strip()
+    members_json = body.get("members_json", [])
+    member_rows  = body.get("member_rows", [])   # [{member_id, role}]
+    if not name:
+        return JSONResponse({"error": "Le nom du client est requis"}, status_code=400)
+    try:
+        res = sb.table("clients").insert({
+            "name": name,
+            "members": json.dumps(members_json),
+        }).execute()
+        if not res.data:
+            return JSONResponse({"error": "Erreur création client"}, status_code=500)
+        client = res.data[0]
+        rows = [{"client_id": client["id"], "member_id": r["member_id"], "role": r["role"]}
+                for r in member_rows if r.get("member_id")]
+        if rows:
+            sb.table("client_members").insert(rows).execute()
+        return JSONResponse({"client": client})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 async def delete_client(body: dict, user_id: Optional[str]):
     client_id = body.get("client_id")
     if not client_id:
@@ -1411,11 +1466,11 @@ async def create_invitation(body: dict, user_id: Optional[str]):
     if role not in ("owner", "member"):
         return JSONResponse({"error": "Rôle invalide — valeurs acceptées : owner, member"}, status_code=400)
 
-    # Seul un owner peut inviter un autre owner
+    # Owner invitations require owner role; member invitations allow owner OR member to invite
     if role == "owner":
         await _assert_role(user_id, client_id, ["owner"])
     else:
-        await _assert_role(user_id, client_id, ["owner"])
+        await _assert_role(user_id, client_id, ["owner", "member"])
 
     inv = sb.table("client_invitations").insert({
         "client_id":     client_id,
@@ -1461,7 +1516,7 @@ async def join_client_via_token(body: dict, user_id: Optional[str]):
 
     if user_email != inv_data["invited_email"]:
         return JSONResponse(
-            {"error": f"Ce lien est réservé à {inv_data['invited_email']}"},
+            {"error": "Ce lien d'invitation ne correspond pas à votre compte"},
             status_code=403,
         )
 
@@ -1476,11 +1531,18 @@ async def join_client_via_token(body: dict, user_id: Optional[str]):
         return JSONResponse({"error": "Invitation déjà utilisée"}, status_code=409)
 
     # Ajouter le membre (upsert — idempotent si doublon résiduel)
-    sb.table("client_members").upsert({
-        "client_id": inv_data["client_id"],
-        "member_id": user_id,
-        "role":      inv_data["role"],
-    }, on_conflict="client_id,member_id").execute()
+    try:
+        sb.table("client_members").upsert({
+            "client_id": inv_data["client_id"],
+            "member_id": user_id,
+            "role":      inv_data["role"],
+        }, on_conflict="client_id,member_id").execute()
+    except Exception:
+        # Rollback: libérer le token pour permettre une nouvelle tentative
+        sb.table("client_invitations").update({"used_at": None, "used_by": None}).eq("id", inv_data["id"]).execute()
+        return JSONResponse({"error": "Erreur lors de l'ajout du membre, réessaie"}, status_code=500)
+
+    _append_member_to_client_json(inv_data["client_id"], user_id)
 
     client = sb.table("clients").select("*").eq("id", inv_data["client_id"]).maybe_single().execute()
     if not client.data:

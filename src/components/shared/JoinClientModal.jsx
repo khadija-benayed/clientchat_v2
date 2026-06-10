@@ -16,9 +16,8 @@ export default function JoinClientModal({ isOpen, onClose, jwtToken, onJoined })
   }, [isOpen]);
 
   async function join() {
-    const token = input.includes('/join/')
-      ? input.split('/join/').pop().trim()
-      : input.trim();
+    const raw = input.includes('/join/') ? input.split('/join/').pop() : input;
+    const token = raw.split('?')[0].split('#')[0].trim();
     if (!token) { setError('Saisis un lien ou un code d\'invitation.'); return; }
     setError(''); setLoading(true);
     try {

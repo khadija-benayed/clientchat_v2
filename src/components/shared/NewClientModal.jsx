@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import Modal from './Modal';
 import supabase from '../../lib/supabase';
+import { callBackend } from '../../lib/backend';
 
 function computeInitials(fullName, email) {
   const src = fullName || email || '?';
@@ -9,7 +10,7 @@ function computeInitials(fullName, email) {
   return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
-export default function NewClientModal({ isOpen, onClose, currentUserId, onCreated }) {
+export default function NewClientModal({ isOpen, onClose, currentUserId, jwtToken, onCreated }) {
   const [name, setName] = useState('');
   const [teamMembers, setTeamMembers] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
@@ -43,23 +44,22 @@ export default function NewClientModal({ isOpen, onClose, currentUserId, onCreat
         return { initials: ini, name: m.full_name || m.email, member_id: m.id };
       });
 
-      const { data, error: err } = await supabase.from('clients')
-        .insert({ name: name.trim(), members: JSON.stringify(membersJson) })
-        .select().single();
-      if (err) { setError(err.message); return; }
-
-      // Add client_members: creator as owner, others as member
-      const rows = [
-        { client_id: data.id, member_id: currentUserId, role: 'owner' },
-        ...selectedIds.filter(id => id !== currentUserId).map(id => ({
-          client_id: data.id, member_id: id, role: 'member',
-        })),
+      const memberRows = [
+        { member_id: currentUserId, role: 'owner' },
+        ...selectedIds.filter(id => id !== currentUserId).map(id => ({ member_id: id, role: 'member' })),
       ];
-      await supabase.from('client_members').insert(rows)
-        .then(() => {}).catch(e => console.warn('NewClient client_members:', e.message));
+
+      const result = await callBackend({
+        action: 'create_client',
+        name: name.trim(),
+        members_json: membersJson,
+        member_rows: memberRows,
+      }, jwtToken);
+
+      if (result.error) { setError(result.error); return; }
 
       setName(''); setSelectedIds([]);
-      onCreated?.(data); onClose();
+      onCreated?.(result.client); onClose();
     } catch (e) {
       setError(e.message || 'Erreur inattendue.');
     } finally {

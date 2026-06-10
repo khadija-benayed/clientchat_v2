@@ -310,12 +310,25 @@ ALTER TABLE document_chunks   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE embedding_logs    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE agency_knowledge  ENABLE ROW LEVEL SECURITY;
 
--- clients
-CREATE POLICY "allow all clients"    ON clients FOR ALL    USING (true) WITH CHECK (true);
-CREATE POLICY "clients_delete"       ON clients FOR DELETE USING (true);
-CREATE POLICY "clients_insert"       ON clients FOR INSERT WITH CHECK (true);
-CREATE POLICY "clients_select_list"  ON clients FOR SELECT USING (true);
-CREATE POLICY "clients_update"       ON clients FOR UPDATE USING (true) WITH CHECK (true);
+-- clients (DROP legacy open policies before recreating with proper guards)
+DROP POLICY IF EXISTS "allow all clients"   ON clients;
+DROP POLICY IF EXISTS "clients_delete"      ON clients;
+DROP POLICY IF EXISTS "clients_insert"      ON clients;
+DROP POLICY IF EXISTS "clients_select_list" ON clients;
+DROP POLICY IF EXISTS "clients_update"      ON clients;
+-- Any authenticated user can create a client (the backend create_client action handles this, but keep for edge cases)
+CREATE POLICY "clients_insert" ON clients FOR INSERT
+  WITH CHECK (auth.uid() IS NOT NULL);
+-- Only members of the client can read it
+CREATE POLICY "clients_select" ON clients FOR SELECT
+  USING (EXISTS (SELECT 1 FROM client_members WHERE client_id = clients.id AND member_id = auth.uid()));
+-- Any member (owner or member) can update client settings
+CREATE POLICY "clients_update" ON clients FOR UPDATE
+  USING (EXISTS (SELECT 1 FROM client_members WHERE client_id = clients.id AND member_id = auth.uid()))
+  WITH CHECK (EXISTS (SELECT 1 FROM client_members WHERE client_id = clients.id AND member_id = auth.uid()));
+-- Only owners can delete a client (backend enforces this too, belt-and-suspenders)
+CREATE POLICY "clients_delete" ON clients FOR DELETE
+  USING (EXISTS (SELECT 1 FROM client_members WHERE client_id = clients.id AND member_id = auth.uid() AND role = 'owner'));
 
 -- tasks
 CREATE POLICY "allow all tasks"        ON tasks FOR ALL    USING (true) WITH CHECK (true);
@@ -354,6 +367,18 @@ CREATE POLICY "embedding_logs_service_role" ON embedding_logs FOR ALL
 CREATE POLICY "agency_knowledge_read"   ON agency_knowledge FOR SELECT USING (true);
 CREATE POLICY "agency_knowledge_insert" ON agency_knowledge FOR INSERT WITH CHECK (true);
 CREATE POLICY "agency_knowledge_delete" ON agency_knowledge FOR DELETE USING (true);
+
+-- client_members: all writes go through backend (service_role); JS SDK can only read own rows
+ALTER TABLE client_members ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "client_members_select" ON client_members FOR SELECT
+  USING (member_id = auth.uid());
+CREATE POLICY "client_members_service_role" ON client_members FOR ALL
+  USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
+
+-- client_invitations: backend-only access (no JS SDK queries this table)
+ALTER TABLE client_invitations ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "client_invitations_service_role" ON client_invitations FOR ALL
+  USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 -- ── Realtime ──────────────────────────────────────────────────────────────────
 -- subscribeRT() dans db.js s'abonne aux changements sur tasks pour le client actif.
