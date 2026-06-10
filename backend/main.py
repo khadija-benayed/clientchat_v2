@@ -128,7 +128,10 @@ sb: Client = _make_sb_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 genai.configure(api_key=GOOGLE_API_KEY)
 
 # Désactive tous les filtres de sécurité — app B2B interne, contenu métier légitime
-# (sans ça, Gemini bloque sur du contenu cosmétique/bien-être : finish_reason=SAFETY)
+# Choix assumé : désactive tous les filtres Gemini.
+# Justification : outil B2B interne (agence cosmétique/bien-être), accès restreint par JWT Supabase,
+# contenu métier légitime bloqué à tort par les filtres par défaut (finish_reason=SAFETY).
+# À réévaluer si l'app devient accessible au public.
 _SAFETY_OFF = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
