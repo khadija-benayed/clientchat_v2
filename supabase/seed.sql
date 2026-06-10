@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   blocker     text,
   note        text,
   updated_at  timestamptz             DEFAULT now(),
-  due_date    date
+  due_date    date,
+  scope       text                    DEFAULT 'internal' -- 'internal' | 'external' | 'uncertain'
 );
 
 -- session_summaries : résumés auto générés par Claude à chaque session
@@ -403,3 +404,7 @@ CREATE POLICY "client_invitations_service_role" ON client_invitations FOR ALL
 -- ── Realtime ──────────────────────────────────────────────────────────────────
 -- subscribeRT() dans db.js s'abonne aux changements sur tasks pour le client actif.
 ALTER PUBLICATION supabase_realtime ADD TABLE tasks;
+
+-- ── Migration : colonne scope sur tasks ───────────────────────────────────────
+-- À exécuter en SQL Editor Supabase si la table existe déjà :
+-- ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scope text DEFAULT 'internal';

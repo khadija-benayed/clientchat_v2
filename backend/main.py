@@ -702,6 +702,8 @@ async def dispatcher(request: Request):
         return await claim_ownership(body, user_id)
     if action == "upsert_task":
         return await upsert_task(body, user_id)
+    if action == "propose_cr_tasks":
+        return await propose_cr_tasks(body, user_id)
     if action == "delete_task":
         return await delete_task(body, user_id)
     if action == "create_client":
@@ -875,6 +877,46 @@ _BRIEF_SCHEMA = {
         "notes":      {"type": "string"},
     },
     "required": ["secteur", "enjeux_principaux", "kpis", "equipe", "historique", "notes"],
+}
+
+
+# ── propose_cr_tasks ─────────────────────────────────────────────────────────
+_CR_PROPOSAL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "summary":               {"type": "string"},
+                    "match_type":            {"type": "string"},
+                    "task_id":               {"type": "integer", "nullable": True},
+                    "scope":                 {"type": "string"},
+                    "fields": {
+                        "type": "object",
+                        "properties": {
+                            "title":    {"type": "string",  "nullable": True},
+                            "assignee": {"type": "string",  "nullable": True},
+                            "prio":     {"type": "string",  "nullable": True},
+                            "status":   {"type": "string",  "nullable": True},
+                            "due_date": {"type": "string",  "nullable": True},
+                            "note":     {"type": "string",  "nullable": True},
+                        },
+                        "required": ["title", "assignee", "prio", "status", "due_date", "note"],
+                    },
+                    "confidence":             {"type": "number"},
+                    "needs_clarification":    {"type": "boolean"},
+                    "clarification_question": {"type": "string", "nullable": True},
+                },
+                "required": [
+                    "summary", "match_type", "scope", "fields",
+                    "confidence", "needs_clarification", "clarification_question",
+                ],
+            },
+        }
+    },
+    "required": ["items"],
 }
 
 
@@ -1407,6 +1449,7 @@ async def upsert_task(body: dict, user_id: Optional[str]):
             "status": task.get("status"), "assignee": task.get("assignee"),
             "blocker": task.get("blocker"), "note": task.get("note"),
             "due_date": task.get("due_date") or None,
+            "scope": task.get("scope") or "internal",
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }).eq("id", task_id).eq("client_id", client_id).execute()
     else:
@@ -1415,9 +1458,145 @@ async def upsert_task(body: dict, user_id: Optional[str]):
             "prio": task.get("prio") or "P2", "status": task.get("status") or "todo",
             "assignee": task.get("assignee") or "", "blocker": task.get("blocker") or None,
             "note": task.get("note") or None, "due_date": task.get("due_date") or None,
+            "scope": task.get("scope") or "internal",
         }).execute()
         task = {**task, "id": result.data[0]["id"]}
     return JSONResponse({"task": task})
+
+
+async def propose_cr_tasks(body: dict, user_id: Optional[str]):
+    client_id = body.get("client_id")
+    cr_text = (body.get("cr_text") or "").strip()
+    if not client_id or not cr_text:
+        return JSONResponse({"error": "client_id et cr_text requis"}, status_code=400)
+    await _assert_role(user_id, client_id, ["owner", "member"])
+
+    # Open tasks (not done)
+    tasks_res = (
+        sb.table("tasks")
+        .select("id, title, status, assignee, prio, due_date")
+        .eq("client_id", client_id)
+        .neq("status", "done")
+        .execute()
+    )
+    tasks_list = tasks_res.data or []
+
+    # Client row: members JSON + brief context
+    client_res = (
+        sb.table("clients").select("members, context")
+        .eq("id", client_id).maybe_single().execute()
+    )
+    client_data = client_res.data or {}
+
+    # Smart Bees members (initials + name) for this client
+    sb_members = []
+    try:
+        raw = client_data.get("members") or "[]"
+        sb_members = json.loads(raw) if isinstance(raw, str) else (raw or [])
+    except Exception:
+        sb_members = []
+
+    # Client-side contacts from the brief (equipe), if brief exists
+    client_contacts = []
+    try:
+        ctx = client_data.get("context") or ""
+        if ctx:
+            brief = json.loads(ctx)
+            for m in brief.get("equipe", []):
+                name = f"{m.get('prenom', '')} {m.get('nom') or ''}".strip()
+                if name:
+                    client_contacts.append({
+                        "name": name,
+                        "role": m.get("role") or "",
+                    })
+    except Exception:
+        pass
+
+    sb_block = "\n".join(
+        f"- {m.get('initials', '?')} : {m.get('name', '?')}"
+        for m in sb_members
+    ) or "(aucun membre SB enregistré pour ce client)"
+
+    tasks_block = "\n".join(
+        f"- ID {t['id']} : {t['title']}"
+        + (f" [{t['status']}]" if t.get("status") else "")
+        + (f" — {t['assignee']}" if t.get("assignee") else "")
+        for t in tasks_list
+    ) or "(aucune tâche ouverte)"
+
+    contacts_block = ""
+    if client_contacts:
+        lines = "\n".join(
+            f"- {c['name']}" + (f" ({c['role']})" if c.get("role") else "")
+            for c in client_contacts
+        )
+        contacts_block = f"\nCONTACTS CÔTÉ CLIENT (actions leur étant assignées → scope=external) :\n{lines}\n"
+
+    prompt = (
+        "Tu es un assistant qui extrait des actions actionnables d'un compte-rendu de réunion "
+        "pour une agence data/marketing.\n\n"
+        f"ÉQUIPE SMART BEES (internes — seuls ceux-ci peuvent recevoir des tâches via 'assignee') :\n{sb_block}\n"
+        + contacts_block
+        + f"\nTÂCHES EN COURS (à mettre à jour si le CR les mentionne) :\n{tasks_block}\n\n"
+        f"COMPTE-RENDU :\n{cr_text}\n\n"
+        "Extrais TOUTES les actions actionnables mentionnées dans ce CR. Pour chaque action :\n"
+        "- summary : résumé court et précis de l'action\n"
+        "- match_type : 'update_existing' si elle correspond à une tâche en cours (fournis task_id), "
+        "'new' pour une nouvelle tâche, 'uncertain' si tu n'es pas sûr\n"
+        "- task_id : ID de la tâche existante si match_type=update_existing, null sinon — "
+        "NE JAMAIS inventer un ID\n"
+        "- scope : 'internal' si c'est du travail Smart Bees, 'external' si c'est une action "
+        "côté client à suivre, 'uncertain' si non déterminable\n"
+        "- fields : uniquement ce qui est dit EXPLICITEMENT dans le CR (null pour les autres) :\n"
+        "  • title : titre de la tâche\n"
+        "  • assignee : initiales SB UNIQUEMENT si la personne est dans la liste SB ci-dessus, null sinon\n"
+        "  • prio : 'P1'/'P2'/'P3' si mentionné\n"
+        "  • status : 'todo'/'inprogress'/'blocked'/'waiting'/'done' si le statut change\n"
+        "  • due_date : date en YYYY-MM-DD si mentionnée\n"
+        "  • note : information additionnelle à noter, null si rien\n"
+        "- confidence : 0.0 à 1.0\n"
+        "- needs_clarification : true si une info cruciale manque\n"
+        "- clarification_question : la question à poser, null si needs_clarification=false\n\n"
+        "Règles strictes :\n"
+        "1. Ne jamais inventer un task_id — si incertain → match_type='uncertain', task_id=null\n"
+        "2. assignee = initiales SB uniquement depuis la liste fournie — null si inconnu\n"
+        "3. Ne remplir fields que sur la base de ce qui est dit explicitement dans le CR\n"
+        "4. Préférer needs_clarification=true plutôt que trancher avec peu d'info\n"
+        "5. Ignorer les échanges purement contextuels sans action concrète"
+    )
+
+    try:
+        gemini = genai.GenerativeModel(
+            model_name=GEMINI_FLASH,
+            generation_config={
+                "max_output_tokens": 4096,
+                "response_mime_type": "application/json",
+                "response_schema": _CR_PROPOSAL_SCHEMA,
+            },
+            safety_settings=_SAFETY_OFF,
+        )
+        response = gemini.generate_content(prompt)
+        raw_text = _gemini_text(response)
+    except Exception as e:
+        return JSONResponse({"error": f"Erreur IA (CR) : {e}"}, status_code=502)
+
+    try:
+        proposal = json.loads(raw_text)
+    except Exception:
+        return JSONResponse(
+            {"error": "L'IA n'a pas retourné un JSON valide. Réessaie."},
+            status_code=422,
+        )
+
+    # Invalidate task_ids that don't exist in this client's open tasks
+    valid_ids = {t["id"] for t in tasks_list}
+    for item in proposal.get("items", []):
+        tid = item.get("task_id")
+        if tid and tid not in valid_ids:
+            item["match_type"] = "uncertain"
+            item["task_id"] = None
+
+    return JSONResponse(proposal)
 
 
 # ── delete_task ────────────────────────────────────────────────────────────────

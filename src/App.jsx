@@ -380,6 +380,22 @@ export default function App() {
                   const saved = await upsertTask({ ...task, client_id: currentClient.id });
                   if (saved) setTasks(prev => [saved, ...prev]);
                 }}
+                currentClient={currentClient}
+                jwtToken={jwtToken}
+                onApplyCRItems={async (items) => {
+                  const results = await Promise.all(
+                    items.map(task => upsertTask({ ...task, client_id: currentClient.id }))
+                  );
+                  setTasks(prev => {
+                    let updated = [...prev];
+                    results.filter(Boolean).forEach(saved => {
+                      const idx = updated.findIndex(t => t.id === saved.id);
+                      if (idx >= 0) updated[idx] = saved;
+                      else updated = [saved, ...updated];
+                    });
+                    return updated;
+                  });
+                }}
               />
             </div>
           </>

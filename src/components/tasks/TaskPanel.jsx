@@ -1,18 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
-import { Calendar, Plus } from 'lucide-react';
+import { Calendar, FileText, Plus } from 'lucide-react';
 import TaskFilters from './TaskFilters';
 import TaskBoard from './TaskBoard';
 import Modal from '../shared/Modal';
+import CRImportModal from './CRImportModal';
 
 export default function TaskPanel({
   tasks, members, activeFilter, onFilterChange,
   highlightedIds, onTaskClick, onTaskReorder, onOpenCalendar, onAddTask,
+  currentClient, jwtToken, onApplyCRItems,
 }) {
   const panelRef = useRef(null);
   const resizerRef = useRef(null);
 
   // Modal "nouvelle tâche"
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [isCROpen, setIsCROpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newStatus, setNewStatus] = useState('todo');
   const [newPrio, setNewPrio] = useState('P2');
@@ -103,6 +106,13 @@ export default function TaskPanel({
             <span className="todo-title">To-do</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <button
+                className="btn-cal"
+                onClick={() => setIsCROpen(true)}
+                title="Importer un compte-rendu"
+              >
+                <FileText size={14} />
+              </button>
+              <button
                 className="btn-add-task"
                 onClick={openAddModal}
                 title="Nouvelle tâche"
@@ -132,6 +142,16 @@ export default function TaskPanel({
           />
         </div>
       </div>
+
+      <CRImportModal
+        isOpen={isCROpen}
+        onClose={() => setIsCROpen(false)}
+        currentClient={currentClient}
+        members={members}
+        tasks={tasks}
+        jwtToken={jwtToken}
+        onApply={onApplyCRItems}
+      />
 
       <Modal
         isOpen={isAddOpen}
