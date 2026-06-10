@@ -57,6 +57,8 @@ export function useClients({ jwtToken, currentUserId }) {
   // Référence au canal Realtime Supabase (pas dans le state car pas besoin de re-rendu)
   const rtChanRef = useRef(null);
   const indexingRef = useRef(false);
+  // Guard contre les race conditions lors de clics rapides entre clients
+  const activeClientIdRef = useRef(null);
 
   // ── Chargement initial des clients depuis le backend ─────────────────────
   const loadClients = useCallback(async () => {
@@ -80,9 +82,14 @@ export function useClients({ jwtToken, currentUserId }) {
 
   // ── Sélection d'un client ─────────────────────────────────────────────────
   const selectClient = useCallback(async (client) => {
+    activeClientIdRef.current = client.id;
+
     // Recharger les données fraîches depuis Supabase (nom, context, sources…)
     const { data } = await supabase.from('clients').select('*').eq('id', client.id).single();
     const freshClient = data || client;
+
+    // Abandonner si une sélection plus récente a démarré pendant le fetch
+    if (activeClientIdRef.current !== client.id) return;
     setCurrentClient(freshClient);
 
     // Charger le rôle du membre connecté sur ce client
@@ -94,7 +101,9 @@ export function useClients({ jwtToken, currentUserId }) {
         .eq('client_id', freshClient.id)
         .eq('member_id', currentUserId)
         .maybeSingle();
-      setMyRole(myMembership?.role || 'member');
+      if (activeClientIdRef.current === client.id) {
+        setMyRole(myMembership?.role || 'member');
+      }
     }
 
     // Mettre à jour la liste locale + localStorage

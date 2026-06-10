@@ -1462,7 +1462,9 @@ async def join_client_via_token(body: dict, user_id: Optional[str]):
         "role":      inv_data["role"],
     }, on_conflict="client_id,member_id").execute()
 
-    client = sb.table("clients").select("*").eq("id", inv_data["client_id"]).single().execute()
+    client = sb.table("clients").select("*").eq("id", inv_data["client_id"]).maybe_single().execute()
+    if not client.data:
+        return JSONResponse({"error": "L'espace client n'existe plus"}, status_code=410)
     return JSONResponse({"client": client.data})
 
 

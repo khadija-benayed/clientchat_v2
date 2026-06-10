@@ -155,9 +155,9 @@ export default function App() {
     if (!user || !jwtToken) return;
     const pending = localStorage.getItem('pendingInviteToken');
     if (!pending) return;
-    localStorage.removeItem('pendingInviteToken');
     callBackend({ action: 'join_client_via_token', token: pending }, jwtToken)
       .then(data => {
+        localStorage.removeItem('pendingInviteToken');
         if (data?.client) {
           setClients(prev => {
             const u = [data.client, ...prev.filter(c => c.id !== data.client.id)];
