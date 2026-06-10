@@ -95,14 +95,15 @@ export function useClients({ jwtToken, currentUserId }) {
     // Charger le rôle du membre connecté sur ce client
     setMyRole('member');
     if (currentUserId) {
-      const { data: myMembership } = await supabase
+      const { data: myMembership, error: roleErr } = await supabase
         .from('client_members')
         .select('role')
         .eq('client_id', freshClient.id)
         .eq('member_id', currentUserId)
         .maybeSingle();
       if (activeClientIdRef.current === client.id) {
-        setMyRole(myMembership?.role || 'member');
+        if (roleErr) console.warn('Erreur chargement rôle membre:', roleErr.message);
+        else setMyRole(myMembership?.role || 'member');
       }
     }
 
@@ -227,12 +228,13 @@ export function useClients({ jwtToken, currentUserId }) {
       const PAGE = 1000;
       let offset = 0;
       while (true) {
-        const { data: rows } = await supabase
+        const { data: rows, error: chunksErr } = await supabase
           .from('document_chunks')
           .select('source_id, last_indexed_at')
           .eq('client_id', client.id)
           .not('source_id', 'is', null)
           .range(offset, offset + PAGE - 1);
+        if (chunksErr) { console.warn('checkDriveOutdated document_chunks:', chunksErr.message); break; }
         if (!rows?.length) break;
         for (const row of rows) {
           if (!indexedMap[row.source_id] || row.last_indexed_at > indexedMap[row.source_id])
@@ -246,11 +248,12 @@ export function useClients({ jwtToken, currentUserId }) {
       const ignoredSet = new Set();
       let ignoredOffset = 0;
       while (true) {
-        const { data: ignoredRows } = await supabase
+        const { data: ignoredRows, error: ignoredErr } = await supabase
           .from('sync_ignored')
           .select('source_id')
           .eq('client_id', client.id)
           .range(ignoredOffset, ignoredOffset + PAGE - 1);
+        if (ignoredErr) { console.warn('checkDriveOutdated sync_ignored:', ignoredErr.message); break; }
         if (!ignoredRows?.length) break;
         for (const row of ignoredRows) ignoredSet.add(row.source_id);
         if (ignoredRows.length < PAGE) break;
