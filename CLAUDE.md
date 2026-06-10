@@ -112,7 +112,6 @@ Injectées dans Cloud Run (jamais dans le frontend) :
 | `GOOGLE_API_KEY` | Clé API Google AI (Gemini 2.5 Flash / Pro) |
 | `ANTHROPIC_KEY` | Clé API Anthropic (Claude Haiku 4.5 — OCR PDF, extract_worker.py uniquement) |
 | `GOOGLE_SA_KEY` | JSON service account Google Drive + Gmail (stringifié) |
-| `API_KEY` | Clé HTTP legacy (fallback transition, optionnelle) |
 
 ## Actions backend disponibles
 
@@ -120,16 +119,16 @@ Toutes via `POST BACKEND_URL` avec `{ "action": "...", ... }` + header `Authoriz
 
 | Action | Description |
 |--------|-------------|
-| `chat` | Chat Claude avec RAG (Sonnet) |
-| `task_action` | Chat Claude sans RAG — actions tâches (Haiku) |
+| `chat` | Chat Gemini 2.5 Flash avec RAG — passer `message_type: "task_action"` dans le payload pour les actions tâches (sans RAG, tokens limités) |
 | `me` | Infos de l'utilisateur connecté + liste de ses clients assignés |
 | `index_source` | Chunk + embed + persist un document |
 | `list_drive_metadata` | Liste métadonnées d'un dossier Drive |
 | `export_single_file` | Exporte le contenu d'un fichier Drive |
 | `save_to_kb` | Sauvegarde un insight en agency_knowledge |
-| `summarize_session` | Résumé de session (Haiku) |
-| `generate_brief` | Fiche client JSON structurée (Sonnet) |
+| `summarize_session` | Résumé de session (Gemini Flash) |
+| `generate_brief` | Fiche client JSON structurée (Gemini Pro) |
 | `delete_source_chunks` | Purge les chunks d'une source |
+| `create_client` | Crée un client + insère les client_members atomiquement (JWT requis) |
 | `get_client_members` | Liste membres + team_members disponibles + flag is_owner |
 | `add_client_member` | Ajoute un team_member à un client (owner requis) |
 | `remove_client_member` | Retire un membre (owner requis, dernier owner bloqué) |
