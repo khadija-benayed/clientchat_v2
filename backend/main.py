@@ -103,12 +103,6 @@ async def auth_middleware(request: Request, call_next):
                 return JSONResponse({"error": "unauthorized"}, status_code=401, headers=_CORS_HEADERS)
         except Exception:
             return JSONResponse({"error": "unauthorized"}, status_code=401, headers=_CORS_HEADERS)
-    elif API_KEY and request.headers.get("X-Api-Key") == API_KEY:
-        # Transition fallback — legacy API key still accepted for 2 weeks
-        user_id = None
-    elif not API_KEY:
-        # Dev mode: no auth configured
-        user_id = None
     else:
         return JSONResponse({"error": "unauthorized"}, status_code=401, headers=_CORS_HEADERS)
 
@@ -129,9 +123,6 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 if not GOOGLE_API_KEY:
     print("WARNING: GOOGLE_API_KEY not set — Gemini calls will fail")
 GOOGLE_SA_KEY = os.environ.get("GOOGLE_SA_KEY")  # JSON string
-API_KEY = os.environ.get("API_KEY", "")
-if not API_KEY:
-    print("WARNING: API_KEY not set — authentication check disabled")
 
 sb: Client = _make_sb_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 genai.configure(api_key=GOOGLE_API_KEY)
@@ -1211,10 +1202,9 @@ def _append_member_to_client_json(client_id: str, user_id: str) -> None:
 
 
 async def _assert_role(user_id: Optional[str], client_id: str, allowed_roles: list):
-    """Lève HTTP 403 si user_id n'est pas membre de client_id avec l'un des rôles autorisés.
-    Les appels sans user_id (clé API legacy) passent sans vérification."""
+    """Lève HTTP 403 si user_id n'est pas membre de client_id avec l'un des rôles autorisés."""
     if not user_id:
-        return
+        raise HTTPException(status_code=401, detail="Non authentifié")
     row = sb.table("client_members") \
         .select("role") \
         .eq("member_id", user_id) \
