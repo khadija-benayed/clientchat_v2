@@ -330,17 +330,29 @@ CREATE POLICY "clients_update" ON clients FOR UPDATE
 CREATE POLICY "clients_delete" ON clients FOR DELETE
   USING (EXISTS (SELECT 1 FROM client_members WHERE client_id = clients.id AND member_id = auth.uid() AND role = 'owner'));
 
--- tasks
-CREATE POLICY "allow all tasks"        ON tasks FOR ALL    USING (true) WITH CHECK (true);
-CREATE POLICY "tasks_delete_by_client" ON tasks FOR DELETE USING (true);
-CREATE POLICY "tasks_insert_by_client" ON tasks FOR INSERT WITH CHECK (true);
-CREATE POLICY "tasks_select_by_client" ON tasks FOR SELECT USING (true);
-CREATE POLICY "tasks_update_by_client" ON tasks FOR UPDATE USING (true) WITH CHECK (true);
+-- tasks (DROP legacy open policies)
+DROP POLICY IF EXISTS "allow all tasks"        ON tasks;
+DROP POLICY IF EXISTS "tasks_delete_by_client" ON tasks;
+DROP POLICY IF EXISTS "tasks_insert_by_client" ON tasks;
+DROP POLICY IF EXISTS "tasks_select_by_client" ON tasks;
+DROP POLICY IF EXISTS "tasks_update_by_client" ON tasks;
+-- Members can read tasks of their clients (covers Realtime subscription too)
+CREATE POLICY "tasks_select" ON tasks FOR SELECT
+  USING (EXISTS (SELECT 1 FROM client_members WHERE client_id = tasks.client_id AND member_id = auth.uid()));
+-- All writes go through backend (upsert_task / delete_task) — service_role only
+CREATE POLICY "tasks_service_role" ON tasks FOR ALL
+  USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
--- session_summaries
-CREATE POLICY "Insertion résumés"          ON session_summaries FOR INSERT WITH CHECK (true);
-CREATE POLICY "Lecture résumés par client" ON session_summaries FOR SELECT USING (true);
-CREATE POLICY "session_summaries_select"   ON session_summaries FOR SELECT USING (true);
+-- session_summaries (DROP legacy open policies)
+DROP POLICY IF EXISTS "Insertion résumés"          ON session_summaries;
+DROP POLICY IF EXISTS "Lecture résumés par client" ON session_summaries;
+DROP POLICY IF EXISTS "session_summaries_select"   ON session_summaries;
+-- Members can read summaries of their clients (useClients.js + ClientSettings.jsx)
+CREATE POLICY "session_summaries_select" ON session_summaries FOR SELECT
+  USING (EXISTS (SELECT 1 FROM client_members WHERE client_id = session_summaries.client_id AND member_id = auth.uid()));
+-- Backend (summarize_session) is the only writer
+CREATE POLICY "session_summaries_service_role" ON session_summaries FOR ALL
+  USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 -- document_chunks — lecture filtrée par client courant (session setting), écriture service_role
 CREATE POLICY "chunks_select" ON document_chunks FOR SELECT
@@ -363,10 +375,18 @@ CREATE POLICY "embedding_logs_select" ON embedding_logs FOR SELECT
 CREATE POLICY "embedding_logs_service_role" ON embedding_logs FOR ALL
   USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
--- agency_knowledge
-CREATE POLICY "agency_knowledge_read"   ON agency_knowledge FOR SELECT USING (true);
-CREATE POLICY "agency_knowledge_insert" ON agency_knowledge FOR INSERT WITH CHECK (true);
-CREATE POLICY "agency_knowledge_delete" ON agency_knowledge FOR DELETE USING (true);
+-- agency_knowledge — no client_id (agency-wide), no creator user_id column
+DROP POLICY IF EXISTS "agency_knowledge_read"   ON agency_knowledge;
+DROP POLICY IF EXISTS "agency_knowledge_insert" ON agency_knowledge;
+DROP POLICY IF EXISTS "agency_knowledge_delete" ON agency_knowledge;
+-- Any authenticated user can read and delete knowledge entries (existing UX behaviour)
+CREATE POLICY "agency_knowledge_select" ON agency_knowledge FOR SELECT
+  USING (auth.uid() IS NOT NULL);
+CREATE POLICY "agency_knowledge_delete" ON agency_knowledge FOR DELETE
+  USING (auth.uid() IS NOT NULL);
+-- Inserts go through backend save_to_kb (service_role)
+CREATE POLICY "agency_knowledge_service_role" ON agency_knowledge FOR ALL
+  USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
 -- client_members: all writes go through backend (service_role); JS SDK can only read own rows
 ALTER TABLE client_members ENABLE ROW LEVEL SECURITY;
