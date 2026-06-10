@@ -721,7 +721,9 @@ async def dispatcher(request: Request):
         return await sync_emails(body, request)
     if action == "update_gmail_sync":
         return await update_gmail_sync(body, user_id)
-    return await chat(body, user_id=user_id)
+    if action is None:
+        return await chat(body, user_id=user_id)
+    return JSONResponse({"error": f"Action inconnue : {action}"}, status_code=400, headers=_CORS_HEADERS)
 
 
 # ── /me — current user info + assigned clients ────────────────────────────
@@ -2013,6 +2015,11 @@ async def chat(body: dict, user_id: Optional[str] = None):
     chat_history = body.get("chat_history", [])
     file_data = body.get("file")
     message_type = body.get("message_type", "chat")
+
+    # Taille max : un prompt légitime peut atteindre ~120k chars (80k docs + tasks + context).
+    # Ces limites empêchent l'abus de ressources sans bloquer aucun usage normal.
+    if len(system) > 500_000 or len(message) > 20_000:
+        return JSONResponse({"error": "Requête trop longue"}, status_code=400, headers=_CORS_HEADERS)
 
     if client_id:
         await _assert_role(user_id, client_id, ["owner", "member"])

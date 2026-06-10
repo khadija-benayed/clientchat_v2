@@ -131,7 +131,7 @@ export default function MessageBubble({ msg, clientName, onSaveToKb }) {
         <button
           className={`kb-btn${kbSaved ? ' saved' : ''}`}
           disabled={kbSaved}
-          onClick={() => { onSaveToKb?.(msg.text); }}
+          onClick={() => { onSaveToKb?.(msg.text); setKbSaved(true); }}
         >
           {kbSaved ? '✓ KB' : '+ KB'}
         </button>

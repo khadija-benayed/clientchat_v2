@@ -27,13 +27,20 @@ import { callBackend, streamChatSSE } from '../lib/backend';
 export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksUpdate, onSessionSave }) {
   // Tableau des messages affichés dans le chat
   const [messages, setMessages] = useState([]);
+  // Ref synchronisée à chaque render : permet de lire messages dans sendMessage
+  // sans le mettre dans les deps du useCallback (évite les re-créations sur chaque token streamé)
+  const messagesRef = useRef([]);
+  messagesRef.current = messages;
   // true pendant l'appel backend (affiche le "thinking...")
   const [isLoading, setIsLoading] = useState(false);
   // true du premier envoi jusqu'à la fin du stream — désactive le bouton Send
   const [isSending, setIsSending] = useState(false);
   // Compteur d'échanges pour déclencher la sauvegarde de session
   const exchangeCountRef = useRef(0);
-  const sessionSavedRef = useRef(false);
+  // Compte auquel on a sauvegardé pour la dernière fois (0 = jamais)
+  const lastSavedCountRef = useRef(0);
+  // Guard anti-doublon : true si un appel summarize_session est en cours
+  const saveInFlightRef = useRef(false);
   const inactivityTimerRef = useRef(null);
   // RAF — batche les mises à jour de texte streaming (1 re-render / frame au lieu de 1 / token)
   const rafIdRef = useRef(null);
@@ -81,7 +88,8 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
   const clearMessages = useCallback(() => {
     setMessages([]);
     exchangeCountRef.current = 0;
-    sessionSavedRef.current = false;
+    lastSavedCountRef.current = 0;
+    saveInFlightRef.current = false;
     if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
   }, []);
 
@@ -105,7 +113,7 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
     const maxId = tasks.length ? Math.max(...tasks.map(t => t.id)) : 0;
 
     // Extraire l'historique des 8 derniers échanges pour Claude
-    const historyStr = messages.slice(-9).map(m => {
+    const historyStr = messagesRef.current.slice(-9).map(m => {
       const who = m.role === 'u' ? 'Utilisateur' : 'Assistant';
       return m.text ? who + ': ' + m.text : '';
     }).filter(Boolean).join('\n');
@@ -130,7 +138,7 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
       (_needL3 ? buildL3(summaries) : '');
 
     // ── Chat history pour Claude (multi-turn) ─────────────────────────────
-    const chatHistory = messages
+    const chatHistory = messagesRef.current
       .filter(m => m.role !== 'thinking')
       .slice(-6)
       .map(m => ({ role: m.role === 'u' ? 'u' : 'a', text: m.text || '' }));
@@ -208,9 +216,10 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
               }
             }
 
-            // Sauvegarde automatique de session après 5 échanges ou toutes les 10
+            // Sauvegarde automatique : au 5e échange, puis toutes les 10
             const count = exchangeCountRef.current;
-            if (!sessionSavedRef.current && (count === 5 || (count > 5 && count % 10 === 0))) {
+            const neverSaved = lastSavedCountRef.current === 0;
+            if (!saveInFlightRef.current && count >= 5 && (neverSaved || count - lastSavedCountRef.current >= 10)) {
               triggerSessionSave();
             }
 
@@ -238,22 +247,26 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
       setIsLoading(false);
       setIsSending(false);
     }
-  }, [client, tasks, summaries, docCache, jwtToken, messages, addMessage, onTasksUpdate, members, memberIndex]); // eslint-disable-line
+  }, [client, tasks, summaries, docCache, jwtToken, addMessage, onTasksUpdate, members, memberIndex]); // eslint-disable-line
 
   async function triggerSessionSave() {
-    if (!client || sessionSavedRef.current || exchangeCountRef.current < 3) return;
-    const history = messages
+    if (!client || saveInFlightRef.current || exchangeCountRef.current < 3) return;
+    const history = messagesRef.current
       .filter(m => m.role !== 'thinking' && m.text)
       .map(m => ({ role: m.role === 'u' ? 'u' : 'a', text: m.text }));
     if (history.length < 3) return;
-    sessionSavedRef.current = true;
+    saveInFlightRef.current = true;
     try {
       const data = await callBackend(
         { action: 'summarize_session', client_id: client.id, history }, jwtToken
       );
-      if (data.saved) onSessionSave?.(data.summary);
-      else sessionSavedRef.current = false;
-    } catch { sessionSavedRef.current = false; }
+      if (data.saved) {
+        lastSavedCountRef.current = exchangeCountRef.current;
+        onSessionSave?.(data.summary);
+      }
+    } catch { } finally {
+      saveInFlightRef.current = false;
+    }
   }
 
   return { messages, isLoading, isSending, sendMessage, addMessage, clearMessages, triggerSessionSave };
