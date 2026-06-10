@@ -849,6 +849,34 @@ AGENCY_NAME = "Smart Bees"
 CR_KEYWORDS = frozenset({"news", "nouvelles", "réunion", "point",
                          "suivi", "compte", "rendu", "notes", "évoqué", "discuté", "abordé"})
 
+# Structured-output schema for Gemini — forces each field to exist; nullable = null when absent from docs
+_BRIEF_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "secteur":           {"type": "string"},
+        "enjeux_principaux": {"type": "array", "items": {"type": "string"}},
+        "kpis":              {"type": "array", "items": {"type": "string"}},
+        "equipe": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "prenom":     {"type": "string"},
+                    "nom":        {"type": "string",  "nullable": True},
+                    "role":       {"type": "string",  "nullable": True},
+                    "email":      {"type": "string",  "nullable": True},
+                    "scope":      {"type": "string",  "nullable": True, "enum": ["interne", "externe", "inconnu"]},
+                    "reports_to": {"type": "string",  "nullable": True},
+                },
+                "required": ["prenom"],
+            },
+        },
+        "historique": {"type": "string"},
+        "notes":      {"type": "string"},
+    },
+    "required": ["secteur", "enjeux_principaux", "kpis", "equipe", "historique", "notes"],
+}
+
 
 async def generate_brief(body: dict, user_id: Optional[str] = None):
     client_id = body.get("client_id")
@@ -897,32 +925,36 @@ async def generate_brief(body: dict, user_id: Optional[str] = None):
         )
         + "[DOCUMENTS CLIENT - classés du plus récent au plus ancien]\n"
         + docs_text + "\n\n"
-        + "Génère une fiche client JSON avec exactement ces champs :\n"
-        "- secteur (string) : secteur d'activité principal\n"
-        "- enjeux_principaux (array, max 6) : enjeux métier et techniques actuels du client\n"
-        "- kpis (array, max 6) : indicateurs de performance suivis\n"
-        "- equipe (array of strings) : UNIQUEMENT les personnes physiques côté client "
-        "(humains avec un prénom et idéalement un nom), PAS les membres de l'agence "
-        "Smart Bees, PAS les outils, plateformes, services ou entreprises (ex: Dacker, "
-        "Segment, GA4, CommerceTools ne sont PAS des personnes). "
-        "Chaque élément doit être une STRING au format 'Prénom Nom' ou "
-        "'Prénom Nom - Rôle' ou 'Prénom Nom (email@domaine.com)' si l'email est disponible. "
-        "Ne jamais retourner d'objets JSON dans ce tableau.\n"
-        "- historique (string, 3-4 phrases) : chronologie de la collaboration depuis le début, "
-        "avec les dates clés\n"
-        "- notes (string, 4-6 phrases) : contexte technique, stack, projets en cours et à venir, "
-        "points d'attention\n\n"
+        + "Génère une fiche client avec exactement ces champs :\n"
+        "- secteur : secteur d'activité principal\n"
+        "- enjeux_principaux (max 6) : enjeux métier et techniques actuels\n"
+        "- kpis (max 6) : indicateurs de performance suivis\n"
+        "- equipe : UNIQUEMENT les personnes physiques côté client — PAS les membres Smart Bees, "
+        "PAS les outils/plateformes/services (Dacker, Segment, GA4, CommerceTools ne sont PAS des personnes). "
+        "Pour chaque contact :\n"
+        "  • prenom : requis\n"
+        "  • nom : null si absent des docs\n"
+        "  • role : poste exact tel que mentionné, null si non précisé — ne pas inventer\n"
+        "  • email : adresse si disponible, sinon null\n"
+        "  • scope : 'interne' (salarié client), 'externe' (prestataire/agence partenaire), 'inconnu' si non précisé\n"
+        "  • reports_to : prénom/nom de la personne à qui elle reporte si mentionné, sinon null\n"
+        "- historique (3-4 phrases) : chronologie de la collaboration avec dates clés\n"
+        "- notes (4-6 phrases) : stack technique, projets en cours et à venir, points d'attention\n\n"
         "Règles :\n"
         "- Prioritise les informations des documents les plus récents\n"
         "- Si la fiche existante contient une info absente des documents, conserve-la\n"
         "- Pour l'équipe, inclure TOUS les contacts client mentionnés dans les documents\n"
-        "- Réponds UNIQUEMENT avec le JSON valide, sans texte autour, sans markdown"
+        "- Si une information est absente des documents, mettre null — ne pas inventer"
     )
 
     try:
         gemini = genai.GenerativeModel(
             model_name=GEMINI_PRO,
-            generation_config={"max_output_tokens": 8192},
+            generation_config={
+                "max_output_tokens": 8192,
+                "response_mime_type": "application/json",
+                "response_schema": _BRIEF_SCHEMA,
+            },
             safety_settings=_SAFETY_OFF,
         )
         response = gemini.generate_content(brief_prompt)
@@ -946,11 +978,8 @@ async def generate_brief(body: dict, user_id: Optional[str] = None):
     except Exception as e:
         print(f"usage_logs insert error (non bloquant): {e}")
 
-    cleaned = re.sub(r"^```(?:json)?\s*", "", raw_text.strip(), flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s*```\s*$", "", cleaned).strip()
-
     try:
-        brief = json.loads(cleaned)
+        brief = json.loads(raw_text)
     except Exception:
         print(f"generate_brief: JSON invalide reçu de Gemini : {raw_text[:200]}")
         return JSONResponse(
@@ -958,28 +987,20 @@ async def generate_brief(body: dict, user_id: Optional[str] = None):
             status_code=422,
         )
 
-    # Normalise equipe : force array of strings, retire les membres agence
+    # Filtre equipe : retire membres agence et faux-positifs outils — conserve les objets
     if "equipe" in brief and isinstance(brief["equipe"], list):
-        _TOOL_KW = {'reporting', 'dashboard', 'analytics', 'tracking',
-                    'segment', 'ga4', 'gtm', 'adjust', 'klaviyo', 'dacker'}
+        _TOOL_KW = frozenset({'reporting', 'dashboard', 'analytics', 'tracking',
+                              'segment', 'ga4', 'gtm', 'adjust', 'klaviyo', 'dacker'})
         _agency  = AGENCY_NAME.lower()
-        normalized = []
-        for member in brief["equipe"]:
-            if isinstance(member, dict):
-                name = (member.get("prenom_nom") or
-                        " ".join(filter(None, [member.get("prenom"), member.get("nom")])) or
-                        member.get("nom") or member.get("name") or
-                        " ".join(str(v) for v in member.values() if v))
-                member = name.strip()
-            if not (isinstance(member, str) and member.strip()):
-                continue
-            m_low = member.lower()
-            if AGENCY_DOMAIN in m_low or _agency in m_low:
-                continue
-            if any(kw in m_low for kw in _TOOL_KW):
-                continue
-            normalized.append(member.strip())
-        brief["equipe"] = normalized
+        def _member_text(m):
+            return " ".join(filter(None, [m.get("prenom"), m.get("nom"), m.get("role"), m.get("email")])).lower()
+        brief["equipe"] = [
+            m for m in brief["equipe"]
+            if isinstance(m, dict) and (m.get("prenom") or "").strip()
+            and AGENCY_DOMAIN not in _member_text(m)
+            and _agency not in _member_text(m)
+            and not any(kw in _member_text(m) for kw in _TOOL_KW)
+        ]
 
     expected_keys = ["secteur", "enjeux_principaux", "kpis", "equipe", "historique", "notes"]
     missing = [k for k in expected_keys if k not in brief]
