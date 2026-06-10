@@ -309,9 +309,15 @@ body {
 .md-code { background: var(--sur2); border: 1px solid var(--brd2); border-radius: 3px; padding: 1px 5px; font-family: 'DM Mono', monospace; font-size: 0.88em; }
 .md-cite { color: var(--tx3); font-size: 0.85em; }
 .bubble pre.md-pre { background: var(--sur2); border: 0.5px solid var(--brd); border-radius: 6px; padding: 12px; overflow-x: auto; font-size: 13px; margin: 8px 0; }
-.bubble h1, .bubble h2, .bubble h3 { font-weight: 600; margin: 12px 0 4px; }
+.bubble h1, .bubble h2, .bubble h3, .bubble h4 { font-weight: 600; margin: 12px 0 4px; }
+.bubble h1 { font-size: 18px; }
+.bubble h2 { font-size: 16px; }
 .bubble h3 { font-size: 14px; }
-.bubble h2 { font-size: 15px; }
+.bubble h4 { font-size: 13px; color: var(--tx2); }
+.msg.a .bubble a { color: var(--sb-navy); text-decoration: underline; }
+[data-theme="dark"] .msg.a .bubble a { color: #7eb8e8; }
+.msg.a .bubble blockquote { border-left: 3px solid var(--brd2); padding-left: 12px; color: var(--tx2); margin: 6px 0; }
+.msg.a .bubble hr { border: none; border-top: 1px solid var(--brd); margin: 10px 0; }
 .bubble table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 8px 0; }
 .bubble th, .bubble td { border: 0.5px solid var(--brd); padding: 6px 10px; text-align: left; }
 .bubble th { background: var(--sur2); font-weight: 500; }

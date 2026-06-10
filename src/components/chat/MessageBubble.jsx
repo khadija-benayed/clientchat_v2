@@ -49,10 +49,15 @@ const mdComponents = {
     };
     return <p>{React.Children.map(children, processText)}</p>;
   },
-  code: ({ inline, children }) =>
-    inline
+  // react-markdown v10 ne passe plus la prop `inline` — on détecte le contexte
+  // via le contenu : le code inline n'a jamais de saut de ligne.
+  pre: ({ children }) => <pre className="md-pre">{children}</pre>,
+  code: ({ className, children }) => {
+    const isInline = !String(children).includes('\n') && !className;
+    return isInline
       ? <code className="md-code">{children}</code>
-      : <pre className="md-pre"><code>{children}</code></pre>,
+      : <code>{children}</code>;
+  },
 };
 
 export default function MessageBubble({ msg, clientName, onSaveToKb }) {
