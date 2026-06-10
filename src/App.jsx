@@ -435,14 +435,14 @@ export default function App() {
       <NewClientModal isOpen={newClientOpen} onClose={() => setNewClientOpen(false)}
         currentUserId={currentUserId}
         onCreated={client => {
-          setClients(prev => { const u = [client, ...prev]; localStorage.setItem('cc-sess', JSON.stringify(u)); return u; });
+          setClients(prev => { const u = [client, ...prev.filter(c => c.id !== client.id)]; localStorage.setItem('cc-sess', JSON.stringify(u)); return u; });
           handleSelectClient(client);
         }} />
 
       <JoinClientModal isOpen={joinClientOpen} onClose={() => setJoinClientOpen(false)}
         jwtToken={jwtToken}
         onJoined={client => {
-          setClients(prev => { const u = [client, ...prev]; localStorage.setItem('cc-sess', JSON.stringify(u)); return u; });
+          setClients(prev => { const u = [client, ...prev.filter(c => c.id !== client.id)]; localStorage.setItem('cc-sess', JSON.stringify(u)); return u; });
           handleSelectClient(client);
         }} />
 

@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS client_members (
   id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id  uuid        NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
   member_id  uuid        NOT NULL,   -- team_members.id (pas de FK — hors seed scope)
-  role       text        NOT NULL DEFAULT 'member',  -- 'owner' | 'member'
+  role       text        NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'member')),
   created_at timestamptz DEFAULT now(),
   UNIQUE (client_id, member_id)
 );
@@ -127,6 +127,14 @@ CREATE TABLE IF NOT EXISTS sync_ignored (
   ignored_at  timestamptz DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS sync_ignored_client_id_idx ON sync_ignored (client_id);
+
+-- Migration : enforce le rôle comme enum strict ('owner' | 'member') — supprime le dead code 'admin'
+-- NOT VALID : ne revalide pas les lignes existantes (safe si des lignes 'admin' existent en prod)
+DO $$ BEGIN
+  ALTER TABLE client_members ADD CONSTRAINT client_members_role_check
+    CHECK (role IN ('owner', 'member')) NOT VALID;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 -- Migration : ajoute user_id si la table existe déjà en production
 ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS user_id uuid;

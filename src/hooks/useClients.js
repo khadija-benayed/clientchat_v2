@@ -260,7 +260,7 @@ export function useClients({ jwtToken, currentUserId }) {
         ignoredOffset += PAGE;
       }
 
-      // 4. Compter les fichiers nouveaux / modifiés (tolérance 5 min)
+      // 4. Compter les fichiers nouveaux / modifiés (tolérance 24h)
       const TOLERANCE_MS = 24 * 60 * 60 * 1000;
       let newCount = 0, modifiedCount = 0;
       for (const f of metaData.files) {

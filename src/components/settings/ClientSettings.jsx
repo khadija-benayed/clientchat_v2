@@ -57,6 +57,14 @@ export default function ClientSettings({
     setInviteEmail(''); setInviteRole('member'); setInviteLink(null); setInviteError('');
   }, [isOpen, client?.id]); // eslint-disable-line
 
+  // Reset des champs d'invitation si le rôle change pendant que le modal est ouvert.
+  // Séparé du useEffect principal pour ne pas écraser ctx/pendingUpdates/tab lors d'un
+  // changement de rôle mid-session (ex : promotion Realtime pendant une édition).
+  useEffect(() => {
+    if (!isOpen) return;
+    setInviteEmail(''); setInviteRole('member'); setInviteLink(null); setInviteError('');
+  }, [myRole]); // eslint-disable-line
+
   function getBrief(c) {
     if (!c?.context) return null;
     try {

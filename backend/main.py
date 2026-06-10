@@ -843,7 +843,7 @@ async def generate_brief(body: dict, user_id: Optional[str] = None):
         return JSONResponse(
             {"error": "client_id et docs_content (array non vide) requis"}, status_code=400
         )
-    await _assert_role(user_id, client_id, ["owner", "admin", "member"])
+    await _assert_role(user_id, client_id, ["owner", "member"])
 
     TOKEN_BUDGET = 120_000
     total_chars = 0
@@ -989,7 +989,7 @@ async def index_source(body: dict, user_id: Optional[str] = None):
     """
     client_id = body.get("client_id")
     if client_id:
-        await _assert_role(user_id, client_id, ["owner", "admin", "member"])
+        await _assert_role(user_id, client_id, ["owner", "member"])
     source_type = body.get("source_type")
     source_name = body.get("source_name")
     source_id = body.get("source_id")
@@ -1336,7 +1336,7 @@ async def upsert_task(body: dict, user_id: Optional[str]):
     task      = body.get("task", {})
     if not client_id:
         return JSONResponse({"error": "client_id requis"}, status_code=400)
-    await _assert_role(user_id, client_id, ["owner", "admin", "member"])
+    await _assert_role(user_id, client_id, ["owner", "member"])
     task_id = task.get("id")
     if task_id and task_id > 0:
         sb.table("tasks").update({
@@ -1363,7 +1363,7 @@ async def delete_task(body: dict, user_id: Optional[str]):
     client_id = body.get("client_id")
     if not task_id or not client_id:
         return JSONResponse({"error": "task_id et client_id requis"}, status_code=400)
-    await _assert_role(user_id, client_id, ["owner", "admin", "member"])
+    await _assert_role(user_id, client_id, ["owner", "member"])
     sb.table("tasks").delete().eq("id", task_id).eq("client_id", client_id).execute()
     return JSONResponse({"ok": True})
 
@@ -1395,7 +1395,7 @@ async def create_invitation(body: dict, user_id: Optional[str]):
     if role == "owner":
         await _assert_role(user_id, client_id, ["owner"])
     else:
-        await _assert_role(user_id, client_id, ["owner", "admin"])
+        await _assert_role(user_id, client_id, ["owner"])
 
     inv = sb.table("client_invitations").insert({
         "client_id":     client_id,
@@ -1405,7 +1405,7 @@ async def create_invitation(body: dict, user_id: Optional[str]):
     }).execute()
 
     token      = inv.data[0]["token"]
-    base_url   = os.getenv("FRONTEND_URL", "https://khadija-benayed.github.io/clientchat_v2")
+    base_url   = os.getenv("FRONTEND_URL", "https://khadija-benayed.github.io/clientchat_v2").rstrip('/')
     invite_url = f"{base_url}/#/join/{token}"
     return JSONResponse({"token": token, "url": invite_url, "expires_at": inv.data[0]["expires_at"]})
 
@@ -1478,7 +1478,7 @@ async def sync_drive(body: dict, request: Request):
     if not folder_id:
         return JSONResponse({"error": "folder_id requis"}, status_code=400)
     if client_id:
-        await _assert_role(getattr(request.state, "user_id", None), client_id, ["owner", "admin", "member"])
+        await _assert_role(getattr(request.state, "user_id", None), client_id, ["owner", "member"])
 
     try:
         drive, sa_email = get_drive_service()
@@ -1967,7 +1967,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
     message_type = body.get("message_type", "chat")
 
     if client_id:
-        await _assert_role(user_id, client_id, ["owner", "admin", "member"])
+        await _assert_role(user_id, client_id, ["owner", "member"])
 
     # Both task_action and chat use Gemini Flash; only generate_brief uses Pro
     chat_model = GEMINI_FLASH
