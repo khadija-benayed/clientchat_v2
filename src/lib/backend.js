@@ -52,11 +52,12 @@ export async function callBackend(payload, jwtToken) {
  * @param {string|null} jwtToken - JWT Supabase courant
  * @returns {Promise<Response>} - La réponse brute (à lire avec .body.getReader())
  */
-export async function openBackendSSE(payload, jwtToken) {
+export async function openBackendSSE(payload, jwtToken, signal = null) {
   const resp = await fetch(BACKEND_URL, {
     method: 'POST',
     headers: getBackendHeaders(jwtToken),
     body: JSON.stringify(payload),
+    ...(signal ? { signal } : {}),
   });
   if (!resp.ok) {
     const d = await resp.json().catch(() => ({}));
@@ -73,11 +74,12 @@ export async function openBackendSSE(payload, jwtToken) {
  * @param {Function} callbacks.onDone     - Appelée en fin de stream avec { sources, tasks_json, reply_text }
  * @param {Function} callbacks.onError    - Appelée avec le message d'erreur
  */
-export async function streamChatSSE(payload, jwtToken, { onToken, onDone, onError }) {
+export async function streamChatSSE(payload, jwtToken, { onToken, onDone, onError }, signal = null) {
   let resp;
   try {
-    resp = await openBackendSSE(payload, jwtToken);
+    resp = await openBackendSSE(payload, jwtToken, signal);
   } catch (e) {
+    if (e.name === 'AbortError') return;
     onError(e.message || 'Erreur réseau');
     return;
   }
@@ -109,7 +111,7 @@ export async function streamChatSSE(payload, jwtToken, { onToken, onDone, onErro
     // Stream fermé par le serveur sans événement 'done' (déconnexion, timeout…)
     onError('Réponse incomplète — connexion interrompue');
   } catch (e) {
-    onError(e.message || 'Erreur de streaming');
+    if (e.name !== 'AbortError') onError(e.message || 'Erreur de streaming');
   } finally {
     reader.releaseLock();
   }

@@ -15,6 +15,7 @@ import { Paperclip } from 'lucide-react';
 export default function ChatInput({ onSend, disabled = false }) {
   const [text, setText] = useState('');
   const [selectedFile, setSelectedFile] = useState(null); // { data, mediaType, name }
+  const [fileError, setFileError] = useState('');
   const fileInputRef = useRef(null);
   const textareaRef = useRef(null);
 
@@ -44,13 +45,15 @@ export default function ChatInput({ onSend, disabled = false }) {
   function handleFileSelected(e) {
     const file = e.target.files[0];
     if (!file) return;
+    setFileError('');
     const allowed = ['application/pdf', 'image/jpeg', 'image/png'];
     if (!allowed.includes(file.type)) {
-      alert('Format non supporté. PDF, JPG ou PNG uniquement.');
+      setFileError('Format non supporté. PDF, JPG ou PNG uniquement.');
       e.target.value = ''; return;
     }
     if (file.size > 20 * 1024 * 1024) {
-      alert('Fichier trop volumineux (max 20 Mo).'); e.target.value = ''; return;
+      setFileError('Fichier trop volumineux (max 20 Mo).');
+      e.target.value = ''; return;
     }
     const reader = new FileReader();
     reader.onload = ev => {
@@ -116,6 +119,9 @@ export default function ChatInput({ onSend, disabled = false }) {
         </button>
       </div>
 
+      {fileError && (
+        <div style={{ fontSize: '12px', color: '#ef4444', padding: '0 12px 4px' }}>{fileError}</div>
+      )}
       <div className="hint">Entrée pour envoyer · Shift+Entrée pour saut de ligne · PDF ou image acceptés</div>
     </div>
   );

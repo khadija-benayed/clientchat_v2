@@ -41,6 +41,8 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
   const lastSavedCountRef = useRef(0);
   // Guard anti-doublon : true si un appel summarize_session est en cours
   const saveInFlightRef = useRef(false);
+  // Contrôleur d'annulation du stream (utilisé lors d'un changement de client)
+  const abortCtrlRef = useRef(null);
   const inactivityTimerRef = useRef(null);
   // RAF — batche les mises à jour de texte streaming (1 re-render / frame au lieu de 1 / token)
   const rafIdRef = useRef(null);
@@ -90,6 +92,8 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
     exchangeCountRef.current = 0;
     lastSavedCountRef.current = 0;
     saveInFlightRef.current = false;
+    abortCtrlRef.current?.abort();
+    abortCtrlRef.current = null;
     if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
   }, []);
 
@@ -112,12 +116,6 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
     const mInitials = members.map(m => m.initials).join(', ') || 'KB, PH';
     const maxId = tasks.length ? Math.max(...tasks.map(t => t.id)) : 0;
 
-    // Extraire l'historique des 8 derniers échanges pour Claude
-    const historyStr = messagesRef.current.slice(-9).map(m => {
-      const who = m.role === 'u' ? 'Utilisateur' : 'Assistant';
-      return m.text ? who + ': ' + m.text : '';
-    }).filter(Boolean).join('\n');
-
     // ── Correspondance déterministe tâche↔message ─────────────────────────
     const matchContext = computeMatchContext(text, tasks, memberIndex, members);
 
@@ -128,19 +126,19 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
     const _isAction   = isTaskAction(text);
     const _isQuestion = isClientQuestion(text);
     const _isComplex  = isComplexQuery(text);
-    const _needL2 = _isQuestion || _isComplex || (!_isAction && !_isQuestion && !_isComplex);
+    const _needL2 = !_isAction;
     const _needL3 = _isComplex;
 
     const _needDocs = _isQuestion || _isComplex;
     const systemPrompt =
-      buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr, tasks, isAction: _isAction }) +
+      buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction: _isAction }) +
       (_needL2 ? buildL2(ctxForPrompt, summaries, docCache, _needDocs) : '') +
       (_needL3 ? buildL3(summaries) : '');
 
     // ── Chat history pour Claude (multi-turn) ─────────────────────────────
     const chatHistory = messagesRef.current
       .filter(m => m.role !== 'thinking')
-      .slice(-6)
+      .slice(-9)
       .map(m => ({ role: m.role === 'u' ? 'u' : 'a', text: m.text || '' }));
 
     const streamId = Date.now() + Math.random();
@@ -158,6 +156,9 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
     if (fileAttachment?.data && fileAttachment?.mediaType) {
       payload.file = { data: fileAttachment.data, mediaType: fileAttachment.mediaType };
     }
+
+    const abortCtrl = new AbortController();
+    abortCtrlRef.current = abortCtrl;
 
     try {
       await new Promise((resolve, reject) => {
@@ -237,12 +238,13 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
             }
             reject(new Error(msg));
           },
-        });
+        }, abortCtrl.signal);
       });
     } catch (_) {
-      // Erreur déjà gérée dans onError
+      // Erreur déjà gérée dans onError (AbortError ignoré silencieusement)
     } finally {
       cancelPendingRaf();
+      if (abortCtrlRef.current === abortCtrl) abortCtrlRef.current = null;
       isSendingRef.current = false;
       setIsLoading(false);
       setIsSending(false);
@@ -323,20 +325,21 @@ function wordMatches(hay, need) {
   return false;
 }
 
+// Mots vides pour le matching de tâches — module-level pour éviter la recréation
+const TASK_STOP = new Set(['pour','dans','avec','mais','donc','faut','cette','tache','veux',
+  'faudrait','changer','change','mettre','passer','assigner','assigne','modifier',
+  'supprime','supprimer','renomme','ajoute','creer','liste','titre','prio','statut',
+  'status','faire','fait','bloque','attente','cours','relecture','coté','cote','stp',
+  'svp','merci','bien','juste','aussi','puis','voila','déjà','deja']);
+
 /**
  * Calcule le contexte de correspondance pour le prompt Claude.
  * Détermine si le message utilisateur correspond à une tâche unique (UNIQUE),
  * plusieurs (AMBIGUÏTÉ), aucune, ou une déjà dans le bon état (DÉJÀ FAIT).
  */
 function computeMatchContext(txt, tasks, memberIndex, members) {
-  const STOP = new Set(['pour','dans','avec','mais','donc','faut','cette','tache','veux',
-    'faudrait','changer','change','mettre','passer','assigner','assigne','modifier',
-    'supprime','supprimer','renomme','ajoute','creer','liste','titre','prio','statut',
-    'status','faire','fait','bloque','attente','cours','relecture','coté','cote','stp',
-    'svp','merci','bien','juste','aussi','puis','voila','déjà','deja']);
-
   const msgNorm = norm(txt);
-  const msgWords = msgNorm.split(/\s+/).filter(w => w.length > 3 && !STOP.has(w));
+  const msgWords = msgNorm.split(/\s+/).filter(w => w.length > 3 && !TASK_STOP.has(w));
 
   function scoreTask(task) {
     const titleWords = norm(task.title).split(/\s+/);
@@ -443,7 +446,7 @@ function buildClientContext(client) {
   return client.context || 'Non renseigné.';
 }
 
-function buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr, tasks, isAction }) {
+function buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction }) {
   const today = new Date().toLocaleDateString('fr-FR', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
   });
@@ -460,7 +463,6 @@ function buildL1({ mStr, mFull, mInitials, maxId, matchContext, historyStr, task
     + 'Membres valides : ' + mFull + '. Utilise les initiales dans le JSON.\n'
     + 'Initiales pour JSON : ' + mInitials + '. Statuts : todo, inprogress, blocked, waiting, done. Priorités : P1, P2, P3.\n'
     + '\nANALYSE AUTOMATIQUE DE CORRESPONDANCE :\n' + matchContext + '\n'
-    + (historyStr ? '\nHISTORIQUE :\n' + historyStr + '\n' : '')
     + '\nRègles JSON : SUIS L\'ANALYSE DE CORRESPONDANCE.\n'
     + '- Ajouter note : {"id":X,"note":"texte"}\n'
     + '- Renommer : {"id":X,"new_title":"..."}\n'

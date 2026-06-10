@@ -90,28 +90,32 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
 
     ip = request.client.host if request.client else "unknown"
-    if not _check_rate_limit(ip):
-        return JSONResponse({"error": "rate limit exceeded"}, status_code=429, headers=_CORS_HEADERS)
 
+    # Authenticate first so the rate-limit bucket is per-user, not per-IP.
+    # Users behind the same corporate NAT would otherwise share a bucket.
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
         try:
             user_resp = sb.auth.get_user(token)
-            request.state.user_id = user_resp.user.id if user_resp.user else None
-            if not request.state.user_id:
+            user_id = user_resp.user.id if user_resp.user else None
+            if not user_id:
                 return JSONResponse({"error": "unauthorized"}, status_code=401, headers=_CORS_HEADERS)
         except Exception:
             return JSONResponse({"error": "unauthorized"}, status_code=401, headers=_CORS_HEADERS)
     elif API_KEY and request.headers.get("X-Api-Key") == API_KEY:
         # Transition fallback — legacy API key still accepted for 2 weeks
-        request.state.user_id = None
+        user_id = None
     elif not API_KEY:
         # Dev mode: no auth configured
-        request.state.user_id = None
+        user_id = None
     else:
         return JSONResponse({"error": "unauthorized"}, status_code=401, headers=_CORS_HEADERS)
 
+    if not _check_rate_limit(user_id or ip):
+        return JSONResponse({"error": "rate limit exceeded"}, status_code=429, headers=_CORS_HEADERS)
+
+    request.state.user_id = user_id
     try:
         return await call_next(request)
     except Exception as e:
@@ -1434,7 +1438,7 @@ async def join_client_via_token(body: dict, user_id: Optional[str]):
     if not user_id:
         return JSONResponse({"error": "JWT requis"}, status_code=401)
 
-    now_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     inv = sb.table("client_invitations") \
         .select("*") \
@@ -2114,6 +2118,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
                         sb.table("document_chunks")
                         .select("source_name")
                         .eq("client_id", client_id)
+                        .limit(500)
                         .execute()
                     )
                     all_sources = {r["source_name"] for r in (all_src_rows.data or [])}

@@ -47,9 +47,9 @@ export default function ChatPanel({
 
   // Mettre à jour le statut de sync pendant les appels backend
   useEffect(() => {
-    if (isLoading) onSetSyncStatus?.({ color: '#EF9F27', label: 'envoi…' });
+    if (isSending) onSetSyncStatus?.({ color: '#EF9F27', label: 'envoi…' });
     else onSetSyncStatus?.({ color: '#52b788', label: 'synchronisé' });
-  }, [isLoading]); // eslint-disable-line
+  }, [isSending]); // eslint-disable-line
 
   const handleSend = useCallback(async (text, file) => {
     await sendMessage(text, file);
