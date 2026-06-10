@@ -448,6 +448,20 @@ _OFFICE_MIME = {
     "text/csv": "csv",
 }
 
+# Sentinel retourné par export_drive_file quand une exception imprévue survient
+# (réseau, fichier corrompu…). Distinct de None qui signifie "MIME non supporté"
+# (skip permanent). Le caller traite _EXPORT_TRANSIENT_ERR comme une erreur
+# transitoire : compteur errors++, pas d'entrée sync_ignored → le fichier sera
+# retrigué au prochain sync.
+_EXPORT_TRANSIENT_ERR = object()
+
+# Raisons écrites dans sync_ignored qui représentent un échec définitif.
+# Ces fichiers sont traités comme "cached" dans _is_cached pour éviter de
+# gaspiller 150 s de slot à chaque sync sur un fichier qui ne peut jamais
+# être indexé. Les raisons transitoires ('timeout', 'error') ne sont PAS
+# dans cet ensemble : elles restent retriables.
+_PERM_IGNORE_REASONS = frozenset({"empty", "skipped", "ineligible_ai", "export_error", "ineligible"})
+
 
 def export_drive_file(file_id: str, file_name: str, mime_type: str) -> Optional[dict]:
     """
@@ -533,7 +547,7 @@ def export_drive_file(file_id: str, file_name: str, mime_type: str) -> Optional[
 
     except Exception as e:
         print(f"Export error for {file_name}: {e}")
-        return None
+        return _EXPORT_TRANSIENT_ERR
 
 
 def _list_files_recursive(
@@ -1475,10 +1489,9 @@ async def sync_drive(body: dict, request: Request):
     resume = body.get("resume", False)
     incremental = body.get("incremental", True)  # default True — frontend may omit it (cache)
 
-    if not folder_id:
-        return JSONResponse({"error": "folder_id requis"}, status_code=400)
-    if client_id:
-        await _assert_role(getattr(request.state, "user_id", None), client_id, ["owner", "member"])
+    if not folder_id or not client_id:
+        return JSONResponse({"error": "folder_id et client_id requis"}, status_code=400)
+    await _assert_role(getattr(request.state, "user_id", None), client_id, ["owner", "member"])
 
     try:
         drive, sa_email = get_drive_service()
@@ -1526,6 +1539,31 @@ async def sync_drive(body: dict, request: Request):
                 offset += PAGE
         except Exception as e:
             print(f"sync_drive state preload error (non bloquant): {e}")
+
+    # Preload permanently-ignored file IDs so _is_cached() skips them without
+    # retrying a 150 s timeout per file on every sync. Only PERMANENT reasons
+    # are loaded — transient ones ('timeout', 'error') stay retriable.
+    permanently_ignored_ids: set = set()
+    if client_id:
+        try:
+            PAGE = 1000
+            offset = 0
+            while True:
+                res = (sb.table("sync_ignored")
+                       .select("source_id")
+                       .eq("client_id", client_id)
+                       .in_("reason", list(_PERM_IGNORE_REASONS))
+                       .range(offset, offset + PAGE - 1)
+                       .execute())
+                rows = res.data or []
+                for r in rows:
+                    if r.get("source_id"):
+                        permanently_ignored_ids.add(r["source_id"])
+                if len(rows) < PAGE:
+                    break
+                offset += PAGE
+        except Exception as e:
+            print(f"sync_drive perm_ignored preload error (non bloquant): {e}")
 
     mode = "resume" if resume else ("incremental" if incremental else "full")
     print(f"sync_drive: mode={mode} total={len(files_to_process)} existing={len(existing_ids)} indexed_at={len(indexed_at)}")
@@ -1582,6 +1620,9 @@ async def sync_drive(body: dict, request: Request):
             # Decide which files to skip (cached) vs download
             def _is_cached(f: dict) -> bool:
                 fid = f["id"]
+                # Fichier définitivement non-indexable : skip sans téléchargement
+                if fid in permanently_ignored_ids:
+                    return True
                 if resume and fid in existing_ids:
                     return True
                 if incremental and fid in indexed_at:
@@ -1628,7 +1669,7 @@ async def sync_drive(body: dict, request: Request):
                 try:
                     results.append(None if fut.cancelled() else fut.result())
                 except Exception:
-                    results.append(None)
+                    results.append(_EXPORT_TRANSIENT_ERR)
 
             for f, result in zip(to_fetch, results):
                 processed += 1
@@ -1639,6 +1680,13 @@ async def sync_drive(body: dict, request: Request):
                     _upd()
                     _ignore(f['id'], f['name'], 'timeout')
                     yield f"data: {json.dumps({'file': f['name'], 'status': 'timeout', 'progress': processed, 'total': total})}\n\n"
+                    continue
+
+                if result is _EXPORT_TRANSIENT_ERR:
+                    errors += 1
+                    _upd()
+                    _ignore(f['id'], f['name'], 'error')
+                    yield f"data: {json.dumps({'file': f['name'], 'status': 'error', 'progress': processed, 'total': total})}\n\n"
                     continue
 
                 if result is None:
@@ -1696,11 +1744,11 @@ async def sync_drive(body: dict, request: Request):
                         "source_type": result["type"],
                         "source_name": f["name"],
                         "source_id": f["id"],
-                        "chunk_text": pc,
+                        "chunk_text": chunk,
                         "embedding": emb,
                         "last_indexed_at": now,
                         **({"drive_modified_at": f["modifiedTime"]} if f.get("modifiedTime") else {}),
-                    } for pc, emb in zip(prefixed_chunks, embeddings)]
+                    } for chunk, emb in zip(chunks, embeddings)]
 
                     _sb_insert("document_chunks", rows)
                     ok += 1

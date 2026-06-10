@@ -43,6 +43,7 @@ export function useSync({ jwtToken }) {
     onMessage?.({ type: 'info', message: '⏳ Synchronisation Drive en cours…' });
 
     let syncOk = 0, syncCached = 0, syncErrors = 0, syncPurged = 0, syncTotal = 0;
+    let resuming = false;
 
     try {
       const resp = await openBackendSSE(
@@ -52,12 +53,15 @@ export function useSync({ jwtToken }) {
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let syncDone = false;
+      let buffer = '';
 
       outer: while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const text = decoder.decode(value, { stream: true });
-        for (const line of text.split('\n')) {
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           let ev;
           try { ev = JSON.parse(line.slice(6)); } catch { continue; }
@@ -78,14 +82,19 @@ export function useSync({ jwtToken }) {
       // Reprise auto si connexion coupée avec progrès
       if (!syncDone && !resume && (syncOk + syncCached) > 0) {
         onMessage?.({ type: 'info', message: `⚡ Connexion interrompue (${syncOk} indexé(s)). Reprise…` });
-        setIsSyncing(false);
+        resuming = true;
         return syncDrive({ folderId, clientId, incremental: false, resume: true, onMessage });
       }
 
       return { ok: syncOk, cached: syncCached, errors: syncErrors, purged: syncPurged, total: syncTotal };
     } finally {
-      setIsSyncing(false);
-      setDriveProgress(null);
+      // Ne pas réinitialiser si on est en train de déléguer à un appel récursif (reprise auto) :
+      // le second syncDrive a déjà appelé setIsSyncing(true) avant son premier await,
+      // écraser cet état ici ferait disparaître la barre de progression pendant la reprise.
+      if (!resuming) {
+        setIsSyncing(false);
+        setDriveProgress(null);
+      }
     }
   }, [jwtToken]);
 
@@ -113,12 +122,15 @@ export function useSync({ jwtToken }) {
       );
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
+      let buffer = '';
 
       outer: while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const text = decoder.decode(value, { stream: true });
-        for (const line of text.split('\n')) {
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           let ev;
           try { ev = JSON.parse(line.slice(6)); } catch { continue; }
