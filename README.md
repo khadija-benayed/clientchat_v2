@@ -49,6 +49,88 @@ Connexion avec un compte Google `@smart-bees.fr`. Si vous n'êtes pas encore ass
 
 ---
 
+## Nouveau développeur — par où commencer
+
+Cette section est le point d'entrée unique si tu rejoins le projet. Elle te guide de zéro à "tout qui tourne en local" en 30 minutes.
+
+### 1. Ce dont tu as besoin avant de commencer
+
+| Prérequis | Détail |
+|-----------|--------|
+| Node.js ≥ 20 | Vérifie avec `node -v` — si absent, installe via [nvm](https://github.com/nvm-sh/nvm) |
+| Python 3.11 | Le backend est sur Python 3.11 exactement — d'autres versions peuvent poser problème |
+| Git | Pour cloner et pousser |
+| Accès au repo GitHub | `github.com/khadija-benayed/clientchat_v2` — demande l'accès à Khadija |
+| Accès au projet Google Cloud | Projet `arctic-rite-497707-s6` — demande à Khadija une invitation |
+| Accès au projet Supabase | URL : `erpjerfvswesipmdqxab.supabase.co` — demande à Khadija |
+
+### 2. Les secrets à récupérer
+
+Le frontend n'a **pas** de secrets — les clés `SB_URL`, `SB_KEY` et `BACKEND_URL` sont déjà dans `src/lib/constants.js` (valeurs publiques, RLS activé côté Supabase).
+
+Pour le backend, tu as besoin de 5 variables d'environnement. Demande-les à Khadija :
+
+| Variable | Ce que c'est |
+|----------|-------------|
+| `SUPABASE_SERVICE_KEY` | Clé `service_role` Supabase (bypass RLS, **jamais exposée côté client**) |
+| `GOOGLE_API_KEY` | Clé Google AI Studio (Gemini 2.5 Flash + Pro) |
+| `ANTHROPIC_KEY` | Clé API Anthropic (Claude Haiku 4.5, OCR PDF uniquement) |
+| `GOOGLE_SA_KEY` | JSON complet de la service account Google (Drive API + Gmail API) — stringifié sur une seule ligne |
+| `SUPABASE_URL` | `https://erpjerfvswesipmdqxab.supabase.co` (pas un secret, mais requis pour le backend) |
+
+### 3. Cloner et lancer le frontend
+
+```bash
+git clone https://github.com/khadija-benayed/clientchat_v2.git
+cd clientchat_v2
+npm install
+npm run dev
+# → http://localhost:5173/clientchat_v2/
+```
+
+Le frontend se connecte automatiquement au backend Cloud Run de production et à Supabase. Tu peux déjà te connecter avec ton compte Google `@smart-bees.fr` et utiliser l'app.
+
+> **Première connexion** : Supabase crée automatiquement ta ligne dans `team_members` via un trigger. Tu verras "Aucun espace client" jusqu'à ce qu'un owner t'assigne à un client.
+
+### 4. Lancer le backend en local (optionnel)
+
+Nécessaire uniquement si tu travailles sur le backend Python.
+
+```bash
+cd backend
+python3.11 -m venv .venv
+source .venv/bin/activate          # Windows : .venv\Scripts\activate
+pip install -r requirements.txt
+# ⚠️  torch CPU ~800 MB — la première installation prend plusieurs minutes
+
+# Exporter les variables d'environnement
+export SUPABASE_URL=https://erpjerfvswesipmdqxab.supabase.co
+export SUPABASE_SERVICE_KEY=eyJ...    # reçue à l'étape 2
+export GOOGLE_API_KEY=AIza...
+export ANTHROPIC_KEY=sk-ant-...
+export GOOGLE_SA_KEY='{"type":"service_account",...}'
+
+uvicorn main:app --reload --port 8080
+# → http://localhost:8080/health  doit retourner {"ok":true,"model_loaded":true}
+```
+
+Pour que le frontend utilise ton backend local, modifie temporairement `BACKEND_URL` dans `src/lib/constants.js` :
+```js
+export const BACKEND_URL = 'http://localhost:8080';
+```
+**Ne pas committer ce changement.**
+
+### 5. Vérifications rapides
+
+| Vérification | Commande / URL |
+|---|---|
+| Frontend qui démarre | `npm run dev` → http://localhost:5173/clientchat_v2/ |
+| Login Google qui fonctionne | Connexion avec `@smart-bees.fr` depuis l'app locale |
+| Backend Cloud Run en vie | https://clientchat-v2-1004127157825.europe-west1.run.app/health |
+| Backend local en vie | http://localhost:8080/health (si lancé) |
+
+---
+
 ## Table des matières (documentation technique)
 
 1. [Stack Technique](#1-stack-technique)
@@ -63,6 +145,7 @@ Connexion avec un compte Google `@smart-bees.fr`. Si vous n'êtes pas encore ass
 10. [Déploiement](#10-déploiement)
 11. [Raccourcis clavier](#11-raccourcis-clavier)
 12. [Contraintes & Décisions techniques](#12-contraintes--décisions-techniques)
+13. [Dépannage](#13-dépannage)
 
 ---
 
@@ -80,7 +163,7 @@ Connexion avec un compte Google `@smart-bees.fr`. Si vous n'êtes pas encore ass
 | Modèle IA (chat) | Gemini 2.5 Flash | Chat, actions tâches, résumés de session |
 | Modèle IA (brief) | Gemini 2.5 Pro | Génération de la fiche client structurée |
 | Modèle IA (OCR PDF) | Claude Haiku 4.5 | Extraction texte PDF via vision (extract_worker.py) |
-| Embeddings | sentence-transformers `paraphrase-multilingual-MiniLM-L12-v2` | Local, 384 dims, zéro API externe |
+| Embeddings | sentence-transformers `paraphrase-multilingual-mpnet-base-v2` | Local, 768 dims, baked dans le Docker |
 | Documents | Google Drive API v3 (service account) | Export et listing des fichiers |
 | Emails | Gmail API (service account) | Lecture des emails de contact |
 | CI/CD | Cloud Build (`cloudbuild.yaml`) | Push `main` → build Docker → deploy Cloud Run |
@@ -110,7 +193,7 @@ Cloud Run — FastAPI Python  (clientchat-v2, europe-west1)
 Supabase (PostgreSQL + pgvector)
   ├── clients, tasks, session_summaries
   ├── team_members, client_members  ← auth individuelle
-  ├── document_chunks (vecteurs 384 dims)
+  ├── document_chunks (vecteurs 768 dims)
   ├── agency_knowledge (base de savoir)
   └── embedding_logs, usage_logs
 ```
@@ -162,19 +245,20 @@ clientchat_v2/
 ├── backend/
 │   ├── main.py                 # FastAPI — middleware JWT + toutes les actions
 │   ├── extract_worker.py       # Worker subprocess PDF/Office — OCR via Claude Haiku 4.5
-│   ├── requirements.txt        # Dépendances Python
+│   ├── requirements.txt        # Dépendances Python (versions épinglées)
 │   └── Dockerfile              # python:3.11-slim + sentence-transformers baked au build
 │
 ├── supabase/
-│   └── seed.sql                # Schéma complet PostgreSQL (tables + RPC match_chunks)
+│   └── seed.sql                # Schéma complet PostgreSQL (tables + index HNSW + RPC match_chunks)
 │
+├── .github/workflows/          # GitHub Actions — build + deploy GitHub Pages au push
 ├── dist/                       # Build Vite — déployé sur GitHub Pages (ne pas éditer)
 ├── vite.config.js              # Config Vite (base: /clientchat_v2/)
 ├── tailwind.config.js          # Config Tailwind
 └── cloudbuild.yaml             # Pipeline CI/CD : build Docker → deploy Cloud Run
 ```
 
-Les anciens fichiers vanilla JS (`app.js.old`, `db.js.old`, `ui.js.old`, `styles.css.old`) sont conservés en référence uniquement — ils ne sont pas utilisés en production.
+Les anciens fichiers vanilla JS (`app.js.old`, `db.js.old`, `ui.js.old`, `styles.css.old`) sont conservés à la racine en référence uniquement — ils ne sont pas utilisés en production.
 
 ---
 
@@ -187,6 +271,7 @@ Les anciens fichiers vanilla JS (`app.js.old`, `db.js.old`, `ui.js.old`, `styles
 - JWT stocké en mémoire via `useAuth`, transmis à chaque requête backend via `Authorization: Bearer`
 - Refresh token géré automatiquement par Supabase JS (`TOKEN_REFRESHED`)
 - Déconnexion : `sb.auth.signOut()` + purge session localStorage
+- Trigger Supabase `handle_new_user()` : insère automatiquement dans `team_members` à chaque premier login
 
 ### Welcome state
 
@@ -265,13 +350,13 @@ Texte du fichier Drive
         │
         ▼
 chunk_text() — découpage sémantique (backend Python)
-  Paragraphes → phrases → morceaux durs (max 400 chars, overlap 80 chars)
+  Paragraphes → phrases → morceaux durs (max 1200 chars, ~300 tokens)
   chunk_csv() pour les fichiers tableur (header répété dans chaque chunk)
         │
         ▼
 embed_texts() — sentence-transformers local
-  Modèle : paraphrase-multilingual-MiniLM-L12-v2
-  Output : float32[384], normalisé L2 — latence ~10ms/batch
+  Modèle : paraphrase-multilingual-mpnet-base-v2
+  Output : float32[768], normalisé L2 — latence ~10ms/batch
         │
         ▼
 INSERT document_chunks
@@ -279,12 +364,12 @@ INSERT document_chunks
         │
         ▼
 [À chaque message utilisateur]
-embed_texts([message]) → vecteur requête
+embed_texts([message]) → vecteur requête (768 dims)
         │
         ▼
-match_chunks RPC (pgvector cosine similarity)
-  HIGH_THRESHOLD = 0.62 → injecter si ≥ MIN_INJECT (2) résultats haute confiance
-  LOW_THRESHOLD  = 0.35 → fallback si pas assez de haute confiance
+match_chunks RPC — hybrid search (pgvector cosine + FTS, fusion RRF)
+  Index HNSW cosinus sur embedding vector(768)
+  ef_search=40 — compromis rappel/latence
   MAX_INJECT = 6 — injection dans system prompt + sources_used retournés au front
 ```
 
@@ -335,7 +420,7 @@ tasks (
   updated_at  timestamptz
 )
 
--- Résumés de sessions auto-générés (RLS activé)
+-- Résumés de sessions auto-générés
 session_summaries (
   id            uuid PK,
   client_id     uuid FK → clients,
@@ -350,9 +435,10 @@ document_chunks (
   source_type      text,               -- 'doc' | 'sheet' | 'pdf' | 'file' | 'session'
   source_name      text,
   chunk_text       text,
-  embedding        vector(384),
+  embedding        vector(768),        -- paraphrase-multilingual-mpnet-base-v2
   source_id        text,               -- Google Drive file ID (résistant au renommage)
-  last_indexed_at  timestamptz
+  last_indexed_at  timestamptz,
+  fts              tsvector            -- généré automatiquement pour le hybrid search
 )
 
 -- Insights cross-clients
@@ -380,10 +466,11 @@ usage_logs (
 )
 ```
 
-**RPC Supabase :**
+**RPC Supabase (hybrid search) :**
 ```sql
-match_chunks(query_embedding vector(384), match_count int, p_client_id uuid)
+match_chunks(query_embedding vector(768), match_count int, p_client_id uuid)
 RETURNS TABLE (id, source_name, source_type, chunk_text, similarity)
+-- Fusion pgvector cosine + FTS via Reciprocal Rank Fusion (RRF)
 ```
 
 ---
@@ -421,12 +508,12 @@ Headers : `Content-Type: application/json` + `Authorization: Bearer <jwt>`
 
 | Variable | Description |
 |----------|-------------|
-| `SUPABASE_URL` | URL projet Supabase (`https://xxx.supabase.co`) |
+| `SUPABASE_URL` | `https://erpjerfvswesipmdqxab.supabase.co` |
 | `SUPABASE_SERVICE_KEY` | Clé `service_role` Supabase (bypass RLS, côté serveur uniquement) |
-| `GOOGLE_API_KEY` | Clé API Google AI (Gemini 2.5 Flash / Pro) |
+| `GOOGLE_API_KEY` | Clé API Google AI (Gemini 2.5 Flash / Pro) — **différente** de `GOOGLE_SA_KEY` |
 | `ANTHROPIC_KEY` | Clé API Anthropic (Claude Haiku 4.5 — OCR PDF uniquement) |
-| `GOOGLE_SA_KEY` | JSON complet de la service account Google Drive + Gmail (stringifié) |
-| `API_KEY` | Clé HTTP legacy optionnelle (fallback transition si pas de JWT) |
+| `GOOGLE_SA_KEY` | JSON complet de la service account Google Drive + Gmail (stringifié sur une ligne) |
+| `API_KEY` | Clé HTTP legacy optionnelle (fallback si pas de JWT) |
 
 ### Frontend (`src/lib/constants.js` — valeurs publiques dans le code)
 
@@ -440,9 +527,22 @@ Headers : `Content-Type: application/json` + `Authorization: Bearer <jwt>`
 
 ## 9. Installation locale
 
+### Prérequis
+
+| Outil | Version requise | Vérification |
+|-------|----------------|--------------|
+| Node.js | ≥ 20.x | `node -v` |
+| npm | ≥ 10.x (livré avec Node 20) | `npm -v` |
+| Python | 3.11.x exactement | `python3.11 --version` |
+| Git | Toute version récente | `git --version` |
+
 ### Frontend
 
 ```bash
+# Cloner le repo
+git clone https://github.com/khadija-benayed/clientchat_v2.git
+cd clientchat_v2
+
 # Installer les dépendances
 npm install
 
@@ -450,51 +550,61 @@ npm install
 npm run dev
 # → http://localhost:5173/clientchat_v2/
 
-# Builder pour la production
+# Builder pour la production (optionnel en local)
 npm run build
 ```
 
-Le frontend pointe sur `BACKEND_URL` (Cloud Run) et `SB_URL` (Supabase) définis dans `src/lib/constants.js`.
-Pour le login Google OAuth en local, l'URL de redirect `http://localhost:5173` doit être autorisée dans les paramètres Supabase Auth.
+Le frontend pointe sur `BACKEND_URL` (Cloud Run en prod) et `SB_URL` (Supabase) définis dans `src/lib/constants.js`. Aucune variable d'environnement n'est nécessaire pour le frontend.
+
+Pour le login Google OAuth en local, l'URL `http://localhost:5173` doit être autorisée dans les paramètres Supabase Auth (déjà configuré).
 
 ### Backend (dev local)
 
 ```bash
 cd backend
-python -m venv .venv && source .venv/bin/activate
+
+# Créer et activer l'environnement virtuel Python 3.11
+python3.11 -m venv .venv
+source .venv/bin/activate          # macOS/Linux
+# .venv\Scripts\activate           # Windows
+
+# Installer les dépendances (⚠️ torch CPU ~800 MB — plusieurs minutes)
 pip install -r requirements.txt
 
+# Configurer les variables d'environnement
 export SUPABASE_URL=https://erpjerfvswesipmdqxab.supabase.co
 export SUPABASE_SERVICE_KEY=eyJ...
 export GOOGLE_API_KEY=AIza...
 export ANTHROPIC_KEY=sk-ant-...
 export GOOGLE_SA_KEY='{"type":"service_account",...}'
 
+# Lancer le serveur
 uvicorn main:app --reload --port 8080
-# → http://localhost:8080/health
+# → http://localhost:8080/health  doit retourner {"ok":true,"model_loaded":true}
 ```
 
-Pour tester avec le frontend local, remplacer temporairement `BACKEND_URL` dans `src/lib/constants.js` par `http://localhost:8080`.
+Pour tester avec le frontend local, modifier temporairement `BACKEND_URL` dans `src/lib/constants.js` (`http://localhost:8080`). **Ne pas committer ce changement.**
 
 ---
 
 ## 10. Déploiement
 
-### Frontend
+### Frontend (automatique)
 
 ```bash
 git push origin main
-# → GitHub Actions détecte le push
+# → GitHub Actions (.github/workflows/deploy.yml) détecte le push
+# → Setup Node.js 20 + npm ci
 # → npm run build → génère dist/
 # → Déploie dist/ sur GitHub Pages
-# → Live en ~1 min sur https://khadija-benayed.github.io/clientchat_v2/
+# → Live en ~1-2 min sur https://khadija-benayed.github.io/clientchat_v2/
 ```
 
-### Backend (Cloud Run — automatique)
+### Backend Cloud Run (automatique)
 
 ```bash
 git push origin main
-# → Cloud Build trigger détecte le push
+# → Cloud Build trigger (projet arctic-rite-497707-s6) détecte le push
 # → docker build -t gcr.io/arctic-rite-497707-s6/clientchat-v2 ./backend
 # → Push image vers GCR
 # → gcloud run deploy clientchat-v2 --region europe-west1
@@ -502,17 +612,17 @@ git push origin main
 ```
 
 **Infra Cloud Run :**
-- Service : `clientchat-v2` | Projet : `arctic-rite-497707-s6`
+- Service : `clientchat-v2` | Projet GCP : `arctic-rite-497707-s6`
 - Région : `europe-west1` | Image : `gcr.io/arctic-rite-497707-s6/clientchat-v2`
 - Mémoire : 1 Gi | CPU : 1 | Min instances : 0 | Max instances : 3
 
-> **Note cold start** : avec Min instances = 0, le backend "dort" si personne ne l'utilise. UptimeRobot ping `/health` toutes les 5 min pour éviter ça.
+> **Note cold start** : avec Min instances = 0, le backend "dort" si personne ne l'utilise. UptimeRobot ping `/health` toutes les 5 min pour éviter un cold start de ~30s.
 
-### Supabase Auth — configuration requise
+### Supabase Auth — configuration requise (déjà en place)
 
 1. Dashboard → Authentication → Providers → Google : activer + credentials OAuth 2.0
-2. Authentication → URL Configuration : ajouter `https://khadija-benayed.github.io/clientchat_v2` en Site URL et Redirect URLs
-3. Le trigger `handle_new_user()` insère automatiquement dans `team_members` à chaque signup
+2. Authentication → URL Configuration : `https://khadija-benayed.github.io/clientchat_v2` en Site URL et Redirect URLs
+3. Le trigger `handle_new_user()` insère automatiquement dans `team_members` à chaque premier signup Google
 
 ---
 
@@ -543,9 +653,9 @@ Gemini 2.5 Flash est le modèle principal : multilingue, rapide, économique. Cl
 - **Limite Supabase Edge** : timeout max 150s, insuffisant pour indexer 98 fichiers Drive
 - Cloud Run + sentence-transformers locaux : embeddings ~10ms/batch, cold start ~2s, zéro API externe
 
-### Pourquoi `paraphrase-multilingual-MiniLM-L12-v2` ?
+### Pourquoi `paraphrase-multilingual-mpnet-base-v2` ?
 
-Multilingue (français natif), 384 dimensions, léger (~120 MB), compatible avec `vector(384)` déjà en production.
+Multilingue (français natif), 768 dimensions, compatible avec `vector(768)` en production. Le modèle est **baked dans l'image Docker** au build — zéro téléchargement au démarrage du conteneur.
 
 ### Pourquoi React + Vite et non vanilla JS ?
 
@@ -568,3 +678,37 @@ Google OAuth via Supabase Auth. Le JWT est validé côté backend par `sb.auth.g
 | `cc-task-order-{clientId}` | Ordre des tâches après DnD |
 | `cc-doccache-{clientId}` | Cache docs Drive (TTL 30 min) |
 | `cc-api-key` | Clé API legacy optionnelle |
+
+---
+
+## 13. Dépannage
+
+### Le login Google échoue en local
+
+L'URL `http://localhost:5173` doit être dans la liste des Redirect URLs autorisées dans le dashboard Supabase (Authentication → URL Configuration). Contacte Khadija si tu n'as pas accès pour l'ajouter.
+
+### "Aucun espace client" après la première connexion
+
+Normal — tu n'es pas encore assigné à un client. Demande à un owner de te donner accès via Paramètres → "Accès à cet espace" → "Ajouter un membre".
+
+### Le backend local ne démarre pas (`model_loaded: false` ou erreur torch)
+
+- Vérifie que tu utilises bien Python 3.11 (`python3.11 --version`)
+- La première installation de torch peut échouer sur certaines architectures ARM (Apple Silicon) — essaie `pip install --upgrade pip` avant de relancer
+- Le modèle sentence-transformers se télécharge automatiquement au premier démarrage (~500 MB) si absent du cache local
+
+### Erreur CORS en local avec le backend Cloud Run
+
+Le backend Cloud Run n'accepte que les origines connues. Pour dev local, lance le backend en local et remplace `BACKEND_URL` dans `src/lib/constants.js`.
+
+### Le déploiement Cloud Run échoue (build timeout)
+
+La bake du modèle dans le Docker (~500 MB) peut dépasser le timeout par défaut de Cloud Build. Vérifie les logs dans la console Google Cloud (projet `arctic-rite-497707-s6` → Cloud Build → Historique).
+
+### Réponses lentes (~30s) sur l'app de production
+
+C'est un cold start : le backend Cloud Run s'est "endormi" (Min instances = 0). La première requête le réveille. UptimeRobot est censé éviter ça — vérifie que le monitor est actif sur https://uptimerobot.com.
+
+### Les embeddings semblent mauvais / RAG ne trouve rien
+
+Vérifie la dimension des vecteurs en base : `SELECT vector_dims(embedding) FROM document_chunks LIMIT 1;` — doit retourner **768**. Si tu vois 384, les chunks ont été indexés avec l'ancien modèle et il faut les ré-indexer (action `delete_source_chunks` puis re-sync Drive).

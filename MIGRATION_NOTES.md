@@ -1,6 +1,8 @@
 # MIGRATION_NOTES.md — Historique des migrations majeures
 
-Ce document retrace les grandes évolutions de l'architecture de Client Chat, pour comprendre pourquoi le code est écrit comme il l'est aujourd'hui.
+Ce document retrace les grandes évolutions de l'architecture de Client Chat, pour comprendre **pourquoi le code est écrit comme il l'est aujourd'hui**. À mettre à jour à chaque migration significative (changement de modèle IA, de stack, d'infrastructure).
+
+Pour l'installation et le démarrage du projet, voir le [README.md](README.md).
 
 ---
 
@@ -27,7 +29,7 @@ Claude Haiku 4.5 est **conservé** dans `extract_worker.py` pour l'OCR PDF via v
 
 - `backend/main.py` : les constantes `GEMINI_FLASH = "gemini-2.5-flash"` et `GEMINI_PRO = "gemini-2.5-pro"` centralisent les IDs de modèles — ne pas les dupliquer ailleurs
 - `backend/extract_worker.py` : seul fichier qui importe `anthropic` — à ne pas confondre avec le reste du backend
-- La variable `GOOGLE_API_KEY` (Google AI) est distincte de `GOOGLE_SA_KEY` (service account Drive/Gmail)
+- `GOOGLE_API_KEY` (Google AI Studio, Gemini) est **distincte** de `GOOGLE_SA_KEY` (service account Drive/Gmail)
 
 ---
 
@@ -73,9 +75,16 @@ Claude Haiku 4.5 est **conservé** dans `extract_worker.py` pour l'OCR PDF via v
 | Supabase Edge Functions (Deno) | FastAPI Python sur Google Cloud Run |
 | Hugging Face Inference API (embeddings) | sentence-transformers local dans le conteneur |
 | Timeout max 150s | Pas de limite (Cloud Run) |
+| `paraphrase-multilingual-MiniLM-L12-v2` (384 dims, HF API) | `paraphrase-multilingual-mpnet-base-v2` (768 dims, local) |
 
 ### Pourquoi cette migration
 
 - Les Edge Functions avaient des rate limits agressifs sur l'API HF Inference
 - Le timeout max 150s était insuffisant pour indexer un dossier Drive avec 90+ fichiers
 - sentence-transformers local : embeddings en ~10ms/batch, zéro dépendance API externe, cold start ~2s
+- Le modèle mpnet-base-v2 (768 dims) remplace MiniLM (384 dims) — meilleure qualité de retrieval multilangue ; la table `document_chunks` utilise `vector(768)` en conséquence
+
+### Ce qu'il faut savoir dans le code
+
+- Le schéma Supabase (`supabase/seed.sql`) est sur `vector(768)` — si des chunks existent en 384 dims dans une ancienne base, ils sont incompatibles et doivent être ré-indexés
+- Le modèle est **baked dans l'image Docker** au build (`Dockerfile`) — zéro téléchargement au cold start

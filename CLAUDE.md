@@ -12,7 +12,7 @@
 - **IA (chat/tasks/résumés)** : Gemini 2.5 Flash — appelé côté backend uniquement
 - **IA (brief structuré)** : Gemini 2.5 Pro — appelé côté backend uniquement
 - **IA (OCR PDF)** : Claude Haiku 4.5 — `extract_worker.py` uniquement (vision PDF)
-- **Embeddings / RAG** : `sentence-transformers` local — modèle `paraphrase-multilingual-MiniLM-L12-v2` (384 dims, multilingue) — chargé au démarrage du conteneur, zéro API externe
+- **Embeddings / RAG** : `sentence-transformers` local — modèle `paraphrase-multilingual-mpnet-base-v2` (768 dims, multilingue) — baked dans le Docker au build, zéro API externe
 - **Stockage documents** : Google Drive API v3 (service account) — export via backend Python
 - **Déploiement front** : GitHub Pages (push sur `main` → CI → `npm run build` → `dist/`)
 - **Déploiement backend** : Cloud Build (`cloudbuild.yaml`) → Docker build → Cloud Run `clientchat-v2` (europe-west1)
