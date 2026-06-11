@@ -31,6 +31,7 @@ export default function TaskBoard({ tasks, activeFilter, members, highlightedIds
   // Filtrage
   const filtered = tasks.filter(t => {
     if (activeFilter === 'all') return true;
+    if (activeFilter === 'external') return t.scope === 'external';
     if (activeFilter === 'deadline') {
       if (!t.due_date || t.status === 'done') return false;
       const due = new Date(t.due_date); due.setHours(23, 59, 59);

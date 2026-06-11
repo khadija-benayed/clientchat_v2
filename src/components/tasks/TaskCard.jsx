@@ -19,6 +19,7 @@
  * @param {Function} onDrop
  */
 import { memberStyle } from '../../lib/constants';
+import { SCOPE_LABELS, SCOPE_STYLES } from '../../utils/scope';
 
 const STATUS_CLASS = {
   todo: 's-todo', inprogress: 's-inp', blocked: 's-blk',
@@ -97,7 +98,18 @@ export default function TaskCard({
           }
           <span>{assigneeLabel}</span>
         </div>
-        <span className={`spill ${sc}`}>{sl}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {task.scope && task.scope !== 'internal' && (
+            <span style={{
+              ...SCOPE_STYLES[task.scope],
+              fontSize: '10px', fontWeight: 600, padding: '1px 7px',
+              borderRadius: '6px', whiteSpace: 'nowrap',
+            }}>
+              {SCOPE_LABELS[task.scope]}
+            </span>
+          )}
+          <span className={`spill ${sc}`}>{sl}</span>
+        </div>
       </div>
     </div>
   );

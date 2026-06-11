@@ -9,12 +9,7 @@ const MATCH_STYLES = {
   new:             { background: 'var(--c-green-bg)', color: 'var(--c-green)' },
   uncertain:       { background: 'var(--c-amb-bg)', color: 'var(--c-amb)' },
 };
-const SCOPE_LABELS = { internal: 'SB', external: 'Client', uncertain: '?' };
-const SCOPE_STYLES = {
-  internal:  { background: 'var(--sur3)', color: 'var(--tx2)' },
-  external:  { background: 'var(--c-pur-bg)', color: 'var(--c-pur)' },
-  uncertain: { background: 'var(--sur2)', color: 'var(--tx3)' },
-};
+import { SCOPE_LABELS, SCOPE_STYLES } from '../../utils/scope';
 
 export default function CRImportModal({
   isOpen, onClose, currentClient, members, tasks, jwtToken, onApply,

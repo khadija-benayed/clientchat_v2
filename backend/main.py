@@ -1729,12 +1729,22 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
                     else:
                         lines.append(f"- {t_label} : {f} {h.get('old_value')} → {h.get('new_value')}")
 
-        late = [t for t in open_tasks if t.get("due_date") and t["due_date"] < today]
-        stuck = [t for t in open_tasks if t.get("status") in ("blocked", "waiting")]
+        # Notre boulot : interne + incertain. Externe = à suivre, pas à faire.
+        ours = [t for t in open_tasks if t.get("scope") != "external"]
+        external = [t for t in open_tasks if t.get("scope") == "external"]
+
+        late = [t for t in ours if t.get("due_date") and t["due_date"] < today]
+        stuck = [t for t in ours if t.get("status") in ("blocked", "waiting")]
+        ext_watch = [t for t in external
+                     if (t.get("due_date") and t["due_date"] < today)
+                     or t.get("status") in ("blocked", "waiting")]
+
         if late:
             lines.append("En retard : " + ", ".join(t["title"] for t in late))
         if stuck:
             lines.append("Bloquées / en attente : " + ", ".join(t["title"] for t in stuck))
+        if ext_watch:
+            lines.append("À suivre côté client : " + ", ".join(t["title"] for t in ext_watch))
         facts_blocks.append("\n".join(lines))
 
     if not facts_blocks:
@@ -1766,7 +1776,9 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
             "- En dessous, chaque point sur sa propre ligne, préfixé par '– ' (tiret long + espace).\n"
             "- Une ligne vide entre deux clients.\n"
             "- Pas de titre général, pas d'introduction, pas de conclusion.\n"
-            "- Si un client n'a rien de notable, ne le mentionne pas du tout.\n\n"
+            "- Si un client n'a rien de notable, ne le mentionne pas du tout.\n"
+            "- Les points « à suivre côté client » sont des actions externes qu'on surveille sans en être "
+            "responsables : présente-les comme du suivi, pas comme nos propres retards.\n\n"
             + facts
         )
         response = gemini.generate_content(prompt)

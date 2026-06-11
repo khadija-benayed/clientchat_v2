@@ -26,6 +26,7 @@ export default function TaskFilters({ activeFilter, onFilterChange, members, tas
     const due = new Date(t.due_date); due.setHours(23, 59, 59);
     return (due - new Date()) / (1000 * 60 * 60 * 24) <= 7;
   }).length;
+  const externalCount = tasks.filter(t => t.scope === 'external').length;
 
   return (
     <div className="filters" id="frow">
@@ -49,6 +50,16 @@ export default function TaskFilters({ activeFilter, onFilterChange, members, tas
           {m.initials}
         </button>
       ))}
+
+      {externalCount > 0 && (
+        <button
+          className={`fil${activeFilter === 'external' ? ' on' : ''}`}
+          data-f="external"
+          onClick={() => onFilterChange('external')}
+        >
+          Externe ({externalCount})
+        </button>
+      )}
 
       {/* Filtre "Cette semaine" — affiché seulement si des tâches sont proches */}
       {dueSoonCount > 0 && (
