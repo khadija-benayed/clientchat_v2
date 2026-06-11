@@ -334,6 +334,7 @@ export default function App() {
         onLogout={logout}
         collapsed={sidebarCollapsed}
         onToggle={toggleSidebar}
+        onGoHome={() => setCurrentClient(null)}
       />
 
       <div className="main">
@@ -347,25 +348,74 @@ export default function App() {
             </svg>
             <div className="empty-t" style={{ color: 'var(--sb-navy)' }}>Bienvenue dans la Ruche</div>
             <div className="empty-s">Sélectionne un espace client pour commencer à butiner.</div>
-            <button
-              style={{ marginTop: '16px', padding: '8px 18px', borderRadius: '8px', border: '1px solid var(--brd2)', background: 'var(--sur)', color: 'var(--tx)', cursor: 'pointer', fontSize: '13px' }}
-              disabled={digestLoading}
-              onClick={async () => {
-                setDigestLoading(true);
-                setDigestText('');
-                setDigestOpen(true);
-                try {
-                  const res = await callBackend({ action: 'weekly_digest' }, jwtToken);
-                  setDigestText(res.digest || '');
-                } catch (e) {
-                  setDigestText(`Erreur : ${e.message}`);
-                } finally {
-                  setDigestLoading(false);
-                }
-              }}
-            >
-              {digestLoading ? 'Génération…' : 'Digest de la semaine'}
-            </button>
+
+            {/* ── Carte digest ── */}
+            <div style={{
+              marginTop: '32px',
+              background: 'linear-gradient(135deg, rgba(255,199,90,0.13) 0%, rgba(248,155,28,0.07) 100%)',
+              border: '1px solid rgba(248,155,28,0.35)',
+              borderRadius: '16px',
+              padding: '24px 28px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '8px',
+              width: '280px',
+              position: 'relative',
+              overflow: 'hidden',
+            }}>
+              <svg viewBox="0 0 280 120" preserveAspectRatio="xMidYMid slice"
+                   style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0.06, pointerEvents: 'none' }}>
+                <g fill="none" stroke="var(--sb-orange)" strokeWidth="1.5">
+                  <polygon points="40,8 56,17 56,35 40,44 24,35 24,17"/>
+                  <polygon points="72,26 88,35 88,53 72,62 56,53 56,35"/>
+                  <polygon points="200,4 216,13 216,31 200,40 184,31 184,13"/>
+                  <polygon points="232,22 248,31 248,49 232,58 216,49 216,31"/>
+                  <polygon points="120,72 136,81 136,99 120,108 104,99 104,81"/>
+                </g>
+              </svg>
+              <div style={{ fontSize: '30px', lineHeight: 1 }}>🐝</div>
+              <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--sb-navy)', textAlign: 'center', position: 'relative' }}>
+                {isFriday() ? 'Beesy week !' : 'Récap de la semaine'}
+              </div>
+              <div style={{ fontSize: '12.5px', color: 'var(--tx3)', textAlign: 'center', lineHeight: 1.5, position: 'relative' }}>
+                {isFriday()
+                  ? 'Le bilan de la ruche est prêt.\nFile en week-end l\'esprit tranquille.'
+                  : 'Ce qui a bougé chez tous tes clients\ncette semaine.'}
+              </div>
+              <button
+                style={{
+                  marginTop: '10px',
+                  padding: '9px 24px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  background: 'var(--sb-orange)',
+                  color: '#fff',
+                  cursor: digestLoading ? 'default' : 'pointer',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  opacity: digestLoading ? 0.7 : 1,
+                  position: 'relative',
+                  transition: 'opacity 0.15s',
+                }}
+                disabled={digestLoading}
+                onClick={async () => {
+                  setDigestLoading(true);
+                  setDigestText('');
+                  setDigestOpen(true);
+                  try {
+                    const res = await callBackend({ action: 'weekly_digest' }, jwtToken);
+                    setDigestText(res.digest || '');
+                  } catch (e) {
+                    setDigestText(`Erreur : ${e.message}`);
+                  } finally {
+                    setDigestLoading(false);
+                  }
+                }}
+              >
+                {digestLoading ? '🐝 Génération…' : isFriday() ? '🍯 Voir le bilan' : 'Voir le récap →'}
+              </button>
+            </div>
           </div>
         ) : (
           /* Workspace client */

@@ -22,13 +22,18 @@ import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 export default function Sidebar({
   clients, currentClient, onSelectClient, onLeaveClient,
   onNewClient, onJoinClient, onOpenKb, onGmailPrefs, onLogout,
-  collapsed, onToggle,
+  collapsed, onToggle, onGoHome,
 }) {
   return (
     <div className={`sidebar${collapsed ? ' collapsed' : ''}`}>
       {/* En-tête avec logo et bouton collapse */}
       <div className="sb-top">
-        <div className="sb-brand">Client Chat</div>
+        <div
+          className="sb-brand"
+          onClick={onGoHome}
+          title="Accueil"
+          style={{ cursor: 'pointer', userSelect: 'none' }}
+        >Client Chat</div>
         <button className="collapse-btn" onClick={onToggle} title="Réduire (⌘B)">
           {collapsed
             ? <PanelLeftOpen size={16} />
