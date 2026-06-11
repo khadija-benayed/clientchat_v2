@@ -41,6 +41,14 @@ import Modal from './components/shared/Modal';
 import supabase from './lib/supabase';
 import { callBackend } from './lib/backend';
 
+function isFriday() {
+  return new Date().getDay() === 5;
+}
+function fridayKey() {
+  const d = new Date();
+  return `digest-popped-${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 export default function App() {
   // ── Auth ──────────────────────────────────────────────────────────────────
   const { user, jwtToken, currentUserId, authReady, signInWithGoogle, logout } = useAuth();
@@ -114,6 +122,24 @@ export default function App() {
   const [digestOpen, setDigestOpen]     = useState(false);
   const [digestText, setDigestText]     = useState('');
   const [digestLoading, setDigestLoading] = useState(false);
+
+  // ── Pop automatique du digest le vendredi ─────────────────────────────────
+  useEffect(() => {
+    if (!jwtToken) return;
+    if (currentClient) return;
+    if (!isFriday()) return;
+    const key = fridayKey();
+    if (localStorage.getItem(key)) return;
+    localStorage.setItem(key, '1');
+    setDigestLoading(true);
+    setDigestText('');
+    setDigestOpen(true);
+    callBackend({ action: 'weekly_digest' }, jwtToken)
+      .then(res => setDigestText(res.digest || ''))
+      .catch(e => setDigestText(`Erreur : ${e.message}`))
+      .finally(() => setDigestLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jwtToken, currentClient]);
 
   // ── Raccourcis clavier ────────────────────────────────────────────────────
   useEffect(() => {
@@ -503,15 +529,100 @@ export default function App() {
         </div>
       </Modal>
 
-      <Modal isOpen={digestOpen} onClose={() => setDigestOpen(false)} title="Digest de la semaine" maxWidth="640px">
-        {digestLoading ? (
-          <p style={{ color: 'var(--tx3)', fontSize: '13px' }}>Génération en cours…</p>
-        ) : (
-          <div style={{ whiteSpace: 'pre-wrap', fontSize: '13px', lineHeight: '1.6', color: 'var(--tx)' }}>
-            {digestText}
+      <Modal isOpen={digestOpen} onClose={() => setDigestOpen(false)} title={null} maxWidth="600px">
+        {isFriday() && (
+          <div style={{
+            margin: '-24px -24px 20px',
+            padding: '28px 28px 24px',
+            background: 'linear-gradient(135deg, #FFC75A 0%, #F89B1C 55%, #E0820A 100%)',
+            borderRadius: 'var(--r) var(--r) 0 0',
+            position: 'relative',
+            overflow: 'hidden',
+          }}>
+            <svg viewBox="0 0 600 160" preserveAspectRatio="xMidYMid slice"
+                 style={{ position: 'absolute', inset: 0, opacity: 0.2, pointerEvents: 'none' }}>
+              <g fill="none" stroke="#fff" strokeWidth="2">
+                <polygon points="60,10 80,22 80,46 60,58 40,46 40,22"/>
+                <polygon points="110,40 130,52 130,76 110,88 90,76 90,52"/>
+                <polygon points="520,8 540,20 540,44 520,56 500,44 500,20"/>
+                <polygon points="560,52 580,64 580,88 560,100 540,88 540,64"/>
+                <polygon points="470,60 490,72 490,96 470,108 450,96 450,72"/>
+              </g>
+            </svg>
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: '7px',
+              background: 'rgba(255,255,255,0.92)', color: 'var(--sb-navy)',
+              fontSize: '12px', fontWeight: 600, letterSpacing: '0.3px',
+              padding: '5px 12px', borderRadius: '999px', marginBottom: '14px', position: 'relative',
+            }}>🐝 SMART BEES · VENDREDI</div>
+            <div style={{
+              position: 'relative', fontSize: '26px', fontWeight: 700, color: '#fff',
+              lineHeight: 1.15, display: 'flex', alignItems: 'center', gap: '10px',
+              textShadow: '0 1px 0 rgba(224,130,10,0.35)',
+            }}><span style={{ fontSize: '29px' }}>🐝</span> Beesy week!</div>
+            <div style={{
+              position: 'relative', marginTop: '8px', fontSize: '14px',
+              color: 'rgba(255,255,255,0.96)', fontWeight: 500, lineHeight: 1.5,
+            }}>
+              Le récap est prêt, file en week-end l'esprit tranquille.<br/>
+              🍯 Sweet week-end
+            </div>
           </div>
         )}
+        {!isFriday() && (
+          <h2 style={{ fontSize: '17px', fontWeight: 700, marginBottom: '18px', color: 'var(--tx)' }}>
+            Digest de la semaine
+          </h2>
+        )}
+        {digestLoading ? (
+          <p style={{ color: 'var(--tx3)', fontSize: '13px' }}>Génération en cours… 🐝</p>
+        ) : (
+          <DigestBody text={digestText} />
+        )}
       </Modal>
+    </div>
+  );
+}
+
+function DigestBody({ text }) {
+  if (!text) return <p style={{ color: 'var(--tx3)', fontSize: '13px' }}>Rien à afficher.</p>;
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const blocks = [];
+  let current = null;
+  for (const line of lines) {
+    const isItem = line.startsWith('–') || line.startsWith('-') || line.startsWith('•');
+    if (!isItem) {
+      current = { client: line.replace(/[:#*]/g, '').trim(), items: [] };
+      blocks.push(current);
+    } else if (current) {
+      current.items.push(line.replace(/^[–\-•]\s*/, ''));
+    } else {
+      current = { client: '', items: [line.replace(/^[–\-•]\s*/, '')] };
+      blocks.push(current);
+    }
+  }
+  return (
+    <div style={{ fontSize: '13.5px', lineHeight: 1.6, color: 'var(--tx)' }}>
+      <div style={{ fontSize: '13px', color: 'var(--tx3)', marginBottom: '16px' }}>
+        Ce qui a bougé cette semaine, tous clients confondus.
+      </div>
+      {blocks.map((b, i) => (
+        <div key={i} style={{ marginBottom: i < blocks.length - 1 ? '18px' : 0 }}>
+          {b.client && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px',
+                          fontSize: '14px', fontWeight: 700, color: 'var(--sb-navy)', marginBottom: '8px' }}>
+              <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: 'var(--sb-orange)', flexShrink: 0 }} />
+              {b.client}
+            </div>
+          )}
+          {b.items.map((it, j) => (
+            <div key={j} style={{ paddingLeft: '15px', marginBottom: '5px', position: 'relative' }}>
+              <span style={{ position: 'absolute', left: 0, color: 'var(--sb-orange)' }}>·</span>
+              {it}
+            </div>
+          ))}
+        </div>
+      ))}
     </div>
   );
 }

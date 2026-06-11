@@ -1761,6 +1761,12 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
             "Ne liste pas mécaniquement chaque changement de champ : synthétise en langage naturel "
             "(ex. « la tâche X est passée en done », « Y est bloquée depuis le passage en blocked »). "
             "Ignore les changements sans intérêt business. Si un client n'a rien de notable, ne le mentionne pas.\n\n"
+            "FORMAT IMPÉRATIF de ta réponse :\n"
+            "- Le nom de chaque client sur une ligne seule, sans tiret ni ponctuation autour.\n"
+            "- En dessous, chaque point sur sa propre ligne, préfixé par '– ' (tiret long + espace).\n"
+            "- Une ligne vide entre deux clients.\n"
+            "- Pas de titre général, pas d'introduction, pas de conclusion.\n"
+            "- Si un client n'a rien de notable, ne le mentionne pas du tout.\n\n"
             + facts
         )
         response = gemini.generate_content(prompt)
