@@ -26,6 +26,7 @@ import supabase from '../../lib/supabase';
 export default function ClientSettings({
   isOpen, onClose, client, myRole, onClientUpdate, onSyncMessage,
   onDeleteClient, onOpenGmailPrefs, syncHook, onSyncComplete, indexingRef, jwtToken,
+  onMembersRefresh,
 }) {
   const [tab, setTab] = useState('params');
   const [ctx, setCtx] = useState('');
@@ -128,8 +129,11 @@ export default function ClientSettings({
         docs_content: docsContent,
         existing_brief: client?.context || null,
       }, jwtToken);
-      if (data.brief) { setBrief(data.brief); onClientUpdate?.({ context: JSON.stringify(data.brief) }); }
-      else throw new Error(data.error || 'Fiche non générée');
+      if (data.brief) {
+        setBrief(data.brief);
+        onClientUpdate?.({ context: JSON.stringify(data.brief) });
+        onSyncMessage?.({ type: 'ok', message: '✓ Fiche client générée avec succès.' });
+      } else throw new Error(data.error || 'Fiche non générée');
     } catch (e) { onSyncMessage?.({ type: 'error', message: '⚠ ' + e.message }); }
     finally { setBriefLoading(false); }
   }
@@ -176,7 +180,7 @@ export default function ClientSettings({
 
       {tab === 'params' ? (
         <div id="settings-panel-params">
-          <MembersSection client={client} onMembersChange={m => onClientUpdate?.({ members: m })} jwtToken={jwtToken} />
+          <MembersSection client={client} jwtToken={jwtToken} onMembersRefresh={onMembersRefresh} />
 
           {canInvite && (
             <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid var(--brd)' }}>

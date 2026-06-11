@@ -1483,16 +1483,35 @@ async def propose_cr_tasks(body: dict, user_id: Optional[str]):
 
     # Client row: members JSON + brief context
     client_res = (
-        sb.table("clients").select("members, context")
+        sb.table("clients").select("context")
         .eq("id", client_id).maybe_single().execute()
     )
     client_data = client_res.data or {}
 
-    # Smart Bees members (initials + name) for this client
+    # Smart Bees members — lus depuis les tables normalisées
     sb_members = []
     try:
-        raw = client_data.get("members") or "[]"
-        sb_members = json.loads(raw) if isinstance(raw, str) else (raw or [])
+        rows = (
+            sb.table("client_members")
+            .select("member_id, team_members(full_name, email)")
+            .eq("client_id", client_id)
+            .execute()
+        )
+        seen_initials = []
+        for row in (rows.data or []):
+            tm = row.get("team_members") or {}
+            full_name = tm.get("full_name") or tm.get("email") or ""
+            if not full_name:
+                continue
+            parts = full_name.strip().split()
+            base = (parts[0][0] + parts[1][0]).upper() if len(parts) >= 2 else full_name[:2].upper()
+            ini = base
+            n = 2
+            while ini in seen_initials:
+                ini = base + str(n)
+                n += 1
+            seen_initials.append(ini)
+            sb_members.append({"initials": ini, "name": full_name})
     except Exception:
         sb_members = []
 
@@ -1533,13 +1552,22 @@ async def propose_cr_tasks(body: dict, user_id: Optional[str]):
         contacts_block = f"\nCONTACTS CÔTÉ CLIENT (actions leur étant assignées → scope=external) :\n{lines}\n"
 
     prompt = (
-        "Tu es un assistant qui extrait des actions actionnables d'un compte-rendu de réunion "
+        "Tu es un assistant qui extrait les ACTIONS À FAIRE d'un compte-rendu de réunion "
         "pour une agence data/marketing.\n\n"
         f"ÉQUIPE SMART BEES (internes — seuls ceux-ci peuvent recevoir des tâches via 'assignee') :\n{sb_block}\n"
         + contacts_block
         + f"\nTÂCHES EN COURS (à mettre à jour si le CR les mentionne) :\n{tasks_block}\n\n"
         f"COMPTE-RENDU :\n{cr_text}\n\n"
-        "Extrais TOUTES les actions actionnables mentionnées dans ce CR. Pour chaque action :\n"
+        "Un CR mélange des actions à faire, des décisions, des options discutées et du contexte. "
+        "Tu n'extrais QUE les ENGAGEMENTS : une action que quelqu'un s'est engagé à faire, "
+        "ou une décision actée à exécuter.\n"
+        "Priorité aux sections d'actions explicites ('Prochaines étapes', 'Actions', 'Next steps', 'TODO') : "
+        "c'est la source de vérité. Dans le reste du CR, n'extrais une action que si c'est un engagement "
+        "clair (« X va faire Y », « on doit Z »).\n\n"
+        "NE SONT PAS des tâches : une option qu'on pèse (A/B/C), une recommandation non décidée, "
+        "une contrainte, un constat ou une observation marché. Au mieux ça devient une 'note' sur une "
+        "tâche liée — jamais une tâche en soi.\n\n"
+        "Pour chaque engagement :\n"
         "- summary : résumé court et précis de l'action\n"
         "- match_type : 'update_existing' si elle correspond à une tâche en cours (fournis task_id), "
         "'new' pour une nouvelle tâche, 'uncertain' si tu n'es pas sûr\n"
@@ -1562,7 +1590,9 @@ async def propose_cr_tasks(body: dict, user_id: Optional[str]):
         "2. assignee = initiales SB uniquement depuis la liste fournie — null si inconnu\n"
         "3. Ne remplir fields que sur la base de ce qui est dit explicitement dans le CR\n"
         "4. Préférer needs_clarification=true plutôt que trancher avec peu d'info\n"
-        "5. Ignorer les échanges purement contextuels sans action concrète"
+        "5. Au moindre doute « action ou simple discussion ? » → ne PAS créer de tâche\n"
+        "6. Le nombre de tâches doit être stable que la section 'Prochaines étapes' soit présente "
+        "ou non : les options et recommandations de la discussion ne sont pas des actions"
     )
 
     try:

@@ -87,7 +87,7 @@ export default function App() {
     driveOutdated, clearDriveOutdated, checkDriveOutdated,
     selectClient, upsertTask, deleteTask, saveTaskOrder,
     getMembers, addSummary, loadClients, loadDocCache, indexingRef,
-    myRole,
+    myRole, clientMembers, reloadClientMembers,
   } = clientStore;
 
   // ── Sync ──────────────────────────────────────────────────────────────────
@@ -281,7 +281,7 @@ export default function App() {
   }
 
   // ── Membres du client courant ─────────────────────────────────────────────
-  const members = getMembers(currentClient);
+  const members = getMembers(clientMembers);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -409,6 +409,7 @@ export default function App() {
         client={currentClient}
         myRole={myRole}
         onClientUpdate={handleClientUpdate}
+        onMembersRefresh={() => reloadClientMembers(currentClient?.id)}
         onSyncMessage={handleSyncMessage}
         onDeleteClient={id => {
           setClients(prev => { const u = prev.filter(c => c.id !== id); localStorage.setItem('cc-sess', JSON.stringify(u)); return u; });

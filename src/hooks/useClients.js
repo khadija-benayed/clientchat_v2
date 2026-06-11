@@ -20,6 +20,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import supabase from '../lib/supabase';
 import { callBackend } from '../lib/backend';
 import { EXPORTABLE_MIMETYPES } from '../lib/constants';
+import { computeInitials, uniqueInitials } from '../utils/initials';
 
 /**
  * @param {object} params
@@ -53,6 +54,9 @@ export function useClients({ jwtToken, currentUserId }) {
 
   // Rôle du membre connecté sur le client courant ('owner' | 'admin' | 'member')
   const [myRole, setMyRole] = useState('member');
+
+  // Membres SB normalisés du client courant (depuis client_members JOIN team_members)
+  const [clientMembers, setClientMembers] = useState([]);
 
   // Référence au canal Realtime Supabase (pas dans le state car pas besoin de re-rendu)
   const rtChanRef = useRef(null);
@@ -118,13 +122,15 @@ export function useClients({ jwtToken, currentUserId }) {
     setTasks([]);
     setSummaries([]);
     setDocCache([]);
+    setClientMembers([]);
 
     setSyncStatus({ color: '#EF9F27', label: 'chargement…' });
 
-    // Charger tâches + résumés en parallèle
-    const [_, prevSummaries] = await Promise.all([
+    // Charger tâches + résumés + membres en parallèle
+    const [, prevSummaries] = await Promise.all([
       loadTasksForClient(freshClient.id),
       loadSummaries(freshClient.id),
+      reloadClientMembers(freshClient.id),
     ]);
     setSummaries(prevSummaries);
 
@@ -191,6 +197,18 @@ export function useClients({ jwtToken, currentUserId }) {
   }
 
   // ── Résumés de sessions ───────────────────────────────────────────────────
+
+  async function reloadClientMembers(clientId) {
+    try {
+      const data = await callBackend({ action: 'get_client_members', client_id: clientId }, jwtToken);
+      if (activeClientIdRef.current === clientId) {
+        setClientMembers(data?.members || []);
+      }
+    } catch (e) {
+      console.warn('reloadClientMembers:', e.message);
+      if (activeClientIdRef.current === clientId) setClientMembers([]);
+    }
+  }
 
   async function loadSummaries(clientId, limit = 5) {
     try {
@@ -329,9 +347,14 @@ export function useClients({ jwtToken, currentUserId }) {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  /** Retoque les membres depuis le champ JSON clients.members */
-  function getMembers(client) {
-    try { return JSON.parse(client?.members || '[]'); } catch { return []; }
+  function getMembers(normalizedMembers = []) {
+    const result = [];
+    for (const m of normalizedMembers) {
+      const base = computeInitials(m.full_name, m.email);
+      const ini = uniqueInitials(base, result);
+      result.push({ initials: ini, name: m.full_name || m.email, member_id: m.member_id });
+    }
+    return result;
   }
 
   function getSources(client) {
@@ -355,6 +378,7 @@ export function useClients({ jwtToken, currentUserId }) {
     loadDocCache,
     indexingRef,
     myRole,
+    clientMembers, reloadClientMembers,
   };
 }
 

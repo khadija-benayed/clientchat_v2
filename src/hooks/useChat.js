@@ -437,7 +437,10 @@ function buildClientContext(client) {
         b.secteur ? 'Secteur : ' + b.secteur : null,
         b.enjeux_principaux?.length ? 'Enjeux : ' + b.enjeux_principaux.join(' | ') : null,
         b.kpis?.length ? 'KPIs : ' + b.kpis.join(' | ') : null,
-        b.equipe?.length ? 'Équipe client : ' + b.equipe.join(', ') : null,
+        b.equipe?.length ? 'Équipe client : ' + b.equipe.map(m => {
+          const name = [m.prenom, m.nom].filter(Boolean).join(' ') || m.nom || m.name || '?';
+          return m.role ? `${name} (${m.role})` : name;
+        }).join(', ') : null,
         b.historique ? 'Historique : ' + b.historique : null,
         b.notes ? 'Notes : ' + b.notes : null,
       ].filter(Boolean).join('\n');

@@ -74,6 +74,7 @@ export default function CRImportModal({
   async function applySelected() {
     const accepted = proposals.filter(p => p.selected);
     if (!accepted.length) return;
+    const today = new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
 
     const tasksToApply = accepted.map(item => {
       const f = item.fields;
@@ -82,12 +83,12 @@ export default function CRImportModal({
         return {
           ...existing,
           ...(f.title    ? { title: f.title }       : {}),
-          ...(f.assignee !== undefined ? { assignee: f.assignee } : {}),
+          ...(f.assignee ? { assignee: f.assignee } : {}),
           ...(f.prio     ? { prio: f.prio }         : {}),
           ...(f.status   ? { status: f.status }     : {}),
-          ...(f.due_date !== undefined ? { due_date: f.due_date } : {}),
+          ...(f.due_date ? { due_date: f.due_date } : {}),
           ...(f.note
-            ? { note: existing.note ? `${existing.note}\n${f.note}` : f.note }
+            ? { note: existing.note ? `${existing.note}\n[${today}] ${f.note}` : `[${today}] ${f.note}` }
             : {}),
           scope: item.scope !== 'uncertain' ? item.scope : (existing.scope || 'internal'),
         };

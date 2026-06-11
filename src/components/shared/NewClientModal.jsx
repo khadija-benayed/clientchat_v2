@@ -2,13 +2,7 @@ import { useState, useEffect } from 'react';
 import Modal from './Modal';
 import supabase from '../../lib/supabase';
 import { callBackend } from '../../lib/backend';
-
-function computeInitials(fullName, email) {
-  const src = fullName || email || '?';
-  const parts = src.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[1][0]).toUpperCase();
-}
+import { computeInitials } from '../../utils/initials';
 
 export default function NewClientModal({ isOpen, onClose, currentUserId, jwtToken, onCreated }) {
   const [name, setName] = useState('');

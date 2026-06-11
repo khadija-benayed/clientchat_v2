@@ -1,25 +1,9 @@
 import { useState, useEffect } from 'react';
 import { callBackend } from '../../lib/backend';
 import { memberStyle } from '../../lib/constants';
-import supabase from '../../lib/supabase';
+import { computeInitials } from '../../utils/initials';
 
-/** Derives 2-letter initials: first letter of first word + first letter of second word */
-function computeInitials(fullName, email) {
-  const src = fullName || email || '?';
-  const parts = src.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[1][0]).toUpperCase();
-}
-
-/** Ensures no two members share the same initials — appends a digit if needed */
-function uniqueInitials(base, existing) {
-  if (!existing.some(m => m.initials === base)) return base;
-  let n = 2;
-  while (existing.some(m => m.initials === base + n)) n++;
-  return base + n;
-}
-
-export default function MembersSection({ client, onMembersChange, jwtToken }) {
+export default function MembersSection({ client, jwtToken, onMembersRefresh }) {
   const [accessData, setAccessData] = useState(null);
   const [accessError, setAccessError] = useState('');
   const [addMemberId, setAddMemberId] = useState('');
@@ -35,44 +19,23 @@ export default function MembersSection({ client, onMembersChange, jwtToken }) {
     } catch (e) { setAccessError(e.message); }
   }
 
-  /** Reads current clients.members JSON, adds/removes an entry, persists both to DB */
-  function syncTeamMember(action, tm) {
-    let current = [];
-    try { current = JSON.parse(client?.members || '[]'); } catch {}
-
-    let updated;
-    if (action === 'add') {
-      const base = computeInitials(tm.full_name, tm.email);
-      const ini = uniqueInitials(base, current);
-      updated = [...current, { initials: ini, name: tm.full_name || tm.email, member_id: tm.id }];
-    } else {
-      updated = current.filter(m => m.member_id !== tm.id);
-    }
-
-    const json = JSON.stringify(updated);
-    supabase.from('clients').update({ members: json }).eq('id', client.id)
-      .catch(e => console.warn('syncTeamMember:', e.message));
-    onMembersChange?.(json);
-  }
-
   async function addClientMember() {
     if (!addMemberId) return;
     setAccessError('');
-    const tm = (accessData?.available || []).find(m => m.id === addMemberId);
     try {
       await callBackend({ action: 'add_client_member', client_id: client.id, member_id: addMemberId, role: 'member' }, jwtToken);
-      if (tm) syncTeamMember('add', tm);
       setAddMemberId('');
       await loadClientMembers();
+      onMembersRefresh?.();
     } catch (e) { setAccessError(e.message); }
   }
 
-  async function removeClientMember(memberId, tm) {
+  async function removeClientMember(memberId) {
     setAccessError('');
     try {
       await callBackend({ action: 'remove_client_member', client_id: client.id, member_id: memberId }, jwtToken);
-      syncTeamMember('remove', { id: memberId, ...tm });
       await loadClientMembers();
+      onMembersRefresh?.();
     } catch (e) { setAccessError(e.message); }
   }
 
@@ -122,7 +85,7 @@ export default function MembersSection({ client, onMembersChange, jwtToken }) {
                         {m.role === 'owner' ? '→ membre' : '→ owner'}
                       </button>
                       <button className="cm-remove-btn"
-                        onClick={() => removeClientMember(m.member_id, { full_name: m.full_name, email: m.email })}>
+                        onClick={() => removeClientMember(m.member_id)}>
                         ×
                       </button>
                     </div>
