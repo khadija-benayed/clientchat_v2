@@ -14,7 +14,7 @@ import traceback
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
@@ -706,6 +706,8 @@ async def dispatcher(request: Request):
         return await propose_cr_tasks(body, user_id)
     if action == "delete_task":
         return await delete_task(body, user_id)
+    if action == "weekly_digest":
+        return await weekly_digest(body, user_id)
     if action == "create_client":
         return await create_client(body, user_id)
     if action == "delete_client":
@@ -1280,6 +1282,16 @@ async def _assert_role(user_id: Optional[str], client_id: str, allowed_roles: li
         raise HTTPException(status_code=403, detail="Accès refusé")
 
 
+def _set_audit_user(user_id: Optional[str]) -> None:
+    """Positionne l'auteur courant pour le trigger task_history. No-op si user_id absent."""
+    if not user_id:
+        return
+    try:
+        sb.rpc("set_audit_user", {"uid": user_id}).execute()
+    except Exception as e:
+        print(f"_set_audit_user: {e}")
+
+
 # ── get_client_members ────────────────────────────────────────────────────────
 async def get_client_members(body: dict, user_id: Optional[str]):
     client_id = body.get("client_id")
@@ -1442,6 +1454,7 @@ async def upsert_task(body: dict, user_id: Optional[str]):
     if not client_id:
         return JSONResponse({"error": "client_id requis"}, status_code=400)
     await _assert_role(user_id, client_id, ["owner", "member"])
+    _set_audit_user(user_id)
     task_id = task.get("id")
     if task_id and task_id > 0:
         sb.table("tasks").update({
@@ -1636,8 +1649,141 @@ async def delete_task(body: dict, user_id: Optional[str]):
     if not task_id or not client_id:
         return JSONResponse({"error": "task_id et client_id requis"}, status_code=400)
     await _assert_role(user_id, client_id, ["owner", "member"])
+    _set_audit_user(user_id)
     sb.table("tasks").delete().eq("id", task_id).eq("client_id", client_id).execute()
     return JSONResponse({"ok": True})
+
+
+# ── weekly_digest ──────────────────────────────────────────────────────────────
+async def weekly_digest(body: dict, user_id: Optional[str]):
+    if not user_id:
+        return JSONResponse({"error": "JWT requis"}, status_code=401)
+
+    # 1) Clients accessibles (même logique que /me)
+    try:
+        rows = (
+            sb.table("client_members")
+            .select("client_id, clients(id, name)")
+            .eq("member_id", user_id)
+            .execute()
+        )
+        clients = [
+            {"id": r["client_id"], "name": (r.get("clients") or {}).get("name", "?")}
+            for r in (rows.data or [])
+        ]
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    if not clients:
+        return JSONResponse({"digest": "Aucun client accessible cette semaine.", "empty": True})
+
+    since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    facts_blocks = []
+
+    for c in clients:
+        cid = c["id"]
+        # 2a) changements de la semaine
+        try:
+            hist = (
+                sb.table("task_history")
+                .select("task_id, action, field, old_value, new_value, changed_at")
+                .eq("client_id", cid)
+                .gte("changed_at", since)
+                .order("changed_at", desc=False)
+                .execute()
+            ).data or []
+        except Exception:
+            hist = []
+
+        # 2b) tâches ouvertes (non done) — retard et blocage
+        try:
+            open_tasks = (
+                sb.table("tasks")
+                .select("id, title, status, assignee, due_date, scope")
+                .eq("client_id", cid)
+                .neq("status", "done")
+                .execute()
+            ).data or []
+        except Exception:
+            open_tasks = []
+
+        if not hist and not open_tasks:
+            continue
+
+        titles = {t["id"]: t["title"] for t in open_tasks}
+        today = datetime.now(timezone.utc).date().isoformat()
+
+        lines = [f"### Client : {c['name']}"]
+        if hist:
+            lines.append("Changements cette semaine :")
+            for h in hist:
+                t_label = titles.get(h["task_id"], f"tâche #{h['task_id']}")
+                if h["action"] == "created":
+                    lines.append(f"- créée : {t_label}")
+                elif h["action"] == "deleted":
+                    lines.append(f"- supprimée : tâche #{h['task_id']}")
+                else:
+                    f = h.get("field")
+                    if f == "note":
+                        lines.append(f"- {t_label} : note mise à jour")
+                    else:
+                        lines.append(f"- {t_label} : {f} {h.get('old_value')} → {h.get('new_value')}")
+
+        late = [t for t in open_tasks if t.get("due_date") and t["due_date"] < today]
+        stuck = [t for t in open_tasks if t.get("status") in ("blocked", "waiting")]
+        if late:
+            lines.append("En retard : " + ", ".join(t["title"] for t in late))
+        if stuck:
+            lines.append("Bloquées / en attente : " + ", ".join(t["title"] for t in stuck))
+        facts_blocks.append("\n".join(lines))
+
+    if not facts_blocks:
+        return JSONResponse({"digest": "Rien n'a bougé cette semaine sur tes clients.", "empty": True})
+
+    facts = "\n\n".join(facts_blocks)
+
+    # 3) Mise en mots par Gemini Flash
+    try:
+        gemini = genai.GenerativeModel(
+            model_name=GEMINI_FLASH,
+            system_instruction=(
+                "Tu es un assistant qui rédige un récap hebdomadaire d'activité pour une agence "
+                "data/marketing. Ton orienté business : ce qui a avancé, ce qui s'est débloqué, "
+                "les nouveaux points bloquants, ce qui traîne. Factuel, concis, pas de remplissage. "
+                "Tu écris en 'on' (première personne du pluriel)."
+            ),
+            generation_config={"max_output_tokens": 900},
+            safety_settings=_SAFETY_OFF,
+        )
+        prompt = (
+            "Voici les faits bruts de la semaine, par client. Rédige un récap clair et court, "
+            "groupé par client, qui met en avant les avancées, les déblocages et les points bloquants. "
+            "Ne liste pas mécaniquement chaque changement de champ : synthétise en langage naturel "
+            "(ex. « la tâche X est passée en done », « Y est bloquée depuis le passage en blocked »). "
+            "Ignore les changements sans intérêt business. Si un client n'a rien de notable, ne le mentionne pas.\n\n"
+            + facts
+        )
+        response = gemini.generate_content(prompt)
+        digest_text = _gemini_text(response)
+    except Exception as e:
+        return JSONResponse({"error": f"Erreur IA (digest) : {e}"}, status_code=502)
+
+    # 4) log coût (non bloquant)
+    try:
+        usage = getattr(response, "usage_metadata", None)
+        sb.table("usage_logs").insert({
+            "user_id": user_id,
+            "action": "weekly_digest",
+            "model": GEMINI_FLASH,
+            "cost": calculate_cost(GEMINI_FLASH, {
+                "input": getattr(usage, "prompt_token_count", 0),
+                "output": getattr(usage, "candidates_token_count", 0),
+            } if usage else None),
+        }).execute()
+    except Exception as e:
+        print(f"usage_logs digest (non bloquant): {e}")
+
+    return JSONResponse({"digest": digest_text, "empty": False})
 
 
 # ── delete_client ──────────────────────────────────────────────────────────────

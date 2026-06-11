@@ -111,6 +111,9 @@ export default function App() {
   const [joinClientOpen, setJoinClientOpen] = useState(false);
   const [leaveConfirm, setLeaveConfirm] = useState(null); // { id, name } | null
   const [leaveError, setLeaveError] = useState('');
+  const [digestOpen, setDigestOpen]     = useState(false);
+  const [digestText, setDigestText]     = useState('');
+  const [digestLoading, setDigestLoading] = useState(false);
 
   // ── Raccourcis clavier ────────────────────────────────────────────────────
   useEffect(() => {
@@ -318,6 +321,25 @@ export default function App() {
             </svg>
             <div className="empty-t" style={{ color: 'var(--sb-navy)' }}>Bienvenue dans la Ruche</div>
             <div className="empty-s">Sélectionne un espace client pour commencer à butiner.</div>
+            <button
+              style={{ marginTop: '16px', padding: '8px 18px', borderRadius: '8px', border: '1px solid var(--brd2)', background: 'var(--sur)', color: 'var(--tx)', cursor: 'pointer', fontSize: '13px' }}
+              disabled={digestLoading}
+              onClick={async () => {
+                setDigestLoading(true);
+                setDigestText('');
+                setDigestOpen(true);
+                try {
+                  const res = await callBackend({ action: 'weekly_digest' }, jwtToken);
+                  setDigestText(res.digest || '');
+                } catch (e) {
+                  setDigestText(`Erreur : ${e.message}`);
+                } finally {
+                  setDigestLoading(false);
+                }
+              }}
+            >
+              {digestLoading ? 'Génération…' : 'Digest de la semaine'}
+            </button>
           </div>
         ) : (
           /* Workspace client */
@@ -479,6 +501,16 @@ export default function App() {
             Quitter ce client
           </button>
         </div>
+      </Modal>
+
+      <Modal isOpen={digestOpen} onClose={() => setDigestOpen(false)} title="Digest de la semaine" maxWidth="640px">
+        {digestLoading ? (
+          <p style={{ color: 'var(--tx3)', fontSize: '13px' }}>Génération en cours…</p>
+        ) : (
+          <div style={{ whiteSpace: 'pre-wrap', fontSize: '13px', lineHeight: '1.6', color: 'var(--tx)' }}>
+            {digestText}
+          </div>
+        )}
       </Modal>
     </div>
   );
