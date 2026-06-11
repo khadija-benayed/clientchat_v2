@@ -1292,6 +1292,21 @@ def _set_audit_user(user_id: Optional[str]) -> None:
         print(f"_set_audit_user: {e}")
 
 
+def _recent_note_entries(note_text: str, since_date: str) -> list[str]:
+    """Retourne les entrées de note datées >= since_date (format [YYYY-MM-DD] en préfixe)."""
+    if not note_text:
+        return []
+    parts = re.split(r'(?=\[\d{4}-\d{2}-\d{2}\])', note_text)
+    out = []
+    for p in parts:
+        m = re.match(r'\[(\d{4}-\d{2}-\d{2})\]\s*(.*)', p.strip(), re.DOTALL)
+        if m and m.group(1) >= since_date:
+            txt = m.group(2).strip().replace('\n', ' ')
+            if txt:
+                out.append(txt[:300])
+    return out
+
+
 # ── get_client_members ────────────────────────────────────────────────────────
 async def get_client_members(body: dict, user_id: Optional[str]):
     client_id = body.get("client_id")
@@ -1678,6 +1693,7 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
         return JSONResponse({"digest": "Aucun client accessible cette semaine.", "empty": True})
 
     since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    since_date = since[:10]
     facts_blocks = []
 
     for c in clients:
@@ -1724,10 +1740,25 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
                     lines.append(f"- supprimée : tâche #{h['task_id']}")
                 else:
                     f = h.get("field")
-                    if f == "note":
-                        lines.append(f"- {t_label} : note mise à jour")
-                    else:
+                    if f != "note":
                         lines.append(f"- {t_label} : {f} {h.get('old_value')} → {h.get('new_value')}")
+
+        # Notes récentes : tâches dont la note a bougé cette semaine → on joint le contenu daté
+        note_task_ids = list({h["task_id"] for h in hist if h.get("field") == "note"})
+        if note_task_ids:
+            try:
+                note_rows = (
+                    sb.table("tasks")
+                    .select("id, title, note")
+                    .in_("id", note_task_ids)
+                    .execute()
+                ).data or []
+                for nr in note_rows:
+                    recent = _recent_note_entries(nr.get("note") or "", since_date)
+                    for entry in recent:
+                        lines.append(f"- note sur {nr['title']} : {entry}")
+            except Exception:
+                pass
 
         # Notre boulot : interne + incertain. Externe = à suivre, pas à faire.
         ours = [t for t in open_tasks if t.get("scope") != "external"]
@@ -1778,7 +1809,9 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
             "- Pas de titre général, pas d'introduction, pas de conclusion.\n"
             "- Si un client n'a rien de notable, ne le mentionne pas du tout.\n"
             "- Les points « à suivre côté client » sont des actions externes qu'on surveille sans en être "
-            "responsables : présente-les comme du suivi, pas comme nos propres retards.\n\n"
+            "responsables : présente-les comme du suivi, pas comme nos propres retards.\n"
+            "- Les lignes « note sur … » sont des notes prises récemment sur les tâches : intègre-les "
+            "dans le récap quand elles apportent du contexte (avancée, blocage, décision), sinon ignore-les.\n\n"
             + facts
         )
         response = gemini.generate_content(prompt)

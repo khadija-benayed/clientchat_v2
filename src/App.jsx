@@ -350,71 +350,64 @@ export default function App() {
             <div className="empty-s">Sélectionne un espace client pour commencer à butiner.</div>
 
             {/* ── Carte digest ── */}
-            <div style={{
-              marginTop: '32px',
-              background: 'linear-gradient(135deg, rgba(255,199,90,0.13) 0%, rgba(248,155,28,0.07) 100%)',
-              border: '1px solid rgba(248,155,28,0.35)',
-              borderRadius: '16px',
-              padding: '24px 28px',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '8px',
-              width: '280px',
-              position: 'relative',
-              overflow: 'hidden',
-            }}>
-              <svg viewBox="0 0 280 120" preserveAspectRatio="xMidYMid slice"
-                   style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0.06, pointerEvents: 'none' }}>
-                <g fill="none" stroke="var(--sb-orange)" strokeWidth="1.5">
-                  <polygon points="40,8 56,17 56,35 40,44 24,35 24,17"/>
-                  <polygon points="72,26 88,35 88,53 72,62 56,53 56,35"/>
-                  <polygon points="200,4 216,13 216,31 200,40 184,31 184,13"/>
-                  <polygon points="232,22 248,31 248,49 232,58 216,49 216,31"/>
-                  <polygon points="120,72 136,81 136,99 120,108 104,99 104,81"/>
-                </g>
-              </svg>
-              <div style={{ fontSize: '30px', lineHeight: 1 }}>🐝</div>
-              <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--sb-navy)', textAlign: 'center', position: 'relative' }}>
-                {isFriday() ? 'Beesy week !' : 'Récap de la semaine'}
+            <div
+              onClick={() => {
+                if (digestLoading) return;
+                setDigestLoading(true);
+                setDigestText('');
+                setDigestOpen(true);
+                callBackend({ action: 'weekly_digest' }, jwtToken)
+                  .then(res => setDigestText(res.digest || ''))
+                  .catch(e => setDigestText(`Erreur : ${e.message}`))
+                  .finally(() => setDigestLoading(false));
+              }}
+              style={{
+                marginTop: '30px',
+                width: '100%',
+                maxWidth: '420px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '16px',
+                background: 'var(--sur)',
+                border: '1px solid var(--brd, rgba(25,54,68,0.10))',
+                borderRadius: '14px',
+                padding: '16px 18px',
+                cursor: digestLoading ? 'default' : 'pointer',
+                transition: 'border-color .15s, box-shadow .15s, transform .15s',
+              }}
+              onMouseEnter={e => {
+                if (digestLoading) return;
+                e.currentTarget.style.borderColor = 'rgba(248,155,28,0.5)';
+                e.currentTarget.style.boxShadow = '0 4px 16px rgba(248,155,28,0.12)';
+                e.currentTarget.style.transform = 'translateY(-1px)';
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.borderColor = 'var(--brd, rgba(25,54,68,0.10))';
+                e.currentTarget.style.boxShadow = 'none';
+                e.currentTarget.style.transform = 'none';
+              }}
+            >
+              <div style={{
+                width: '48px', height: '48px', flexShrink: 0, borderRadius: '12px',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px',
+                background: 'linear-gradient(135deg, #FFC75A, var(--sb-orange))',
+                boxShadow: '0 3px 8px rgba(248,155,28,0.3)',
+              }}>
+                {isFriday() ? '🍯' : '🐝'}
               </div>
-              <div style={{ fontSize: '12.5px', color: 'var(--tx3)', textAlign: 'center', lineHeight: 1.5, position: 'relative' }}>
-                {isFriday()
-                  ? 'Le bilan de la ruche est prêt.\nFile en week-end l\'esprit tranquille.'
-                  : 'Ce qui a bougé chez tous tes clients\ncette semaine.'}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: '14.5px', fontWeight: 700, color: 'var(--sb-navy)' }}>
+                  {isFriday() ? 'Beesy week !' : 'Récap de la semaine'}
+                </div>
+                <div style={{ fontSize: '12.5px', color: 'var(--tx3)', marginTop: '2px', lineHeight: 1.4 }}>
+                  {isFriday()
+                    ? 'Le bilan de la ruche est prêt — file en week-end l\'esprit tranquille.'
+                    : 'Ce qui a bougé chez tous tes clients ces 7 derniers jours.'}
+                </div>
               </div>
-              <button
-                style={{
-                  marginTop: '10px',
-                  padding: '9px 24px',
-                  borderRadius: '10px',
-                  border: 'none',
-                  background: 'var(--sb-orange)',
-                  color: '#fff',
-                  cursor: digestLoading ? 'default' : 'pointer',
-                  fontSize: '13px',
-                  fontWeight: 600,
-                  opacity: digestLoading ? 0.7 : 1,
-                  position: 'relative',
-                  transition: 'opacity 0.15s',
-                }}
-                disabled={digestLoading}
-                onClick={async () => {
-                  setDigestLoading(true);
-                  setDigestText('');
-                  setDigestOpen(true);
-                  try {
-                    const res = await callBackend({ action: 'weekly_digest' }, jwtToken);
-                    setDigestText(res.digest || '');
-                  } catch (e) {
-                    setDigestText(`Erreur : ${e.message}`);
-                  } finally {
-                    setDigestLoading(false);
-                  }
-                }}
-              >
-                {digestLoading ? '🐝 Génération…' : isFriday() ? '🍯 Voir le bilan' : 'Voir le récap →'}
-              </button>
+              <div style={{ flexShrink: 0, fontSize: '13px', fontWeight: 600, color: 'var(--sb-orange)' }}>
+                {digestLoading ? '🐝 …' : 'Voir →'}
+              </div>
             </div>
           </div>
         ) : (
@@ -620,9 +613,21 @@ export default function App() {
           </div>
         )}
         {!isFriday() && (
-          <h2 style={{ fontSize: '17px', fontWeight: 700, marginBottom: '18px', color: 'var(--tx)' }}>
-            Digest de la semaine
-          </h2>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '12px',
+            paddingBottom: '16px', marginBottom: '18px',
+            borderBottom: '1px solid var(--brd, rgba(25,54,68,0.10))',
+          }}>
+            <div style={{
+              width: '38px', height: '38px', flexShrink: 0, borderRadius: '10px',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '19px',
+              background: 'rgba(248,155,28,0.12)',
+            }}>🍯</div>
+            <div>
+              <div style={{ fontSize: '16px', fontWeight: 700, color: 'var(--sb-navy)' }}>Récap de la semaine</div>
+              <div style={{ fontSize: '12.5px', color: 'var(--tx3)', marginTop: '1px' }}>Tous clients · 7 derniers jours</div>
+            </div>
+          </div>
         )}
         {digestLoading ? (
           <p style={{ color: 'var(--tx3)', fontSize: '13px' }}>Génération en cours… 🐝</p>
@@ -640,14 +645,14 @@ function DigestBody({ text }) {
   const blocks = [];
   let current = null;
   for (const line of lines) {
-    const isItem = line.startsWith('–') || line.startsWith('-') || line.startsWith('•');
+    const isItem = /^([–\-•*]|\d+[.)])\s/.test(line);
     if (!isItem) {
       current = { client: line.replace(/[:#*]/g, '').trim(), items: [] };
       blocks.push(current);
     } else if (current) {
-      current.items.push(line.replace(/^[–\-•]\s*/, ''));
+      current.items.push(line.replace(/^([–\-•*]|\d+[.)])\s*/, ''));
     } else {
-      current = { client: '', items: [line.replace(/^[–\-•]\s*/, '')] };
+      current = { client: '', items: [line.replace(/^([–\-•*]|\d+[.)])\s*/, '')] };
       blocks.push(current);
     }
   }
