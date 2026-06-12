@@ -1282,15 +1282,6 @@ async def _assert_role(user_id: Optional[str], client_id: str, allowed_roles: li
         raise HTTPException(status_code=403, detail="Accès refusé")
 
 
-def _set_audit_user(user_id: Optional[str]) -> None:
-    """Positionne l'auteur courant pour le trigger task_history. No-op si user_id absent."""
-    if not user_id:
-        return
-    try:
-        sb.rpc("set_audit_user", {"uid": user_id}).execute()
-    except Exception as e:
-        print(f"_set_audit_user: {e}")
-
 
 def _recent_note_entries(note_text: str, since_date: str) -> list[str]:
     """Retourne les entrées de note datées >= since_date (format [YYYY-MM-DD] en préfixe)."""
@@ -1469,7 +1460,6 @@ async def upsert_task(body: dict, user_id: Optional[str]):
     if not client_id:
         return JSONResponse({"error": "client_id requis"}, status_code=400)
     await _assert_role(user_id, client_id, ["owner", "member"])
-    _set_audit_user(user_id)
     task_id = task.get("id")
     if task_id and task_id > 0:
         sb.table("tasks").update({
@@ -1478,6 +1468,7 @@ async def upsert_task(body: dict, user_id: Optional[str]):
             "blocker": task.get("blocker"), "note": task.get("note"),
             "due_date": task.get("due_date") or None,
             "scope": task.get("scope") or "internal",
+            "last_modified_by": user_id,
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }).eq("id", task_id).eq("client_id", client_id).execute()
     else:
@@ -1487,6 +1478,7 @@ async def upsert_task(body: dict, user_id: Optional[str]):
             "assignee": task.get("assignee") or "", "blocker": task.get("blocker") or None,
             "note": task.get("note") or None, "due_date": task.get("due_date") or None,
             "scope": task.get("scope") or "internal",
+            "last_modified_by": user_id,
         }).execute()
         task = {**task, "id": result.data[0]["id"]}
     return JSONResponse({"task": task})
@@ -1664,7 +1656,7 @@ async def delete_task(body: dict, user_id: Optional[str]):
     if not task_id or not client_id:
         return JSONResponse({"error": "task_id et client_id requis"}, status_code=400)
     await _assert_role(user_id, client_id, ["owner", "member"])
-    _set_audit_user(user_id)
+    sb.table("tasks").update({"last_modified_by": user_id}).eq("id", task_id).eq("client_id", client_id).execute()
     sb.table("tasks").delete().eq("id", task_id).eq("client_id", client_id).execute()
     return JSONResponse({"ok": True})
 
@@ -1723,7 +1715,19 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
         except Exception:
             open_tasks = []
 
-        if not hist and not open_tasks:
+        # 2c) tâches créées cette semaine (source : created_at, couvre aussi avant le trigger)
+        try:
+            new_tasks = (
+                sb.table("tasks")
+                .select("id, title, status")
+                .eq("client_id", cid)
+                .gte("created_at", since)
+                .execute()
+            ).data or []
+        except Exception:
+            new_tasks = []
+
+        if not hist and not open_tasks and not new_tasks:
             continue
 
         titles = {t["id"]: t["title"] for t in open_tasks}
@@ -1738,15 +1742,15 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
         today = datetime.now(timezone.utc).date().isoformat()
 
         lines = [f"### Client : {c['name']}"]
+        if new_tasks:
+            lines.append("Nouvelles tâches cette semaine : " + ", ".join(t["title"] for t in new_tasks))
         if hist:
             lines.append("Changements cette semaine :")
             for h in hist:
                 t_label = titles.get(h["task_id"], f"tâche #{h['task_id']}")
-                if h["action"] == "created":
-                    lines.append(f"- créée : {t_label}")
-                elif h["action"] == "deleted":
+                if h["action"] == "deleted":
                     lines.append(f"- supprimée : tâche #{h['task_id']}")
-                else:
+                elif h["action"] != "created":
                     f = h.get("field")
                     if f != "note":
                         lines.append(f"- {t_label} : {f} {h.get('old_value')} → {h.get('new_value')}")
@@ -1762,7 +1766,13 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
                     .execute()
                 ).data or []
                 for nr in note_rows:
-                    recent = _recent_note_entries(nr.get("note") or "", since_date)
+                    note_txt = nr.get("note") or ""
+                    recent = _recent_note_entries(note_txt, since_date)
+                    if not recent and note_txt.strip():
+                        last = note_txt.strip().split("\n")[-1]
+                        last = re.sub(r'^\[[^\]]*\]\s*', '', last).strip()
+                        if last:
+                            recent = [last[:300]]
                     for entry in recent:
                         lines.append(f"- note sur {nr['title']} : {entry}")
             except Exception:
@@ -1817,13 +1827,16 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
             "groupé par client, qui met en avant les avancées, les déblocages et les points bloquants. "
             "Ne liste pas mécaniquement chaque changement de champ : synthétise en langage naturel "
             "(ex. « la tâche X est passée en done », « Y est bloquée depuis le passage en blocked »). "
-            "Ignore les changements sans intérêt business. Si un client n'a rien de notable, ne le mentionne pas.\n\n"
+            "Mentionne TOUJOURS les tâches terminées (done) et les nouvelles tâches créées : ce sont les "
+            "signaux les plus importants, ne les omets jamais. Tu peux regrouper le reste, mais ne supprime "
+            "pas une avancée ou un blocage. Si un client n'a vraiment rien (aucune ligne de faits), ne le mentionne pas.\n\n"
             "FORMAT IMPÉRATIF de ta réponse :\n"
             "- Le nom de chaque client sur une ligne seule, sans tiret ni ponctuation autour.\n"
             "- En dessous, chaque point sur sa propre ligne, préfixé par '– ' (tiret long + espace).\n"
             "- Une ligne vide entre deux clients.\n"
             "- Pas de titre général, pas d'introduction, pas de conclusion.\n"
             "- Si un client n'a rien de notable, ne le mentionne pas du tout.\n"
+            "- Les tâches terminées et créées cette semaine doivent apparaître explicitement.\n"
             "- « Échéance dépassée cette semaine » = nouveaux retards, à signaler en priorité.\n"
             "- « Toujours en attente » = tâches qui stagnent depuis avant cette semaine : mentionne-les "
             "brièvement, séparément des nouveautés, sans en faire un drame.\n"
