@@ -1727,6 +1727,14 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
             continue
 
         titles = {t["id"]: t["title"] for t in open_tasks}
+        missing = list({h["task_id"] for h in hist} - set(titles.keys()))
+        if missing:
+            try:
+                extra = sb.table("tasks").select("id, title").in_("id", missing).execute().data or []
+                for t in extra:
+                    titles[t["id"]] = t["title"]
+            except Exception:
+                pass
         today = datetime.now(timezone.utc).date().isoformat()
 
         lines = [f"### Client : {c['name']}"]
@@ -1760,20 +1768,28 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
             except Exception:
                 pass
 
-        # Notre boulot : interne + incertain. Externe = à suivre, pas à faire.
+        newly_blocked_ids = {
+            h["task_id"] for h in hist
+            if h.get("field") == "status" and h.get("new_value") in ("blocked", "waiting")
+        }
+
         ours = [t for t in open_tasks if t.get("scope") != "external"]
         external = [t for t in open_tasks if t.get("scope") == "external"]
 
-        late = [t for t in ours if t.get("due_date") and t["due_date"] < today]
-        stuck = [t for t in ours if t.get("status") in ("blocked", "waiting")]
+        late_new = [t for t in ours if t.get("due_date") and since_date <= t["due_date"] < today]
+        still_waiting = [
+            t for t in ours
+            if (t.get("status") in ("blocked", "waiting") and t["id"] not in newly_blocked_ids)
+            or (t.get("due_date") and t["due_date"] < since_date)
+        ]
         ext_watch = [t for t in external
                      if (t.get("due_date") and t["due_date"] < today)
                      or t.get("status") in ("blocked", "waiting")]
 
-        if late:
-            lines.append("En retard : " + ", ".join(t["title"] for t in late))
-        if stuck:
-            lines.append("Bloquées / en attente : " + ", ".join(t["title"] for t in stuck))
+        if late_new:
+            lines.append("Échéance dépassée cette semaine : " + ", ".join(t["title"] for t in late_new))
+        if still_waiting:
+            lines.append("Toujours en attente : " + ", ".join(t["title"] for t in still_waiting))
         if ext_watch:
             lines.append("À suivre côté client : " + ", ".join(t["title"] for t in ext_watch))
         facts_blocks.append("\n".join(lines))
@@ -1808,8 +1824,11 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
             "- Une ligne vide entre deux clients.\n"
             "- Pas de titre général, pas d'introduction, pas de conclusion.\n"
             "- Si un client n'a rien de notable, ne le mentionne pas du tout.\n"
-            "- Les points « à suivre côté client » sont des actions externes qu'on surveille sans en être "
-            "responsables : présente-les comme du suivi, pas comme nos propres retards.\n"
+            "- « Échéance dépassée cette semaine » = nouveaux retards, à signaler en priorité.\n"
+            "- « Toujours en attente » = tâches qui stagnent depuis avant cette semaine : mentionne-les "
+            "brièvement, séparément des nouveautés, sans en faire un drame.\n"
+            "- « À suivre côté client » = actions externes qu'on surveille sans en être responsables : "
+            "présente-les comme du suivi, pas comme nos retards.\n"
             "- Les lignes « note sur … » sont des notes prises récemment sur les tâches : intègre-les "
             "dans le récap quand elles apportent du contexte (avancée, blocage, décision), sinon ignore-les.\n\n"
             + facts

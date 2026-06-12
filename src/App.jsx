@@ -130,12 +130,11 @@ export default function App() {
     if (!isFriday()) return;
     const key = fridayKey();
     if (localStorage.getItem(key)) return;
-    localStorage.setItem(key, '1');
     setDigestLoading(true);
     setDigestText('');
     setDigestOpen(true);
     callBackend({ action: 'weekly_digest' }, jwtToken)
-      .then(res => setDigestText(res.digest || ''))
+      .then(res => { setDigestText(res.digest || ''); localStorage.setItem(key, '1'); })
       .catch(e => setDigestText(`Erreur : ${e.message}`))
       .finally(() => setDigestLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -658,9 +657,6 @@ function DigestBody({ text }) {
   }
   return (
     <div style={{ fontSize: '13.5px', lineHeight: 1.6, color: 'var(--tx)' }}>
-      <div style={{ fontSize: '13px', color: 'var(--tx3)', marginBottom: '16px' }}>
-        Ce qui a bougé cette semaine, tous clients confondus.
-      </div>
       {blocks.map((b, i) => (
         <div key={i} style={{ marginBottom: i < blocks.length - 1 ? '18px' : 0 }}>
           {b.client && (

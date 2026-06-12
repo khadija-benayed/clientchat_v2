@@ -69,7 +69,7 @@ export default function CRImportModal({
   async function applySelected() {
     const accepted = proposals.filter(p => p.selected);
     if (!accepted.length) return;
-    const today = new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 
     const tasksToApply = accepted.map(item => {
       const f = item.fields;

@@ -532,11 +532,9 @@ function applyTaskUpdates(tasks, p, clientId) {
     if (u.prio) t.prio = u.prio;
     if (u.status) t.status = u.status;
     if (u.blocker !== undefined) t.blocker = u.blocker;
-    if (u.note !== undefined) {
-      if (t.note && u.note && u.note !== t.note) {
-        const today = new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
-        t.note = t.note + '\n[' + today + '] ' + u.note;
-      } else t.note = u.note;
+    if (u.note) {
+      const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+      t.note = t.note ? `${t.note}\n[${today}] ${u.note}` : `[${today}] ${u.note}`;
     }
     if (u.assignee) t.assignee = u.assignee;
     if (u.due_date !== undefined) t.due_date = u.due_date;
