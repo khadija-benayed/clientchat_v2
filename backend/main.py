@@ -173,6 +173,8 @@ def _gemini_text(response) -> str:
     finish_name = finish.name if hasattr(finish, "name") else str(finish)
     if finish_name in _GEMINI_BLOCKED:
         raise ValueError(f"Réponse bloquée par Gemini (finish_reason={finish_name})")
+    if finish_name == "MAX_TOKENS":
+        print(f"_gemini_text: WARNING réponse tronquée (MAX_TOKENS)")
     try:
         return response.text
     except Exception:
@@ -1819,7 +1821,7 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
                 "les nouveaux points bloquants, ce qui traîne. Factuel, concis, pas de remplissage. "
                 "Tu écris en 'on' (première personne du pluriel)."
             ),
-            generation_config={"max_output_tokens": 900},
+            generation_config={"max_output_tokens": 1800},
             safety_settings=_SAFETY_OFF,
         )
         prompt = (
