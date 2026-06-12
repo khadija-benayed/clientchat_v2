@@ -572,7 +572,7 @@ export default function App() {
         </div>
       </Modal>
 
-      <Modal isOpen={digestOpen} onClose={() => setDigestOpen(false)} title={null} maxWidth="600px">
+      <Modal isOpen={digestOpen} onClose={() => setDigestOpen(false)} title={null} maxWidth="600px" closeColor={isFriday() ? '#fff' : undefined}>
         {isFriday() && (
           <div style={{
             margin: '-24px -24px 20px',
