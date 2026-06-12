@@ -2717,9 +2717,18 @@ async def chat(body: dict, user_id: Optional[str] = None):
                         f"— {_cite_name(c['source_name'])}\n{c['chunk_text']}" for c in doc_chunks
                     )
                     system_with_rag += (
-                        "\n\n[Documents pertinents]\nIMPORTANT : quand tu utilises une information "
-                        "issue de ces extraits, cite le nom du fichier source entre crochets, "
-                        "ex : [NomDuFichier].\n\n" + doc_block
+                        "\n\n[Documents pertinents]\n"
+                        "RÈGLE DE FIABILITÉ (impérative) :\n"
+                        "- Réponds en t'appuyant UNIQUEMENT sur les extraits ci-dessous, la fiche client "
+                        "et l'historique fourni.\n"
+                        "- N'invente rien et ne comble pas les trous avec des suppositions ou des "
+                        "connaissances générales sur le sujet.\n"
+                        "- Si les extraits ne répondent que partiellement, distingue clairement ce qui est "
+                        "étayé par les documents de ce qui ne l'est pas, et dis explicitement ce que tu ne "
+                        "trouves pas dans les sources.\n"
+                        "- Quand tu utilises une information issue d'un extrait, cite le nom du fichier "
+                        "source entre crochets, ex : [NomDuFichier].\n\n"
+                        + doc_block
                     )
                     sources_used = [
                         {
@@ -2744,18 +2753,22 @@ async def chat(body: dict, user_id: Optional[str] = None):
                 if not doc_chunks and not session_chunks:
                     # Documents indexed but none passed the similarity threshold
                     system_with_rag += (
-                        "\n\n[Disponibilité des documents]\nAucun extrait pertinent trouvé dans les documents "
-                        "indexés pour cette question. Si tu ne trouves pas l information dans la fiche client "
-                        "ou le contexte disponible, dis-le explicitement à l utilisateur plutôt que d estimer "
-                        "ou d inventer."
+                        "\n\n[Disponibilité des documents]\n"
+                        "Aucun extrait pertinent trouvé dans les documents indexés pour cette question. "
+                        "Si tu ne trouves pas l'information dans la fiche client ou le contexte disponible, "
+                        "dis-le explicitement plutôt que d'estimer ou d'inventer. Ne réponds PAS depuis des "
+                        "connaissances générales comme s'il s'agissait d'informations vérifiées sur ce client — "
+                        "propose plutôt à l'utilisateur de préciser ou d'indiquer le document concerné."
                     )
             else:
                 # No documents indexed for this client at all
                 system_with_rag += (
-                    "\n\n[Disponibilité des documents]\nAucun extrait pertinent trouvé dans les documents "
-                    "indexés pour cette question. Si tu ne trouves pas l information dans la fiche client "
-                    "ou le contexte disponible, dis-le explicitement à l utilisateur plutôt que d estimer "
-                    "ou d inventer."
+                    "\n\n[Disponibilité des documents]\n"
+                    "Aucun extrait pertinent trouvé dans les documents indexés pour cette question. "
+                    "Si tu ne trouves pas l'information dans la fiche client ou le contexte disponible, "
+                    "dis-le explicitement plutôt que d'estimer ou d'inventer. Ne réponds PAS depuis des "
+                    "connaissances générales comme s'il s'agissait d'informations vérifiées sur ce client — "
+                    "propose plutôt à l'utilisateur de préciser ou d'indiquer le document concerné."
                 )
         except Exception as e:
             print(f"RAG pipeline error (non bloquant): {e}")

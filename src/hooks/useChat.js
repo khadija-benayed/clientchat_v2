@@ -460,6 +460,10 @@ function buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction 
     ? 'ta réponse courte confirmant l\'action effectuée (1-2 phrases max).'
     : 'ta réponse complète et précise. Cite tes sources entre crochets quand tu utilises un document : [NomFichier].';
   return 'Tu es l\'assistant projet de l\'équipe sur ce client.\n'
+    + 'Principe de fiabilité : tu réponds à partir des informations fournies (fiche client, documents, '
+    + 'historique). Tu n\'inventes pas et tu assumes de dire « je ne trouve pas cette information dans les '
+    + 'éléments disponibles » quand c\'est le cas. Mieux vaut une réponse honnêtement incomplète qu\'une '
+    + 'réponse inventée.\n'
     + 'Date du jour : ' + today + '.\n'
     + 'TO-DO ACTUELLE : ' + snap(tasks) + '\n'
     + 'Équipe : ' + (mStr || 'Non renseignée') + '.\n'

@@ -57,11 +57,19 @@ export default function TaskModal({ taskId, tasks, members, onSave, onDelete, on
   }
 
   function save() {
-    onSave({
-      ...task, title: title.trim() || task.title, status, prio, assignee,
-      due_date: due || null,
-      blocker: status === 'blocked' ? (blocker.trim() || null) : null,
-    });
+    const newTitle = title.trim() || task.title;
+    const newDue = due || null;
+    const newBlocker = status === 'blocked' ? (blocker.trim() || null) : null;
+    const unchanged =
+      newTitle === task.title &&
+      status === task.status &&
+      prio === task.prio &&
+      assignee === (task.assignee || '') &&
+      newDue === (task.due_date || null) &&
+      newBlocker === (task.blocker || null);
+    if (!unchanged) {
+      onSave({ ...task, title: newTitle, status, prio, assignee, due_date: newDue, blocker: newBlocker });
+    }
     onClose();
   }
 
