@@ -18,15 +18,21 @@ ABSTAIN_MARKERS = [
 ]
 
 def ask(question, client_id):
-    """Appelle le chat (SSE) et renvoie (reply_text, [source_names])."""
+    """Appelle le chat (SSE) et renvoie (reply_text, [source_names], debug)."""
     resp = requests.post(
         BACKEND_URL,
         headers={"Authorization": f"Bearer {JWT}", "Content-Type": "application/json"},
         json={"message": question, "client_id": client_id,
-              "system": SYSTEM, "chat_history": []},
+              "system": SYSTEM, "chat_history": [], "debug": True},
         stream=True, timeout=180,
     )
-    tokens, sources = [], []
+    if not resp.ok:
+        try:
+            err = resp.json().get("error", resp.text[:120])
+        except Exception:
+            err = resp.text[:120]
+        raise RuntimeError(f"HTTP {resp.status_code}: {err}")
+    tokens, sources, debug = [], [], None
     for line in resp.iter_lines(decode_unicode=True):
         if not line or not line.startswith("data: "):
             continue
@@ -41,7 +47,8 @@ def ask(question, client_id):
             if evt.get("reply_text"):
                 tokens = [evt["reply_text"]]
             sources = [s.get("source_name", "") for s in evt.get("sources", [])]
-    return "".join(tokens), sources
+            debug = evt.get("debug")
+    return "".join(tokens), sources, debug
 
 def score_case(case, reply, sources):
     low = reply.lower()
@@ -62,26 +69,31 @@ def main():
     rows, agg = [], {}
     for c in cases:
         try:
-            reply, sources = ask(c["question"], c["client_id"])
+            reply, sources, debug = ask(c["question"], c["client_id"])
         except Exception as e:
-            rows.append((c["id"], {"ERROR": False}, str(e)[:120]))
+            rows.append((c["id"], {"ERROR": False}, str(e)[:120], None))
             continue
         checks = score_case(c, reply, sources)
         for k, v in checks.items():
             agg.setdefault(k, []).append(v)
-        rows.append((c["id"], checks, reply[:80]))
+        rows.append((c["id"], checks, reply[:80], debug))
 
     print("\n=== DÉTAIL ===")
-    for cid, checks, preview in rows:
+    for cid, checks, preview, debug in rows:
         flags = " ".join(f"{k}={'OK' if v else 'KO'}" for k, v in checks.items())
         print(f"  [{cid}] {flags}   « {preview}… »")
+        if checks and not all(checks.values()) and debug:
+            print(f"  --- TRACE {cid} ---")
+            for d in debug:
+                mark = "✓INJ" if d["injected"] else "    "
+                print(f"    {mark} rr={d['rerank_score']:+.3f} fin={d['final_score']:+.3f} {d['source_name'][:50]}")
 
     print("\n=== SCORECARD ===")
     for k, vals in sorted(agg.items()):
         rate = sum(vals) / len(vals) if vals else 0
         print(f"  {k:14s} : {rate:.0%}  ({sum(vals)}/{len(vals)})")
 
-    fails = [cid for cid, checks, _ in rows if checks and not all(checks.values())]
+    fails = [cid for cid, checks, _, _d in rows if checks and not all(checks.values())]
     if fails:
         print(f"\n  À investiguer : {', '.join(fails)}")
 

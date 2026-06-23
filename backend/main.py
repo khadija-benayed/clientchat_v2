@@ -2870,7 +2870,24 @@ async def chat(body: dict, user_id: Optional[str] = None):
             reply_text = parts[0].strip()
             tasks_json = parts[1].strip() if len(parts) > 1 else ""
 
-            yield f"data: {json.dumps({'type': 'done', 'sources': sources_used, 'tasks_json': tasks_json, 'reply_text': reply_text})}\n\n"
+            debug_info = None
+            if body.get("debug"):
+                injected_names = {s["source_name"] for s in sources_used}
+                debug_info = [
+                    {
+                        "source_name": c["source_name"],
+                        "rerank_score": round(c.get("rerank_score", 0.0), 3),
+                        "final_score": round(c.get("final_score", 0.0), 3),
+                        "injected": c["source_name"] in injected_names,
+                        "preview": c["chunk_text"][:80],
+                    }
+                    for c in reranked[:15]
+                ]
+
+            done_payload = {"type": "done", "sources": sources_used, "tasks_json": tasks_json, "reply_text": reply_text}
+            if debug_info is not None:
+                done_payload["debug"] = debug_info
+            yield f"data: {json.dumps(done_payload)}\n\n"
 
             # Log usage — non-bloquant
             try:
