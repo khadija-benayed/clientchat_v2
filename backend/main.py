@@ -1919,7 +1919,7 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
                 "les nouveaux points bloquants, ce qui traîne. Factuel, concis, pas de remplissage. "
                 "Tu écris en 'on' (première personne du pluriel)."
             ),
-            generation_config={"max_output_tokens": 1800},
+            generation_config={"max_output_tokens": 3000},
             safety_settings=_SAFETY_OFF,
         )
         prompt = (
@@ -1953,6 +1953,10 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
         )
         response = gemini.generate_content(prompt)
         digest_text = _gemini_text(response)
+        finish = response.candidates[0].finish_reason
+        finish_name = finish.name if hasattr(finish, "name") else str(finish)
+        if finish_name == "MAX_TOKENS":
+            digest_text += "\n\n⚠️ Récap tronqué (trop d'activité cette semaine). Réessaie ou consulte les tâches directement."
     except Exception as e:
         return JSONResponse({"error": f"Erreur IA (digest) : {e}"}, status_code=502)
 
