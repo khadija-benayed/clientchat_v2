@@ -1603,7 +1603,7 @@ async def propose_cr_tasks(body: dict, user_id: Optional[str]):
         "  • prio : 'P1'/'P2'/'P3' si mentionné\n"
         "  • status : 'todo'/'inprogress'/'blocked'/'waiting'/'done' si le statut change\n"
         "  • due_date : date en YYYY-MM-DD si mentionnée\n"
-        "  • note : information additionnelle à noter, null si rien\n"
+        "  • note : contexte de reprise en 2-3 lignes max — pourquoi cette tâche existe, quel est le problème ou la décision d'origine, où on en est au moment du CR. Pas la phrase littérale du CR, une synthèse utile pour quelqu'un qui reprend après 3 semaines. null seulement si le titre se suffit vraiment à lui-même (tâches triviales type \"envoyer le doc X\")\n"
         "- confidence : 0.0 à 1.0\n"
         "- needs_clarification : true si une info cruciale manque\n"
         "- clarification_question : la question à poser, null si needs_clarification=false\n\n"
