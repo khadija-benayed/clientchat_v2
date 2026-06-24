@@ -6,6 +6,42 @@ Pour l'installation et le démarrage du projet, voir le [README.md](README.md).
 
 ---
 
+## Migration 4 — task_history + last_modified_by (juin 2026)
+
+### Ce qui a été ajouté
+
+| Objet | Description |
+|---|---|
+| `tasks.last_modified_by` | UUID du membre ayant fait la dernière modification (upsert_task, delete_task) |
+| `task_history` | Table d'audit field-level : une ligne par champ modifié, par tâche créée, ou par tâche supprimée |
+| `log_task_history()` | Fonction trigger SECURITY DEFINER — compare OLD/NEW et insère dans task_history |
+| `trg_task_history` | Trigger AFTER INSERT OR UPDATE OR DELETE sur tasks |
+
+Ces objets existaient en production (référencés dans `main.py` : `weekly_digest`, `upsert_task`, `delete_task`) mais n'étaient pas dans `seed.sql`.
+
+### Pourquoi last_modified_by est une colonne et pas une session variable
+
+Le pooler Supabase tourne en mode **transaction** (PgBouncer). En mode transaction, `SET LOCAL` ne survit pas entre deux statements d'une même "connexion" applicative — le pool peut attribuer un autre slot PostgreSQL entre les deux appels. Utiliser `SET LOCAL app.user_id = '...'` dans le trigger était donc non fiable. La colonne `last_modified_by` sur la ligne elle-même est l'unique source sûre pour passer l'identité de l'auteur au trigger.
+
+### Fichiers modifiés
+
+- `supabase/migrations/20260623_task_history.sql` — migration idempotente à appliquer en SQL Editor Supabase
+- `supabase/seed.sql` — intègre ces objets dans la vue "from scratch"
+
+### Objets prod à vérifier (scan Étape 2 non exécuté)
+
+Le scan complet des tables/fonctions/triggers prod n'a pas été lancé dans cette passe. Avant la prochaine mise à jour de seed.sql, exécuter dans le SQL Editor :
+
+```sql
+SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;
+SELECT routine_name FROM information_schema.routines WHERE routine_schema = 'public' AND routine_type = 'FUNCTION';
+SELECT tgname, relname FROM pg_trigger JOIN pg_class ON pg_class.oid = pg_trigger.tgrelid WHERE NOT tgisinternal;
+```
+
+Un écart potentiel identifié dans le code : `tasks.created_at` est requêtée dans `weekly_digest` mais absente de `seed.sql` — à confirmer en prod.
+
+---
+
 ## Migration 3 — Gemini remplace Claude comme modèle principal (avril 2026)
 
 ### Ce qui a changé

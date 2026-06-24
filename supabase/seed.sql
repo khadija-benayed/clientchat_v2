@@ -1,6 +1,6 @@
 -- ════════════════════════════════════════════════════════════════════════════
 -- seed.sql — Schéma complet clientchat_v2
--- Vérifié contre la base de production (erpjerfvswesipmdqxab) le 2026-05-22
+-- Dernière mise à jour : 2026-06-24 (migration 20260623_task_history)
 -- Modèle d'embeddings : paraphrase-multilingual-mpnet-base-v2 (768 dimensions)
 -- ════════════════════════════════════════════════════════════════════════════
 
@@ -49,17 +49,18 @@ CREATE INDEX IF NOT EXISTS client_invitations_token_idx ON client_invitations (t
 
 -- tasks : to-do par client
 CREATE TABLE IF NOT EXISTS tasks (
-  id          serial      PRIMARY KEY,
-  client_id   uuid        REFERENCES clients(id) ON DELETE CASCADE,
-  title       text        NOT NULL,
-  prio        text                    DEFAULT 'P2',   -- 'P1' | 'P2' | 'P3'
-  status      text                    DEFAULT 'todo', -- 'todo' | 'inprogress' | 'blocked' | 'waiting' | 'done'
-  assignee    text                    DEFAULT '',
-  blocker     text,
-  note        text,
-  updated_at  timestamptz             DEFAULT now(),
-  due_date    date,
-  scope       text                    DEFAULT 'internal' -- 'internal' | 'external' | 'uncertain'
+  id               serial      PRIMARY KEY,
+  client_id        uuid        REFERENCES clients(id) ON DELETE CASCADE,
+  title            text        NOT NULL,
+  prio             text                    DEFAULT 'P2',   -- 'P1' | 'P2' | 'P3'
+  status           text                    DEFAULT 'todo', -- 'todo' | 'inprogress' | 'blocked' | 'waiting' | 'done'
+  assignee         text                    DEFAULT '',
+  blocker          text,
+  note             text,
+  updated_at       timestamptz             DEFAULT now(),
+  due_date         date,
+  scope            text                    DEFAULT 'internal', -- 'internal' | 'external' | 'uncertain'
+  last_modified_by uuid                                        -- UUID du membre ayant fait la dernière modification
 );
 
 -- session_summaries : résumés auto générés par Claude à chaque session
@@ -129,6 +130,21 @@ CREATE TABLE IF NOT EXISTS sync_ignored (
 );
 CREATE INDEX IF NOT EXISTS sync_ignored_client_id_idx ON sync_ignored (client_id);
 
+-- task_history : audit trail field-level des modifications de tâches
+-- task_id est un entier sans FK pour conserver l'historique après suppression
+-- (weekly_digest gère les orphelins via un fallback "tâche #N").
+CREATE TABLE IF NOT EXISTS task_history (
+  id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  task_id    integer     NOT NULL,
+  client_id  uuid        REFERENCES clients(id) ON DELETE CASCADE,
+  changed_by uuid,
+  action     text        NOT NULL CHECK (action IN ('created', 'updated', 'deleted')),
+  field      text,       -- NULL pour created/deleted ; nom du champ pour updated
+  old_value  text,
+  new_value  text,
+  changed_at timestamptz NOT NULL DEFAULT now()
+);
+
 -- Migration : enforce le rôle comme enum strict ('owner' | 'member') — supprime le dead code 'admin'
 -- NOT VALID : ne revalide pas les lignes existantes (safe si des lignes 'admin' existent en prod)
 DO $$ BEGIN
@@ -186,6 +202,14 @@ CREATE INDEX IF NOT EXISTS embedding_logs_created_idx
 CREATE INDEX IF NOT EXISTS tasks_due_date_idx
   ON tasks (due_date)
   WHERE due_date IS NOT NULL;
+
+-- task_history : filtre par client + plage de dates (weekly_digest)
+CREATE INDEX IF NOT EXISTS task_history_client_changed_at_idx
+  ON task_history (client_id, changed_at DESC);
+
+-- task_history : lookup par tâche
+CREATE INDEX IF NOT EXISTS task_history_task_id_idx
+  ON task_history (task_id);
 
 -- Hybrid search : index GIN sur le tsvector pré-calculé
 CREATE INDEX IF NOT EXISTS document_chunks_fts_gin_idx
@@ -302,6 +326,80 @@ BEGIN
 END;
 $$;
 
+-- ── Trigger task_history ─────────────────────────────────────────────────────
+
+-- SECURITY DEFINER : la fonction s'exécute avec les droits de son propriétaire
+-- (postgres / service_role) pour pouvoir insérer dans task_history même depuis
+-- une session 'authenticated'.
+-- SET search_path = public : bonne pratique Supabase (anti-injection search_path).
+CREATE OR REPLACE FUNCTION log_task_history()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  _by uuid;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    INSERT INTO task_history (task_id, client_id, changed_by, action)
+    VALUES (NEW.id, NEW.client_id, NEW.last_modified_by, 'created');
+    RETURN NULL;
+  END IF;
+
+  -- delete_task pose last_modified_by via UPDATE juste avant DELETE ;
+  -- OLD.last_modified_by contient donc bien le user_id au moment du trigger.
+  IF TG_OP = 'DELETE' THEN
+    INSERT INTO task_history (task_id, client_id, changed_by, action)
+    VALUES (OLD.id, OLD.client_id, OLD.last_modified_by, 'deleted');
+    RETURN NULL;
+  END IF;
+
+  -- UPDATE : un enregistrement par champ métier modifié.
+  -- last_modified_by et updated_at sont exclus (colonnes de contrôle).
+  _by := NEW.last_modified_by;
+  IF OLD.title IS DISTINCT FROM NEW.title THEN
+    INSERT INTO task_history (task_id, client_id, changed_by, action, field, old_value, new_value)
+    VALUES (NEW.id, NEW.client_id, _by, 'updated', 'title', OLD.title, NEW.title);
+  END IF;
+  IF OLD.status IS DISTINCT FROM NEW.status THEN
+    INSERT INTO task_history (task_id, client_id, changed_by, action, field, old_value, new_value)
+    VALUES (NEW.id, NEW.client_id, _by, 'updated', 'status', OLD.status, NEW.status);
+  END IF;
+  IF OLD.prio IS DISTINCT FROM NEW.prio THEN
+    INSERT INTO task_history (task_id, client_id, changed_by, action, field, old_value, new_value)
+    VALUES (NEW.id, NEW.client_id, _by, 'updated', 'prio', OLD.prio, NEW.prio);
+  END IF;
+  IF OLD.assignee IS DISTINCT FROM NEW.assignee THEN
+    INSERT INTO task_history (task_id, client_id, changed_by, action, field, old_value, new_value)
+    VALUES (NEW.id, NEW.client_id, _by, 'updated', 'assignee', OLD.assignee, NEW.assignee);
+  END IF;
+  IF OLD.blocker IS DISTINCT FROM NEW.blocker THEN
+    INSERT INTO task_history (task_id, client_id, changed_by, action, field, old_value, new_value)
+    VALUES (NEW.id, NEW.client_id, _by, 'updated', 'blocker', OLD.blocker, NEW.blocker);
+  END IF;
+  IF OLD.note IS DISTINCT FROM NEW.note THEN
+    INSERT INTO task_history (task_id, client_id, changed_by, action, field, old_value, new_value)
+    VALUES (NEW.id, NEW.client_id, _by, 'updated', 'note', OLD.note, NEW.note);
+  END IF;
+  IF OLD.due_date IS DISTINCT FROM NEW.due_date THEN
+    INSERT INTO task_history (task_id, client_id, changed_by, action, field, old_value, new_value)
+    VALUES (NEW.id, NEW.client_id, _by, 'updated', 'due_date', OLD.due_date::text, NEW.due_date::text);
+  END IF;
+  IF OLD.scope IS DISTINCT FROM NEW.scope THEN
+    INSERT INTO task_history (task_id, client_id, changed_by, action, field, old_value, new_value)
+    VALUES (NEW.id, NEW.client_id, _by, 'updated', 'scope', OLD.scope, NEW.scope);
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_task_history ON tasks;
+CREATE TRIGGER trg_task_history
+  AFTER INSERT OR UPDATE OR DELETE ON tasks
+  FOR EACH ROW EXECUTE FUNCTION log_task_history();
+
 -- ── Row Level Security ────────────────────────────────────────────────────────
 
 ALTER TABLE clients           ENABLE ROW LEVEL SECURITY;
@@ -389,6 +487,20 @@ CREATE POLICY "agency_knowledge_delete" ON agency_knowledge FOR DELETE
 CREATE POLICY "agency_knowledge_service_role" ON agency_knowledge FOR ALL
   USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
+-- task_history — lecture membres du client, écritures via trigger SECURITY DEFINER
+ALTER TABLE task_history ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "task_history_select" ON task_history FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM client_members
+      WHERE client_id = task_history.client_id
+        AND member_id = auth.uid()
+    )
+  );
+-- service_role a BYPASSRLS — politique documentaire pour rendre l'intention explicite
+CREATE POLICY "task_history_service_role" ON task_history FOR ALL
+  USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
+
 -- client_members: all writes go through backend (service_role); JS SDK can only read own rows
 ALTER TABLE client_members ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "client_members_select" ON client_members FOR SELECT
@@ -405,6 +517,10 @@ CREATE POLICY "client_invitations_service_role" ON client_invitations FOR ALL
 -- subscribeRT() dans db.js s'abonne aux changements sur tasks pour le client actif.
 ALTER PUBLICATION supabase_realtime ADD TABLE tasks;
 
--- ── Migration : colonne scope sur tasks ───────────────────────────────────────
--- À exécuter en SQL Editor Supabase si la table existe déjà :
--- ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scope text DEFAULT 'internal';
+-- ── Migrations absorbées dans ce fichier ─────────────────────────────────────
+-- Les deltas ci-dessous étaient dans des migrations séparées ; ils sont intégrés
+-- directement dans les CREATE TABLE / CREATE FUNCTION ci-dessus.
+--   • scope sur tasks                  (migration antérieure)
+--   • last_modified_by sur tasks       (20260623_task_history)
+--   • table task_history + trigger     (20260623_task_history)
+-- Les fichiers de migration horodatés restent la source d'historique des deltas.
