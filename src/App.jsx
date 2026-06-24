@@ -91,7 +91,7 @@ export default function App() {
   const {
     clients, setClients, currentClient, setCurrentClient,
     tasks, setTasks, summaries, docCache,
-    syncStatus, setSyncStatus, syncProgress,
+    syncStatus, setSyncStatus, syncProgress, setSyncProgress,
     driveOutdated, clearDriveOutdated, checkDriveOutdated,
     selectClient, upsertTask, deleteTask, saveTaskOrder,
     getMembers, addSummary, loadClients, loadDocCache, indexingRef,
@@ -100,6 +100,17 @@ export default function App() {
 
   // ── Sync ──────────────────────────────────────────────────────────────────
   const syncHook = useSync({ jwtToken });
+
+  // Câble la progression Drive (useSync) vers la topbar (useClients)
+  useEffect(() => {
+    if (syncHook.isSyncing) {
+      setSyncStatus({ color: '#EF9F27', label: 'indexation…' });
+      setSyncProgress(syncHook.driveProgress);
+    } else {
+      setSyncStatus({ color: '#52b788', label: 'synchronisé' });
+      setSyncProgress(null);
+    }
+  }, [syncHook.isSyncing, syncHook.driveProgress]); // eslint-disable-line
 
   // ── État UI ───────────────────────────────────────────────────────────────
   const [activeFilter, setActiveFilter] = useState('all');
