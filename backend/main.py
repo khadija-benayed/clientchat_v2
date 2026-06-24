@@ -75,12 +75,12 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[ALLOWED_ORIGIN],
     allow_methods=["POST", "OPTIONS"],
-    allow_headers=["Content-Type", "X-Api-Key", "Authorization"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 _CORS_HEADERS = {
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-    "Access-Control-Allow-Headers": "Content-Type, X-Api-Key, Authorization",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
 }
 
 

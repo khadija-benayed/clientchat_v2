@@ -6,6 +6,7 @@
 --   1. Appliquer ce fichier via l'éditeur SQL Supabase
 --   2. Déployer le backend (git push → Cloud Build → modèle mpnet-base-v2)
 --   3. Exécuter backend/re_index.py pour re-vectoriser tous les documents
+--      (script supprimé après migration — utiliser sync_drive incremental=False si besoin)
 --
 -- Le script invalide les embeddings existants (SET embedding = NULL)
 -- car le cast vector(384) → vector(768) est impossible ; les données seront
