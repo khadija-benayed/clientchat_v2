@@ -1709,7 +1709,7 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
         try:
             open_tasks = (
                 sb.table("tasks")
-                .select("id, title, status, assignee, due_date, scope")
+                .select("id, title, status, assignee, due_date, scope, blocker")
                 .eq("client_id", cid)
                 .neq("status", "done")
                 .execute()
@@ -1770,11 +1770,6 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
                 for nr in note_rows:
                     note_txt = nr.get("note") or ""
                     recent = _recent_note_entries(note_txt, since_date)
-                    if not recent and note_txt.strip():
-                        last = note_txt.strip().split("\n")[-1]
-                        last = re.sub(r'^\[[^\]]*\]\s*', '', last).strip()
-                        if last:
-                            recent = [last[:300]]
                     for entry in recent:
                         lines.append(f"- note sur {nr['title']} : {entry}")
             except Exception:
@@ -1797,6 +1792,19 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
         ext_watch = [t for t in external
                      if (t.get("due_date") and t["due_date"] < today)
                      or t.get("status") in ("blocked", "waiting")]
+
+        # Raisons de blocage — nouvellement bloquées cette semaine
+        task_blocker = {t["id"]: (t.get("blocker") or "").strip() for t in open_tasks}
+        for tid in newly_blocked_ids:
+            b = task_blocker.get(tid, "")
+            if b:
+                lines.append(f"- bloqué : {titles.get(tid, f'tâche #{tid}')} — {b}")
+        # Raisons de blocage — toujours en attente (status blocked/waiting)
+        for t in still_waiting:
+            if t.get("status") in ("blocked", "waiting"):
+                b = (t.get("blocker") or "").strip()
+                if b:
+                    lines.append(f"- bloqué : {t['title']} — {b}")
 
         if late_new:
             lines.append("Échéance dépassée cette semaine : " + ", ".join(t["title"] for t in late_new))
