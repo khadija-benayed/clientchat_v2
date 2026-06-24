@@ -397,7 +397,7 @@ def _export_large_sheet(file_id: str, file_name: str) -> Optional[str]:
             continue
         parts.append(f"[Fichier : {file_name}] [Onglet : {title}]\n{csv_text}")
 
-    return ("\n\n".join(parts))[:20_000] if parts else None
+    return ("\n\n".join(parts))[:100_000] if parts else None
 
 
 # ── Gmail (domain-wide delegation) ───────────────────────────────────────────
@@ -497,7 +497,7 @@ def export_drive_file(file_id: str, file_name: str, mime_type: str) -> Optional[
                             + "\n".join(rows)
                         )
                 wb.close()
-                content = "\n\n".join(parts)[:20_000]
+                content = "\n\n".join(parts)[:100_000]
                 if not content.strip():
                     print(f"Sheet export empty for {file_name}")
                 return {"filename": file_name, "type": "csv", "content": content}
@@ -541,7 +541,8 @@ def export_drive_file(file_id: str, file_name: str, mime_type: str) -> Optional[
             if not content.strip():
                 return None
             type_label = {"docx": "doc", "xlsx": "sheet", "pptx": "ppt"}.get(ext, ext)
-            return {"filename": file_name, "type": type_label, "content": content[:20_000]}
+            cap = 100_000 if type_label == "sheet" else 20_000
+            return {"filename": file_name, "type": type_label, "content": content[:cap]}
 
         return None
 
@@ -2232,7 +2233,7 @@ async def sync_drive(body: dict, request: Request):
                         yield f"data: {json.dumps({'file': f['name'], 'status': 'empty', 'progress': processed, 'total': total})}\n\n"
                         continue
 
-                    is_csv = result["type"] == "csv"
+                    is_csv = result["type"] in ("csv", "sheet")
                     chunks = chunk_csv(content) if is_csv else chunk_text(content)
                     if not chunks:
                         _ignore(f['id'], f['name'], 'empty')
