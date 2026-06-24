@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
+import numpy as np
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -143,6 +144,11 @@ _SAFETY_OFF = {
 GEMINI_FLASH = "gemini-2.5-flash"
 GEMINI_PRO = "gemini-2.5-pro"
 
+# MMR dedup — cosine threshold above which a chunk is considered redundant with an
+# already-selected one. Calibrate via eval (source_recall): raise toward 0.95 if
+# recall drops, lower toward 0.90 if near-duplicates still slip through.
+MMR_SIM_THRESHOLD = 0.92
+
 # ── Cost calculation ──────────────────────────────────────────────────────────
 GEMINI_PRICING: dict[str, dict[str, float]] = {
     GEMINI_FLASH: {
@@ -207,6 +213,20 @@ def _rerank_chunks(query: str, chunks: list[dict]) -> list[dict]:
         key=lambda c: c["rerank_score"],
         reverse=True,
     )
+
+
+def _mmr_filter(chunks: list, embeddings: list, threshold: float) -> list:
+    """Discard chunks whose cosine similarity to any already-selected chunk exceeds
+    `threshold`. Embeddings must be pre-normalized (dot product == cosine). Chunks
+    must be sorted by final_score descending before calling."""
+    selected, selected_embs = [], []
+    for chunk, emb in zip(chunks, embeddings):
+        emb_arr = np.array(emb, dtype="float32")
+        if selected_embs and max(float(np.dot(emb_arr, s)) for s in selected_embs) > threshold:
+            continue
+        selected.append(chunk)
+        selected_embs.append(emb_arr)
+    return selected
 
 
 # ── Supabase retry ───────────────────────────────────────────────────────────
@@ -667,6 +687,73 @@ def safe_extract(file_bytes: bytes, mime_type: str) -> str:
         return ""
 
 
+# ── eval_judge ────────────────────────────────────────────────────────────────
+_EVAL_JUDGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        # answer mode
+        "correctness":        {"type": "number"},
+        "faithful":           {"type": "number"},
+        # abstain mode
+        "abstained_properly": {"type": "number"},
+        "fabricated":         {"type": "number"},
+        "reasoning":          {"type": "string"},
+    },
+    "required": ["reasoning"],
+}
+
+async def eval_judge(body: dict) -> JSONResponse:
+    question = body.get("question", "")
+    context = body.get("context", "")
+    response = body.get("response", "")
+    expected_points = body.get("expected_points", [])
+    mode = body.get("mode", "answer")
+
+    if mode == "answer":
+        prompt = (
+            f"Tu es un juge d'évaluation RAG. Évalue la réponse ci-dessous.\n\n"
+            f"Question : {question}\n\n"
+            f"Contexte injecté :\n{context}\n\n"
+            f"Réponse du modèle :\n{response}\n\n"
+            f"Points attendus : {json.dumps(expected_points, ensure_ascii=False)}\n\n"
+            "Score `correctness` (0.0–1.0) : proportion des points attendus couverts sémantiquement "
+            "(une reformulation correcte compte comme couvert).\n"
+            "Score `faithful` (0.0–1.0) : la réponse ne contredit pas le contexte injecté "
+            "(1.0 = aucune contradiction, 0.0 = contradiction directe).\n"
+            "Retourne uniquement le JSON structuré demandé."
+        )
+    else:  # abstain
+        prompt = (
+            f"Tu es un juge d'évaluation RAG. Évalue si le modèle s'est correctement abstenu.\n\n"
+            f"Question : {question}\n\n"
+            f"Contexte injecté (vide = aucun doc pertinent) :\n{context}\n\n"
+            f"Réponse du modèle :\n{response}\n\n"
+            "Score `abstained_properly` (0.0–1.0) : le modèle a bien signalé l'absence d'information "
+            "sans inventer (1.0 = abstention claire et correcte).\n"
+            "Score `fabricated` (0.0–1.0) : proportion d'informations inventées dans la réponse "
+            "(0.0 = rien d'inventé, 1.0 = tout est inventé — score inversé, plus bas = mieux).\n"
+            "Retourne uniquement le JSON structuré demandé."
+        )
+
+    try:
+        gemini = genai.GenerativeModel(
+            model_name=GEMINI_FLASH,
+            generation_config={
+                "temperature": 0,
+                "max_output_tokens": 512,
+                "response_mime_type": "application/json",
+                "response_schema": _EVAL_JUDGE_SCHEMA,
+            },
+            safety_settings=_SAFETY_OFF,
+        )
+        resp = gemini.generate_content(prompt)
+        result = json.loads(_gemini_text(resp))
+    except Exception as e:
+        return JSONResponse({"error": f"eval_judge error: {e}"}, status_code=502)
+
+    return JSONResponse(result)
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
@@ -728,6 +815,8 @@ async def dispatcher(request: Request):
         return await sync_emails(body, request)
     if action == "update_gmail_sync":
         return await update_gmail_sync(body, user_id)
+    if action == "eval_judge":
+        return await eval_judge(body)
     if action is None:
         return await chat(body, user_id=user_id)
     return JSONResponse({"error": f"Action inconnue : {action}"}, status_code=400, headers=_CORS_HEADERS)
@@ -2560,6 +2649,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
     # RAG pipeline
     system_with_rag = system
     sources_used: list[dict] = []
+    injected_chunks: list[dict] = []
 
     # Skip RAG entirely for task actions — they only need the task list, not documents.
     if message and message_type != "task_action":
@@ -2684,6 +2774,15 @@ async def chat(body: dict, user_id: Optional[str] = None):
 
             reranked.sort(key=lambda c: c["final_score"], reverse=True)
 
+            # MMR dedup: re-encode reranked chunks (embeddings not returned by RPC),
+            # then discard near-duplicates before the diversity cap.
+            try:
+                mmr_texts = [c.get("chunk_text") or c.get("content") or "" for c in reranked]
+                mmr_embs = await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, mmr_texts)
+                reranked = _mmr_filter(reranked, mmr_embs, MMR_SIM_THRESHOLD)
+            except Exception as _mmr_err:
+                print(f"MMR filter error (non bloquant, ignoré): {_mmr_err}")
+
             safety_net_sources = {
                 c["source_name"] for c in chunks
                 if c.get("rrf_score") == 0.0
@@ -2711,6 +2810,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
                           and c.get("final_score", c.get("rerank_score", 0.0)) >= inject_threshold]
 
                 to_inject = (guaranteed + normal)[:MAX_INJECT]
+                injected_chunks = to_inject
 
                 doc_chunks = [c for c in to_inject if c["source_type"] != "session"]
                 session_chunks = [c for c in to_inject if c["source_type"] == "session"]
@@ -2896,6 +2996,9 @@ async def chat(body: dict, user_id: Optional[str] = None):
             done_payload = {"type": "done", "sources": sources_used, "tasks_json": tasks_json, "reply_text": reply_text}
             if debug_info is not None:
                 done_payload["debug"] = debug_info
+                done_payload["injected_context"] = "\n\n".join(
+                    f"[{c['source_name']}]\n{c['chunk_text']}" for c in injected_chunks
+                )
             yield f"data: {json.dumps(done_payload)}\n\n"
 
             # Log usage — non-bloquant

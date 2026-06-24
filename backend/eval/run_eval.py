@@ -3,8 +3,12 @@ Variables d'env requises :
   BACKEND_URL  — URL racine du backend (ex: https://xxx.run.app/)
   EVAL_JWT     — token Bearer (copié depuis la session navigateur : DevTools > Network >
                  une requête > en-tête Authorization, sans le préfixe 'Bearer ')
+
+Flags :
+  --judge   Active la phase 2 : LLM-juge sémantique en plus des checks exacts.
+            Requiert expected_points (answer) ou should_abstain (abstain) dans testset.json.
 """
-import os, json, sys, requests
+import argparse, os, json, sys, requests
 
 BACKEND_URL = os.environ["BACKEND_URL"]
 JWT = os.environ["EVAL_JWT"]
@@ -17,8 +21,16 @@ ABSTAIN_MARKERS = [
     "je ne sais pas", "pas mentionn", "n'est pas précis", "pas d'information",
 ]
 
+# Seuils de passage phase 2
+THRESHOLDS = {
+    "correctness":        0.5,
+    "faithful":           0.7,
+    "abstained_properly": 0.5,
+    "fabricated":         0.3,  # doit être INFÉRIEUR à ce seuil
+}
+
 def ask(question, client_id):
-    """Appelle le chat (SSE) et renvoie (reply_text, [source_names], debug)."""
+    """Appelle le chat (SSE) et renvoie (reply_text, [source_names], debug, injected_context)."""
     resp = requests.post(
         BACKEND_URL,
         headers={"Authorization": f"Bearer {JWT}", "Content-Type": "application/json"},
@@ -32,7 +44,7 @@ def ask(question, client_id):
         except Exception:
             err = resp.text[:120]
         raise RuntimeError(f"HTTP {resp.status_code}: {err}")
-    tokens, sources, debug = [], [], None
+    tokens, sources, debug, injected_context = [], [], None, ""
     for line in resp.iter_lines(decode_unicode=True):
         if not line or not line.startswith("data: "):
             continue
@@ -48,7 +60,27 @@ def ask(question, client_id):
                 tokens = [evt["reply_text"]]
             sources = [s.get("source_name", "") for s in evt.get("sources", [])]
             debug = evt.get("debug")
-    return "".join(tokens), sources, debug
+            injected_context = evt.get("injected_context", "")
+    return "".join(tokens), sources, debug, injected_context
+
+def call_judge(question, context, response, expected_points, mode):
+    """Appelle l'action eval_judge et retourne le dict de scores."""
+    resp = requests.post(
+        BACKEND_URL,
+        headers={"Authorization": f"Bearer {JWT}", "Content-Type": "application/json"},
+        json={
+            "action": "eval_judge",
+            "question": question,
+            "context": context,
+            "response": response,
+            "expected_points": expected_points,
+            "mode": mode,
+        },
+        timeout=60,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"eval_judge HTTP {resp.status_code}: {resp.text[:120]}")
+    return resp.json()
 
 def score_case(case, reply, sources):
     low = reply.lower()
@@ -61,27 +93,81 @@ def score_case(case, reply, sources):
         checks["abstention"] = any(m in low for m in ABSTAIN_MARKERS)
     return checks
 
+def score_judge(case, reply, injected_context):
+    """Phase 2 : appelle le LLM-juge et retourne les scores sémantiques."""
+    mode = "abstain" if case.get("should_abstain") else "answer"
+    expected_points = case.get("expected_points", [])
+    try:
+        verdict = call_judge(
+            question=case["question"],
+            context=injected_context,
+            response=reply,
+            expected_points=expected_points,
+            mode=mode,
+        )
+    except Exception as e:
+        return {"judge_error": str(e)[:80]}, None
+
+    scores = {}
+    reasoning = verdict.get("reasoning", "")
+    if mode == "answer":
+        scores["correctness"] = verdict.get("correctness")
+        scores["faithful"]    = verdict.get("faithful")
+    else:
+        scores["abstained_properly"] = verdict.get("abstained_properly")
+        scores["fabricated"]         = verdict.get("fabricated")
+    return scores, reasoning
+
+def judge_pass(metric, value):
+    """True si le score passe le seuil (fabricated : inférieur au seuil)."""
+    if value is None:
+        return False
+    if metric == "fabricated":
+        return value < THRESHOLDS["fabricated"]
+    return value >= THRESHOLDS.get(metric, 0.5)
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--judge", action="store_true", help="Active la phase 2 LLM-juge")
+    args = parser.parse_args()
+
     here = os.path.dirname(__file__)
     with open(os.path.join(here, "testset.json"), encoding="utf-8") as f:
         cases = json.load(f)
 
-    rows, agg = [], {}
+    rows, agg, judge_agg = [], {}, {}
     for c in cases:
         try:
-            reply, sources, debug = ask(c["question"], c["client_id"])
+            reply, sources, debug, injected_context = ask(c["question"], c["client_id"])
         except Exception as e:
-            rows.append((c["id"], {"ERROR": False}, str(e)[:120], None))
+            rows.append((c["id"], {}, {}, None, None, str(e)[:120]))
             continue
+
         checks = score_case(c, reply, sources)
         for k, v in checks.items():
             agg.setdefault(k, []).append(v)
-        rows.append((c["id"], checks, reply[:80], debug))
+
+        judge_scores, reasoning = {}, None
+        if args.judge:
+            judge_scores, reasoning = score_judge(c, reply, injected_context)
+            for k, v in judge_scores.items():
+                if v is not None and not isinstance(v, str):
+                    judge_agg.setdefault(k, []).append(judge_pass(k, v))
+
+        rows.append((c["id"], checks, judge_scores, reasoning, debug, reply[:80]))
 
     print("\n=== DÉTAIL ===")
-    for cid, checks, preview, debug in rows:
+    for cid, checks, judge_scores, reasoning, debug, preview in rows:
         flags = " ".join(f"{k}={'OK' if v else 'KO'}" for k, v in checks.items())
+        if judge_scores and not isinstance(judge_scores.get("judge_error"), str):
+            jflags = " ".join(
+                f"{k}={'OK' if judge_pass(k, v) else 'KO'}({v:.2f})"
+                for k, v in judge_scores.items() if v is not None
+            )
+            flags = f"{flags}  |judge| {jflags}" if flags else f"|judge| {jflags}"
         print(f"  [{cid}] {flags}   « {preview}… »")
+        if reasoning:
+            print(f"  reasoning: {reasoning[:120]}")
         if checks and not all(checks.values()) and debug:
             print(f"  --- TRACE {cid} ---")
             for d in debug:
@@ -89,13 +175,20 @@ def main():
                 print(f"    {mark} rr={d['rerank_score']:+.3f} fin={d['final_score']:+.3f} {d['source_name'][:50]}")
 
     print("\n=== SCORECARD ===")
+    print("  -- Phase 1 (exact) --")
     for k, vals in sorted(agg.items()):
         rate = sum(vals) / len(vals) if vals else 0
-        print(f"  {k:14s} : {rate:.0%}  ({sum(vals)}/{len(vals)})")
+        print(f"  {k:20s} : {rate:.0%}  ({sum(vals)}/{len(vals)})")
+    if judge_agg:
+        print("  -- Phase 2 (LLM-juge) --")
+        for k, vals in sorted(judge_agg.items()):
+            rate = sum(vals) / len(vals) if vals else 0
+            thr = f"{'<' if k == 'fabricated' else '>='}{THRESHOLDS[k]}"
+            print(f"  {k:20s} : {rate:.0%}  ({sum(vals)}/{len(vals)})  seuil {thr}")
 
-    fails = [cid for cid, checks, _, _d in rows if checks and not all(checks.values())]
+    fails = [cid for cid, checks, _, _r, _d, _p in rows if checks and not all(checks.values())]
     if fails:
-        print(f"\n  À investiguer : {', '.join(fails)}")
+        print(f"\n  À investiguer (phase 1) : {', '.join(fails)}")
 
 if __name__ == "__main__":
     main()
