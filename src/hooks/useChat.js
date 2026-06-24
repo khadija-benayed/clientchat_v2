@@ -24,7 +24,7 @@
 import { useState, useRef, useCallback, useMemo } from 'react';
 import { callBackend, streamChatSSE } from '../lib/backend';
 
-export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksUpdate, onSessionSave }) {
+export function useChat({ client, tasks, summaries, docCache, jwtToken, currentUserId, onTasksUpdate, onSessionSave }) {
   // Tableau des messages affichés dans le chat
   const [messages, setMessages] = useState([]);
   // Ref synchronisée à chaque render : permet de lire messages dans sendMessage
@@ -115,6 +115,7 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
     const mFull = members.map(m => 'initiales:' + m.initials + ' nom:"' + (m.name || m.initials) + '"').join(', ');
     const mInitials = members.map(m => m.initials).join(', ') || 'KB, PH';
     const maxId = tasks.length ? Math.max(...tasks.map(t => t.id)) : 0;
+    const currentMember = members.find(m => m.member_id === currentUserId) || null;
 
     // ── Correspondance déterministe tâche↔message ─────────────────────────
     const matchContext = computeMatchContext(text, tasks, memberIndex, members);
@@ -131,7 +132,7 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
 
     const _needDocs = _isQuestion || _isComplex;
     const systemPrompt =
-      buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction: _isAction }) +
+      buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction: _isAction, currentMember }) +
       (_needL2 ? buildL2(ctxForPrompt, summaries, docCache, _needDocs) : '') +
       (_needL3 ? buildL3(summaries) : '');
 
@@ -249,7 +250,7 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, onTasksU
       setIsLoading(false);
       setIsSending(false);
     }
-  }, [client, tasks, summaries, docCache, jwtToken, addMessage, onTasksUpdate, members, memberIndex]); // eslint-disable-line
+  }, [client, tasks, summaries, docCache, jwtToken, currentUserId, addMessage, onTasksUpdate, members, memberIndex]); // eslint-disable-line
 
   async function triggerSessionSave() {
     if (!client || saveInFlightRef.current || exchangeCountRef.current < 3) return;
@@ -449,7 +450,7 @@ function buildClientContext(client) {
   return client.context || 'Non renseigné.';
 }
 
-function buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction }) {
+function buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction, currentMember }) {
   const today = new Date().toLocaleDateString('fr-FR', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
   });
@@ -457,9 +458,9 @@ function buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction 
     ? 'Réponds en français, concis et direct.'
     : 'Réponds en français de façon précise et structurée. Pour les questions et analyses, développe ta réponse : sois complet, utilise des listes ou sections si utile, ne sois pas trop bref. Réponds directement à ce qui est demandé sans paraphraser la question.\nFORMATAGE MARKDOWN — règles strictes : (1) N\'utilise JAMAIS les backticks (`) pour des noms de fichiers, noms de campagnes, paramètres UTM, noms d\'événements ou tout identifiant non-technique — écris-les en texte ordinaire. Les backticks sont réservés uniquement au code source (SQL, JSON, Python…). (2) N\'utilise le **gras** que pour les titres de sections ou les termes véritablement clés — pas pour surligner les noms de fichiers ou les identifiants. (3) Sois homogène : si tu italicises ou mets en gras un élément, applique la même règle à tous les éléments du même type dans toute ta réponse.';
   const part1Desc = isAction
-    ? 'ta réponse courte confirmant l\'action effectuée (1-2 phrases max).'
+    ? 'une confirmation courte, naturelle, comme si tu répondais à un collègue (ex. "C\'est fait — assigné à KB, P2." ou "Ajouté. Tu veux préciser l\'échéance ?"). Pas de reformulation, pas de politesse excessive.'
     : 'ta réponse complète et précise. Cite tes sources entre crochets quand tu utilises un document : [NomFichier].';
-  return 'Tu es l\'assistant projet de l\'équipe sur ce client.\n'
+  return 'Tu es un assistant de projet intégré dans l\'équipe. Tu travailles avec nous sur ce client — pas pour nous, avec nous. Tu es direct, concis, et tu n\'as pas besoin de reformuler ce qu\'on vient de dire.\n'
     + 'Principe de fiabilité : tu réponds à partir des informations fournies (fiche client, documents, '
     + 'historique). Tu n\'inventes pas et tu assumes de dire « je ne trouve pas cette information dans les '
     + 'éléments disponibles » quand c\'est le cas. Mieux vaut une réponse honnêtement incomplète qu\'une '
@@ -469,6 +470,7 @@ function buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction 
     + 'Équipe : ' + (mStr || 'Non renseignée') + '.\n'
     + 'Membres valides : ' + mFull + '. Utilise les initiales dans le JSON.\n'
     + 'Initiales pour JSON : ' + mInitials + '. Statuts : todo, inprogress, blocked, waiting, done. Priorités : P1, P2, P3.\n'
+    + (currentMember ? 'L\'utilisateur connecté est ' + currentMember.name + ' (initiales : ' + currentMember.initials + '). Quand il parle de lui-même ("moi", "m\'assigner", "assigné à moi"), utilise ses initiales sans demander.\n' : '')
     + '\nANALYSE AUTOMATIQUE DE CORRESPONDANCE :\n' + matchContext + '\n'
     + '\nRègles JSON : SUIS L\'ANALYSE DE CORRESPONDANCE.\n'
     + '- Ajouter note : {"id":X,"note":"texte"}\n'
@@ -477,8 +479,10 @@ function buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction 
     + '- Échéance : {"id":X,"due_date":"YYYY-MM-DD"}\n'
     + '- Assignation : assignee=initiales. "à X et Y" → assignee="X+Y".\n'
     + '- fini/terminé → done | bloqué → blocked | en cours → inprogress\n'
-    + '- New : {"id":' + (maxId + 1) + ',"title":"...","prio":"P2","status":"todo","assignee":"","blocker":null,"note":null}\n'
-    + '\nINSTRUCTIONS :\n' + responseInstruction + ' Ta réponse DOIT contenir exactement deux parties séparées par "---JSON---" :\n'
+    + '- New : {"id":' + (maxId + 1) + ',"title":"..." (5-6 mots max, actionnable),"prio":"P2","status":"todo","assignee":"","blocker":null,"note":null}\n'
+    + '\nINSTRUCTIONS :\n' + responseInstruction + '\n'
+    + '- Si tu as besoin de préciser quelque chose avant d\'agir, pose UNE seule question courte et directe, pas plusieurs sous-points.\n'
+    + 'Ta réponse DOIT contenir exactement deux parties séparées par "---JSON---" :\n'
     + '\nPARTIE 1 : ' + part1Desc + '\n'
     + '\nPARTIE 2 : UN objet JSON valide :\n'
     + '{"updates":[],"new_tasks":[],"delete_ids":[],"clarification":false}';

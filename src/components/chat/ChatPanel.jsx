@@ -26,12 +26,12 @@ import ChatInput from './ChatInput';
 import { useChat } from '../../hooks/useChat';
 
 export default function ChatPanel({
-  client, tasks, summaries, docCache, jwtToken,
+  client, tasks, summaries, docCache, jwtToken, currentUserId,
   onTasksUpdate, onSessionSave, onOpenKbModal, onSetSyncStatus,
   pendingChatMsg, onPendingChatMsgConsumed,
 }) {
   const { messages, isLoading, isSending, sendMessage, addMessage, clearMessages, triggerSessionSave } =
-    useChat({ client, tasks, summaries, docCache, jwtToken, onTasksUpdate, onSessionSave });
+    useChat({ client, tasks, summaries, docCache, jwtToken, currentUserId, onTasksUpdate, onSessionSave });
 
   // Vider le chat quand le client change
   useEffect(() => {

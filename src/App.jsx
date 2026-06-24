@@ -446,6 +446,7 @@ export default function App() {
                 summaries={summaries}
                 docCache={docCache}
                 jwtToken={jwtToken}
+                currentUserId={currentUserId}
                 onTasksUpdate={handleTasksUpdate}
                 onSessionSave={summary => {
                   addSummary(summary);
