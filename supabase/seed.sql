@@ -489,6 +489,8 @@ CREATE POLICY "agency_knowledge_service_role" ON agency_knowledge FOR ALL
 
 -- task_history — lecture membres du client, écritures via trigger SECURITY DEFINER
 ALTER TABLE task_history ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "task_history_select"       ON task_history;
+DROP POLICY IF EXISTS "task_history_service_role" ON task_history;
 CREATE POLICY "task_history_select" ON task_history FOR SELECT
   USING (
     EXISTS (

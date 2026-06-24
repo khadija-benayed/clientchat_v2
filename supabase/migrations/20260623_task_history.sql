@@ -122,6 +122,9 @@ CREATE TRIGGER trg_task_history
 -- ── 6. Row Level Security ─────────────────────────────────────────────────────
 ALTER TABLE task_history ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "task_history_select"      ON task_history;
+DROP POLICY IF EXISTS "task_history_service_role" ON task_history;
+
 -- Les membres du client peuvent lire l'historique de leurs tâches
 -- (même pattern que tasks_select)
 CREATE POLICY "task_history_select" ON task_history FOR SELECT
