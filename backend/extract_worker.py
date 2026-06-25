@@ -12,6 +12,16 @@ import io
 import base64
 
 
+def _fix_cell(s: str) -> str:
+    """Corrige le double-encodage UTF-8→Latin-1 fréquent dans les xlsx issus de CSV Windows.
+    Ex: 'Ã©' (bytes UTF-8 de 'é' lus comme Latin-1) → 'é'.
+    Ne modifie pas les chaînes déjà correctes."""
+    try:
+        return s.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return s
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit(1)
@@ -103,7 +113,7 @@ def main():
             for sheet in wb.worksheets:
                 parts.append(f"[Feuille : {sheet.title}]")
                 for row in sheet.iter_rows(values_only=True):
-                    cells = [str(c) if c is not None else "" for c in row]
+                    cells = [_fix_cell(str(c)) if c is not None else "" for c in row]
                     if any(c.strip() for c in cells):
                         parts.append(" | ".join(cells))
             wb.close()
