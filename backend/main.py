@@ -688,18 +688,24 @@ def safe_extract(file_bytes: bytes, mime_type: str) -> str:
 
 
 # ── eval_judge ────────────────────────────────────────────────────────────────
-_EVAL_JUDGE_SCHEMA = {
+_EVAL_JUDGE_ANSWER_SCHEMA = {
     "type": "object",
     "properties": {
-        # answer mode
-        "correctness":        {"type": "number"},
-        "faithful":           {"type": "number"},
-        # abstain mode
+        "correctness": {"type": "number"},
+        "faithful":    {"type": "number"},
+        "reasoning":   {"type": "string"},
+    },
+    "required": ["correctness", "faithful", "reasoning"],
+}
+
+_EVAL_JUDGE_ABSTAIN_SCHEMA = {
+    "type": "object",
+    "properties": {
         "abstained_properly": {"type": "number"},
         "fabricated":         {"type": "number"},
         "reasoning":          {"type": "string"},
     },
-    "required": ["reasoning"],
+    "required": ["abstained_properly", "fabricated", "reasoning"],
 }
 
 async def eval_judge(body: dict) -> JSONResponse:
@@ -709,7 +715,12 @@ async def eval_judge(body: dict) -> JSONResponse:
     expected_points = body.get("expected_points", [])
     mode = body.get("mode", "answer")
 
+    if not question or not response:
+        return JSONResponse({"error": "question et response sont requis"}, status_code=400)
+
     if mode == "answer":
+        if not context:
+            context = "(aucun document injecté — évaluer uniquement sur la cohérence de la réponse)"
         prompt = (
             f"Tu es un juge d'évaluation RAG. Évalue la réponse ci-dessous.\n\n"
             f"Question : {question}\n\n"
@@ -722,6 +733,7 @@ async def eval_judge(body: dict) -> JSONResponse:
             "(1.0 = aucune contradiction, 0.0 = contradiction directe).\n"
             "Retourne uniquement le JSON structuré demandé."
         )
+        schema = _EVAL_JUDGE_ANSWER_SCHEMA
     else:  # abstain
         prompt = (
             f"Tu es un juge d'évaluation RAG. Évalue si le modèle s'est correctement abstenu.\n\n"
@@ -734,6 +746,7 @@ async def eval_judge(body: dict) -> JSONResponse:
             "(0.0 = rien d'inventé, 1.0 = tout est inventé — score inversé, plus bas = mieux).\n"
             "Retourne uniquement le JSON structuré demandé."
         )
+        schema = _EVAL_JUDGE_ABSTAIN_SCHEMA
 
     try:
         gemini = genai.GenerativeModel(
@@ -742,7 +755,7 @@ async def eval_judge(body: dict) -> JSONResponse:
                 "temperature": 0,
                 "max_output_tokens": 1024,
                 "response_mime_type": "application/json",
-                "response_schema": _EVAL_JUDGE_SCHEMA,
+                "response_schema": schema,
             },
             safety_settings=_SAFETY_OFF,
         )
