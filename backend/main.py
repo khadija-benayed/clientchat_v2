@@ -145,8 +145,17 @@ GEMINI_FLASH = "gemini-2.5-flash"
 GEMINI_PRO = "gemini-2.5-pro"
 
 # MMR dedup — cosine threshold above which a chunk is considered redundant with an
-# already-selected one. Calibrate via eval (source_recall): raise toward 0.95 if
-# recall drops, lower toward 0.90 if near-duplicates still slip through.
+# already-selected one.
+#
+# Calibration en attente (juin 2026) — procédure :
+#   1. python eval/run_eval.py --judge --mmr-threshold 1.01   # MMR désactivé
+#   2. python eval/run_eval.py --judge                         # MMR actif (0.92)
+#   Comparer source_recall. Si (1) >= (2) → MMR dégrade le rappel → retirer ou monter à 0.95.
+#   Si (1) < (2) → MMR améliore la diversité → garder, tester 0.90.
+#
+# Note : pool = ~30-40 chunks (match_count=30 + safety net). Le diversity cap (2/source)
+# gère déjà l'intra-source. À 0.92, MMR filtre surtout des quasi-doublons cross-source
+# dont la cosine > 0.92 — rare pour du contenu réellement distinct.
 MMR_SIM_THRESHOLD = 0.92
 
 # ── Cost calculation ──────────────────────────────────────────────────────────
@@ -218,9 +227,13 @@ def _rerank_chunks(query: str, chunks: list[dict]) -> list[dict]:
 def _mmr_filter(chunks: list, embeddings: list, threshold: float) -> list:
     """Discard chunks whose cosine similarity to any already-selected chunk exceeds
     `threshold`. Embeddings must be pre-normalized (dot product == cosine). Chunks
-    must be sorted by final_score descending before calling."""
+    must be sorted by final_score descending before calling.
+    Chunks with None embedding are kept unconditionally (safety net fallback)."""
     selected, selected_embs = [], []
     for chunk, emb in zip(chunks, embeddings):
+        if emb is None:
+            selected.append(chunk)
+            continue
         emb_arr = np.array(emb, dtype="float32")
         if selected_embs and max(float(np.dot(emb_arr, s)) for s in selected_embs) > threshold:
             continue
@@ -2671,6 +2684,8 @@ async def chat(body: dict, user_id: Optional[str] = None):
     chat_history = body.get("chat_history", [])
     file_data = body.get("file")
     message_type = body.get("message_type", "chat")
+    # Per-request MMR override (eval/calibration only — production omits this key)
+    mmr_threshold = float(body["mmr_threshold"]) if "mmr_threshold" in body else MMR_SIM_THRESHOLD
 
     # Taille max : un prompt légitime peut atteindre ~120k chars (80k docs + tasks + context).
     # Ces limites empêchent l'abus de ressources sans bloquer aucun usage normal.
@@ -2757,6 +2772,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     "chunk_text": c.get("content") or c.get("chunk_text") or "",
                     "source_type": c.get("source_type") if c.get("source_type") is not None else "doc",
                     "metadata": c.get("metadata"),
+                    "embedding": c.get("embedding"),
                 }
                 for c in chunks
             ]
@@ -2783,7 +2799,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     for src in missing_kw_sources[:5]:
                         extra = (
                             sb.table("document_chunks")
-                            .select("source_name, chunk_text, source_type, client_id, drive_modified_at")
+                            .select("source_name, chunk_text, source_type, client_id, drive_modified_at, embedding")
                             .eq("client_id", client_id)
                             .eq("source_name", src)
                             .limit(2)
@@ -2812,12 +2828,16 @@ async def chat(body: dict, user_id: Optional[str] = None):
 
             reranked.sort(key=lambda c: c["final_score"], reverse=True)
 
-            # MMR dedup: re-encode reranked chunks (embeddings not returned by RPC),
-            # then discard near-duplicates before the diversity cap.
+            # MMR dedup: embeddings are returned by match_chunks RPC (and fetched for
+            # safety net chunks), so no re-encoding needed — dot product only (~10ms).
+            # Guard: if RPC not yet redeployed, embeddings are None → skip MMR silently.
+            mmr_dropped_count = 0
             try:
-                mmr_texts = [c.get("chunk_text") or c.get("content") or "" for c in reranked]
-                mmr_embs = await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, mmr_texts)
-                reranked = _mmr_filter(reranked, mmr_embs, MMR_SIM_THRESHOLD)
+                mmr_embs = [c.get("embedding") for c in reranked]
+                if mmr_embs and mmr_embs[0] is not None:
+                    pre_mmr_count = len(reranked)
+                    reranked = _mmr_filter(reranked, mmr_embs, mmr_threshold)
+                    mmr_dropped_count = pre_mmr_count - len(reranked)
             except Exception as _mmr_err:
                 print(f"MMR filter error (non bloquant, ignoré): {_mmr_err}")
 
@@ -3030,6 +3050,10 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     }
                     for c in reranked[:15]
                 ]
+                debug_info.insert(0, {
+                    "mmr_threshold": mmr_threshold,
+                    "mmr_dropped": mmr_dropped_count,
+                })
 
             done_payload = {"type": "done", "sources": sources_used, "tasks_json": tasks_json, "reply_text": reply_text}
             if debug_info is not None:

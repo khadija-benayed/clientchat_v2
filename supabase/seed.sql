@@ -1,6 +1,6 @@
 -- ════════════════════════════════════════════════════════════════════════════
 -- seed.sql — Schéma complet clientchat_v2
--- Dernière mise à jour : 2026-06-24 (migration 20260623_task_history)
+-- Dernière mise à jour : 2026-06-25 (migration 20260625_team_members_created_at)
 -- Modèle d'embeddings : paraphrase-multilingual-mpnet-base-v2 (768 dimensions)
 -- ════════════════════════════════════════════════════════════════════════════
 
@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS clients (
 CREATE TABLE IF NOT EXISTS client_members (
   id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id  uuid        NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  member_id  uuid        NOT NULL,   -- team_members.id (pas de FK — hors seed scope)
+  member_id  uuid        NOT NULL,   -- team_members.id (pas de contrainte FK — team_members dépend de auth.users)
   role       text        NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'member')),
   created_at timestamptz DEFAULT now(),
   UNIQUE (client_id, member_id)
@@ -47,6 +47,20 @@ CREATE TABLE IF NOT EXISTS client_invitations (
 );
 CREATE INDEX IF NOT EXISTS client_invitations_token_idx ON client_invitations (token);
 
+-- team_members : profil des membres de l'agence (miroir de auth.users)
+-- ⚠️ Dépend de auth.users (Supabase Auth) — ne peut pas être créée indépendamment
+--    sur une base vide sans que Supabase Auth soit configuré.
+--    En prod, cette table est créée via le Table Editor du dashboard Supabase.
+--    L'id est identique à auth.users.id ; la ligne est insérée manuellement ou
+--    via un hook auth à l'onboarding de chaque nouveau membre de l'agence.
+--    Documentée ici pour référence du schéma complet.
+CREATE TABLE IF NOT EXISTS team_members (
+  id                 uuid        PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  full_name          text,
+  email              text,
+  gmail_sync_enabled boolean     DEFAULT false
+);
+
 -- tasks : to-do par client
 CREATE TABLE IF NOT EXISTS tasks (
   id               serial      PRIMARY KEY,
@@ -58,6 +72,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   blocker          text,
   note             text,
   updated_at       timestamptz             DEFAULT now(),
+  created_at       timestamptz             DEFAULT now(),  -- date de création (weekly_digest .gte filter)
   due_date         date,
   scope            text                    DEFAULT 'internal', -- 'internal' | 'external' | 'uncertain'
   last_modified_by uuid                                        -- UUID du membre ayant fait la dernière modification
@@ -110,7 +125,7 @@ CREATE TABLE IF NOT EXISTS agency_knowledge (
 CREATE TABLE IF NOT EXISTS usage_logs (
   id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id     uuid        REFERENCES clients(id) ON DELETE SET NULL,
-  user_id       uuid,                   -- member UUID (no FK — team_members lives outside seed.sql)
+  user_id       uuid,                   -- team_members.id (pas de contrainte FK — team_members dépend de auth.users)
   model         text        NOT NULL,
   message_type  text        NOT NULL,
   tokens_input  integer,
@@ -155,6 +170,10 @@ END $$;
 
 -- Migration : ajoute user_id si la table existe déjà en production
 ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS user_id uuid;
+
+-- Migration : ajoute created_at sur tasks (weekly_digest filtre .gte("created_at", since))
+-- DEFAULT now() : les lignes existantes reçoivent la date de migration (acceptable — digest ne remonte pas plus loin)
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
 
 -- Migration : stocke la date de modification Drive réelle (vs last_indexed_at = date de sync)
 ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS drive_modified_at timestamptz;
@@ -203,6 +222,10 @@ CREATE INDEX IF NOT EXISTS tasks_due_date_idx
   ON tasks (due_date)
   WHERE due_date IS NOT NULL;
 
+-- Tâches créées cette semaine par client (weekly_digest .gte("created_at", since))
+CREATE INDEX IF NOT EXISTS tasks_client_created_at_idx
+  ON tasks (client_id, created_at DESC);
+
 -- task_history : filtre par client + plage de dates (weekly_digest)
 CREATE INDEX IF NOT EXISTS task_history_client_changed_at_idx
   ON task_history (client_id, changed_at DESC);
@@ -229,6 +252,8 @@ DROP FUNCTION IF EXISTS match_chunks(vector, text, uuid, integer);
 --   source_file = alias dc.source_name
 --   content     = alias dc.chunk_text
 --   rrf_score   = score Reciprocal Rank Fusion (remplace similarity)
+--   embedding   = vecteur normalisé 768 dims — utilisé par le MMR côté Python
+--                 (évite de ré-encoder les chunks au runtime, gain ~10s/requête)
 --
 -- query_text DEFAULT NULL → rétrocompatible : NULL déclenche le path pure-semantic.
 -- Python passe des mots-clés ≥4 chars OR-joints ('budget OR projet') pour que
@@ -245,7 +270,8 @@ RETURNS TABLE (
   source_type text,
   content     text,
   metadata    jsonb,
-  rrf_score   double precision
+  rrf_score   double precision,
+  embedding   vector(768)
 )
 LANGUAGE plpgsql
 STABLE
@@ -270,7 +296,8 @@ BEGIN
       dc.source_type,
       dc.chunk_text                                               AS content,
       NULL::jsonb                                                  AS metadata,
-      (1 - (dc.embedding <=> query_embedding))::double precision  AS rrf_score
+      (1 - (dc.embedding <=> query_embedding))::double precision  AS rrf_score,
+      dc.embedding
     FROM document_chunks dc
     WHERE dc.client_id = p_client_id
        OR dc.client_id IS NULL
@@ -318,7 +345,8 @@ BEGIN
     dc.source_type,
     dc.chunk_text   AS content,
     NULL::jsonb     AS metadata,
-    rrf.score::double precision
+    rrf.score::double precision,
+    dc.embedding
   FROM        rrf
   JOIN        document_chunks dc ON dc.id = rrf.chunk_id
   ORDER BY    rrf.score DESC
@@ -525,4 +553,11 @@ ALTER PUBLICATION supabase_realtime ADD TABLE tasks;
 --   • scope sur tasks                  (migration antérieure)
 --   • last_modified_by sur tasks       (20260623_task_history)
 --   • table task_history + trigger     (20260623_task_history)
+--   • tasks.created_at                 (20260625_team_members_created_at)
 -- Les fichiers de migration horodatés restent la source d'historique des deltas.
+--
+-- ── Note : email_summary ─────────────────────────────────────────────────────
+-- Il n'existe pas de table email_summary en production.
+-- "email_summary" est une valeur de la colonne source_type dans document_chunks
+-- (sync_emails dans main.py insère des chunks avec source_type = 'email_summary').
+-- Pas de table séparée à documenter.

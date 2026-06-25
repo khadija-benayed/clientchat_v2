@@ -6,6 +6,81 @@ Pour l'installation et le démarrage du projet, voir le [README.md](README.md).
 
 ---
 
+## Calibration en attente — MMR (juin 2026)
+
+### Contexte
+
+`MMR_SIM_THRESHOLD = 0.92` dans `backend/main.py` — valeur par défaut non validée par mesure.
+
+### Analyse du pipeline
+
+Le pool MMR est **~30-40 chunks** (`match_count=30` + safety net ~10). Le diversity cap (max 2 par source) gère déjà la redondance intra-source. À seuil 0.92, MMR ne filtre que des chunks de cosine > 0.92 — ce qui exige du texte quasi-identique entre deux sources différentes. La plupart des recoupements sémantiques légitimes (même sujet, formulation différente) ont une cosine 0.75-0.88.
+
+**Risque identifié** : si le `expected_source` chunk a une cosine > 0.92 avec un chunk mieux classé d'une autre source, MMR le drop silencieusement → `source_recall` = FAIL. L'output debug actuel (avant juin 2026) ne montrait pas les chunks filtrés.
+
+### Ce qui a été instrumenté (juin 2026)
+
+- `main.py` : paramètre `mmr_threshold` dans le body de la requête chat (override par requête, production l'omet)
+- `run_eval.py` : flag `--mmr-threshold` qui passe la valeur au backend
+- Debug output : champ `mmr_dropped` (nombre de chunks filtrés par MMR par requête)
+- `testset.json` : enrichi de 4 cas abstain → 21 cas total (10 answer, 11 abstain)
+
+### Procédure de calibration à exécuter
+
+```bash
+# Baseline avec MMR désactivé
+python eval/run_eval.py --judge --mmr-threshold 1.01 > /tmp/eval_no_mmr.txt
+
+# MMR actif (valeur courante)
+python eval/run_eval.py --judge > /tmp/eval_mmr_092.txt
+
+# Comparer source_recall dans les deux fichiers
+```
+
+**Interprétation** :
+- `source_recall(1.01) >= source_recall(0.92)` → MMR dégrade le rappel → retirer ou monter à 0.95-0.97
+- `source_recall(1.01) < source_recall(0.92)` → MMR aide → garder, tester 0.90
+- Résultats identiques → MMR ne fire pas sur ce corpus → retirer pour simplifier le code
+
+**Une fois la mesure faite**, mettre à jour le commentaire de `MMR_SIM_THRESHOLD` dans `main.py` avec : valeur retenue, source_recall mesurée, date.
+
+---
+
+## Migration 5 — Documentation team_members + tasks.created_at (juin 2026)
+
+### Ce qui a été ajouté
+
+| Objet | Description |
+|---|---|
+| `team_members` (référence) | Table "profiles" Supabase Auth — documentée dans seed.sql, pas exécutable from scratch |
+| `tasks.created_at` | Colonne date de création — requêtée par `weekly_digest` mais absente de seed.sql |
+| index `tasks_client_created_at_idx` | `(client_id, created_at DESC)` — optimise le filtre `.gte("created_at", since)` |
+
+### Clarification : email_summary n'est pas une table
+
+`email_summary` est une **valeur de `source_type`** dans `document_chunks`, pas une table. `sync_emails` (main.py) insère des chunks avec `source_type = 'email_summary'`. Aucune table séparée.
+
+### Pourquoi team_members est documentaire dans seed.sql
+
+`team_members` est le "profiles" pattern de Supabase : son `id` est un FK vers `auth.users(id)`. La table ne peut pas être créée par un `seed.sql` brut sur une base vide sans que Supabase Auth soit configuré. Elle est créée via le dashboard Supabase et documentée dans seed.sql pour que le schéma complet soit lisible dans le repo. La contrainte FK de `client_members.member_id → team_members.id` n'est pas imposée côté PostgreSQL pour la même raison.
+
+### Scan prod complet (exécuté en juin 2026)
+
+Tables présentes en prod, absentes de seed.sql avant cette migration :
+- `team_members` → documentée dans seed.sql (référence)
+
+Colonne absente :
+- `tasks.created_at` → ajoutée dans seed.sql + migration
+
+Tout le reste (fonctions, triggers, index) était à jour.
+
+### Fichiers modifiés
+
+- `supabase/migrations/20260625_team_members_created_at.sql` — migration idempotente (`tasks.created_at` + index)
+- `supabase/seed.sql` — intègre team_members (documentaire) + tasks.created_at
+
+---
+
 ## Migration 4 — task_history + last_modified_by (juin 2026)
 
 ### Ce qui a été ajouté
@@ -28,17 +103,9 @@ Le pooler Supabase tourne en mode **transaction** (PgBouncer). En mode transacti
 - `supabase/migrations/20260623_task_history.sql` — migration idempotente à appliquer en SQL Editor Supabase
 - `supabase/seed.sql` — intègre ces objets dans la vue "from scratch"
 
-### Objets prod à vérifier (scan Étape 2 non exécuté)
+### Objets prod à vérifier
 
-Le scan complet des tables/fonctions/triggers prod n'a pas été lancé dans cette passe. Avant la prochaine mise à jour de seed.sql, exécuter dans le SQL Editor :
-
-```sql
-SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;
-SELECT routine_name FROM information_schema.routines WHERE routine_schema = 'public' AND routine_type = 'FUNCTION';
-SELECT tgname, relname FROM pg_trigger JOIN pg_class ON pg_class.oid = pg_trigger.tgrelid WHERE NOT tgisinternal;
-```
-
-Un écart potentiel identifié dans le code : `tasks.created_at` est requêtée dans `weekly_digest` mais absente de `seed.sql` — à confirmer en prod.
+Le scan complet a été effectué dans la Migration 5 (juin 2026). Les écarts identifiés ont été corrigés : `tasks.created_at` ajoutée, `team_members` documentée.
 
 ---
 

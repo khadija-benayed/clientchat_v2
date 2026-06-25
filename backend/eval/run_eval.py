@@ -29,13 +29,16 @@ THRESHOLDS = {
     "fabricated":         0.3,  # doit être INFÉRIEUR à ce seuil
 }
 
-def ask(question, client_id):
+def ask(question, client_id, mmr_threshold=None):
     """Appelle le chat (SSE) et renvoie (reply_text, [source_names], debug, injected_context)."""
+    payload = {"message": question, "client_id": client_id,
+               "system": SYSTEM, "chat_history": [], "debug": True}
+    if mmr_threshold is not None:
+        payload["mmr_threshold"] = mmr_threshold
     resp = requests.post(
         BACKEND_URL,
         headers={"Authorization": f"Bearer {JWT}", "Content-Type": "application/json"},
-        json={"message": question, "client_id": client_id,
-              "system": SYSTEM, "chat_history": [], "debug": True},
+        json=payload,
         stream=True, timeout=180,
     )
     if not resp.ok:
@@ -129,17 +132,25 @@ def judge_pass(metric, value):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--judge", action="store_true", help="Active la phase 2 LLM-juge")
+    parser.add_argument("--mmr-threshold", type=float, default=None,
+                        help="Override MMR similarity threshold (ex: 1.01 pour désactiver, 0.90 pour plus strict)")
     args = parser.parse_args()
 
     here = os.path.dirname(__file__)
     with open(os.path.join(here, "testset.json"), encoding="utf-8") as f:
         cases = json.load(f)
 
+    if args.mmr_threshold is not None:
+        print(f"  [MMR override] mmr_threshold={args.mmr_threshold}")
+
     rows, agg, judge_agg = [], {}, {}
-    for c in cases:
+    for i, c in enumerate(cases):
+        print(f"[{i+1}/{len(cases)}] {c['id']} ...", end=" ", flush=True)
         try:
-            reply, sources, debug, injected_context = ask(c["question"], c["client_id"])
+            reply, sources, debug, injected_context = ask(c["question"], c["client_id"],
+                                                          mmr_threshold=args.mmr_threshold)
         except Exception as e:
+            print("ERROR")
             rows.append((c["id"], {}, {}, None, None, f"[ERROR] {str(e)[:110]}"))
             continue
 
@@ -154,6 +165,13 @@ def main():
                 if v is not None and not isinstance(v, str):
                     judge_agg.setdefault(k, []).append(judge_pass(k, v))
 
+        p1 = " ".join(f"{k}={'✓' if v else '✗'}" for k, v in checks.items())
+        p2_parts = []
+        for k, v in judge_scores.items():
+            if v is not None and isinstance(v, (int, float)):
+                p2_parts.append(f"{k}={'✓' if judge_pass(k,v) else '✗'}({v:.2f})")
+        p2 = " ".join(p2_parts)
+        print(f"{p1}{'  |judge| ' + p2 if p2 else ''}")
         rows.append((c["id"], checks, judge_scores, reasoning, debug, reply[:80]))
 
     print("\n=== DÉTAIL ===")
@@ -176,6 +194,9 @@ def main():
         if checks and not all(checks.values()) and debug:
             print(f"  --- TRACE {cid} ---")
             for d in debug:
+                if "mmr_dropped" in d:
+                    print(f"    MMR thr={d['mmr_threshold']} dropped={d['mmr_dropped']}")
+                    continue
                 mark = "✓INJ" if d["injected"] else "    "
                 print(f"    {mark} rr={d['rerank_score']:+.3f} fin={d['final_score']:+.3f} {d['source_name'][:50]}")
 
