@@ -52,7 +52,7 @@ def _load_biencoder() -> SentenceTransformer:
 
 
 def _load_crossencoder() -> CrossEncoder:
-    return CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", device="cpu")
+    return CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1", device="cpu")
 
 
 @asynccontextmanager
