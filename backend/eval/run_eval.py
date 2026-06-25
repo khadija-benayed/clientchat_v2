@@ -140,7 +140,7 @@ def main():
         try:
             reply, sources, debug, injected_context = ask(c["question"], c["client_id"])
         except Exception as e:
-            rows.append((c["id"], {}, {}, None, None, str(e)[:120]))
+            rows.append((c["id"], {}, {}, None, None, f"[ERROR] {str(e)[:110]}"))
             continue
 
         checks = score_case(c, reply, sources)
@@ -159,13 +159,18 @@ def main():
     print("\n=== DÉTAIL ===")
     for cid, checks, judge_scores, reasoning, debug, preview in rows:
         flags = " ".join(f"{k}={'OK' if v else 'KO'}" for k, v in checks.items())
-        if judge_scores and not isinstance(judge_scores.get("judge_error"), str):
+        judge_err = isinstance(judge_scores.get("judge_error"), str)
+        if judge_scores and not judge_err:
             jflags = " ".join(
-                f"{k}={'OK' if judge_pass(k, v) else 'KO'}({v:.2f})"
-                for k, v in judge_scores.items() if v is not None
+                f"{k}={'OK' if judge_pass(k, v) else 'KO'}({float(v):.2f})"
+                for k, v in judge_scores.items()
+                if v is not None and isinstance(v, (int, float))
             )
-            flags = f"{flags}  |judge| {jflags}" if flags else f"|judge| {jflags}"
+            if jflags:
+                flags = f"{flags}  |judge| {jflags}" if flags else f"|judge| {jflags}"
         print(f"  [{cid}] {flags}   « {preview}… »")
+        if judge_scores and judge_err:
+            print(f"  judge_error: {judge_scores['judge_error']}")
         if reasoning:
             print(f"  reasoning: {reasoning[:120]}")
         if checks and not all(checks.values()) and debug:
