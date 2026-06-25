@@ -370,6 +370,15 @@ def get_drive_service() -> tuple:
     return drive, sa_info.get("client_email", "")
 
 
+def _fix_cell(s: str) -> str:
+    """Corrige le double-encodage UTF-8→Latin-1 fréquent dans les sheets issus de CSV Windows.
+    Ex: 'Ã©' → 'é'. Non-destructif : retourne s intact si la correction échoue."""
+    try:
+        return s.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return s
+
+
 def _export_large_sheet(file_id: str, file_name: str) -> Optional[str]:
     """Fallback for Google Sheets that exceed the Drive API 10 MB export limit.
     Lists all visible tabs via the Sheets API, exports each as CSV via authenticated
@@ -412,7 +421,7 @@ def _export_large_sheet(file_id: str, file_name: str) -> Optional[str]:
         if resp.status_code != 200:
             print(f"  CSV tab '{title}' → HTTP {resp.status_code}, skipped")
             continue
-        csv_text = resp.text.strip()
+        csv_text = "\n".join(_fix_cell(line) for line in resp.text.strip().splitlines())
         if not csv_text:
             continue
         parts.append(f"[Fichier : {file_name}] [Onglet : {title}]\n{csv_text}")
@@ -508,7 +517,7 @@ def export_drive_file(file_id: str, file_name: str, mime_type: str) -> Optional[
                     ws = wb[sheet_name]
                     rows = []
                     for row in ws.iter_rows(values_only=True):
-                        cells = [str(c) if c is not None else "" for c in row]
+                        cells = [_fix_cell(str(c)) if c is not None else "" for c in row]
                         if any(cells):
                             rows.append("\t".join(cells))
                     if rows:
