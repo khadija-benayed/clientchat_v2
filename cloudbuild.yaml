@@ -17,6 +17,12 @@ steps:
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated'
+      - '--timeout'
+      - '300'
+      - '--cpu'
+      - '2'
+      - '--memory'
+      - '2Gi'
 
 images:
   - 'gcr.io/$PROJECT_ID/clientchat-v2'
