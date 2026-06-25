@@ -153,7 +153,7 @@ GEMINI_PRO = "gemini-2.5-pro"
 #   Comparer source_recall. Si (1) >= (2) → MMR dégrade le rappel → retirer ou monter à 0.95.
 #   Si (1) < (2) → MMR améliore la diversité → garder, tester 0.90.
 #
-# Note : pool = ~30-40 chunks (match_count=30 + safety net). Le diversity cap (2/source)
+# Note : pool = ~20-26 chunks (match_count=20 + safety net ≤3×2). Le diversity cap (2/source)
 # gère déjà l'intra-source. À 0.92, MMR filtre surtout des quasi-doublons cross-source
 # dont la cosine > 0.92 — rare pour du contenu réellement distinct.
 MMR_SIM_THRESHOLD = 0.92
@@ -2759,7 +2759,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
             result = sb.rpc("match_chunks", {
                 "query_embedding": query_emb,
                 "query_text": _query_text,
-                "match_count": 30,
+                "match_count": 20,
                 "p_client_id": client_id,
             }).execute()
             chunks = result.data or []
@@ -2796,7 +2796,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
                         if s not in semantic_sources
                         and sum(1 for w in query_words if w in s.lower()) >= 2
                     ]
-                    for src in missing_kw_sources[:5]:
+                    for src in missing_kw_sources[:3]:
                         extra = (
                             sb.table("document_chunks")
                             .select("source_name, chunk_text, source_type, client_id, drive_modified_at, embedding")
