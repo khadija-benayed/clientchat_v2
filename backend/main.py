@@ -740,13 +740,17 @@ async def eval_judge(body: dict) -> JSONResponse:
             model_name=GEMINI_FLASH,
             generation_config={
                 "temperature": 0,
-                "max_output_tokens": 512,
+                "max_output_tokens": 1024,
                 "response_mime_type": "application/json",
                 "response_schema": _EVAL_JUDGE_SCHEMA,
             },
             safety_settings=_SAFETY_OFF,
         )
         resp = gemini.generate_content(prompt)
+        finish = resp.candidates[0].finish_reason
+        finish_name = finish.name if hasattr(finish, "name") else str(finish)
+        if finish_name == "MAX_TOKENS":
+            return JSONResponse({"error": "eval_judge error: MAX_TOKENS — réponse JSON tronquée"}, status_code=502)
         result = json.loads(_gemini_text(resp))
     except Exception as e:
         return JSONResponse({"error": f"eval_judge error: {e}"}, status_code=502)
