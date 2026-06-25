@@ -978,7 +978,7 @@ _BRIEF_SCHEMA = {
                     "nom":        {"type": "string",  "nullable": True},
                     "role":       {"type": "string",  "nullable": True},
                     "email":      {"type": "string",  "nullable": True},
-                    "scope":      {"type": "string",  "nullable": True, "enum": ["interne", "externe", "inconnu"]},
+                    "scope":      {"type": "string",  "nullable": True, "enum": ["internal", "external", "uncertain"]},
                     "reports_to": {"type": "string",  "nullable": True},
                 },
                 "required": ["prenom"],
@@ -1089,7 +1089,7 @@ async def generate_brief(body: dict, user_id: Optional[str] = None):
         "  • nom : null si absent des docs\n"
         "  • role : poste exact tel que mentionné, null si non précisé — ne pas inventer\n"
         "  • email : adresse si disponible, sinon null\n"
-        "  • scope : 'interne' (salarié client), 'externe' (prestataire/agence partenaire), 'inconnu' si non précisé\n"
+        "  • scope : 'internal' (salarié client), 'external' (prestataire/agence partenaire), 'uncertain' si non précisé\n"
         "  • reports_to : prénom/nom de la personne à qui elle reporte si mentionné, sinon null\n"
         "- historique (3-4 phrases) : chronologie de la collaboration avec dates clés\n"
         "- notes (4-6 phrases) : stack technique, projets en cours et à venir, points d'attention\n\n"
@@ -1650,12 +1650,15 @@ async def propose_cr_tasks(body: dict, user_id: Optional[str]):
         ctx = client_data.get("context") or ""
         if ctx:
             brief = json.loads(ctx)
+            _scope_map = {"interne": "internal", "externe": "external", "inconnu": "uncertain"}
             for m in brief.get("equipe", []):
                 name = f"{m.get('prenom', '')} {m.get('nom') or ''}".strip()
                 if name:
+                    scope_raw = m.get("scope") or ""
                     client_contacts.append({
                         "name": name,
                         "role": m.get("role") or "",
+                        "scope": _scope_map.get(scope_raw, scope_raw or "uncertain"),
                     })
     except Exception:
         pass
