@@ -124,15 +124,16 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, currentU
     const ctxForPrompt = buildClientContext(client);
 
     // ── Sélection du niveau de prompt (L1/L2/L3) ─────────────────────────
-    const _isAction   = isTaskAction(text);
-    const _isQuestion = isClientQuestion(text);
-    const _isComplex  = isComplexQuery(text);
+    const _isAction    = isTaskAction(text);
+    const _isTaskQuery = !_isAction && isTaskQuery(text);
+    const _isQuestion  = isClientQuestion(text);
+    const _isComplex   = isComplexQuery(text);
     const _needL2 = !_isAction;
     const _needL3 = _isComplex;
 
-    const _needDocs = _isQuestion || _isComplex;
+    const _needDocs = (_isQuestion || _isComplex) && !_isTaskQuery;
     const systemPrompt =
-      buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction: _isAction, currentMember }) +
+      buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction: _isAction, isTaskQuery: _isTaskQuery, currentMember }) +
       (_needL2 ? buildL2(ctxForPrompt, summaries, docCache, _needDocs) : '') +
       (_needL3 ? buildL3(summaries) : '');
 
@@ -146,7 +147,7 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, currentU
     let accum = '';
     let firstToken = true;
 
-    const messageType = _isAction ? 'task_action' : 'chat';
+    const messageType = _isAction ? 'task_action' : (_isTaskQuery ? 'task_query' : 'chat');
     const payload = {
       system: systemPrompt,
       message: text,
@@ -292,6 +293,35 @@ function isClientQuestion(msg) {
   const words = ['?','client','projet','enjeu','kpi','contexte','brief',
     'stratégie','budget','contact','historique','document','fichier'];
   return words.some(w => msg.toLowerCase().includes(w));
+}
+
+function isTaskQuery(msg) {
+  const low = msg.toLowerCase();
+  const taskPatterns = [
+    'tâche', 'taches', 'to-do', 'todo', 'to do',
+    'avancement', 'statut des', 'où en est',
+    'qu\'est-ce qui est en cours', 'qu\'est-ce qui bloque',
+    'quoi de prévu', 'qu\'est-ce qui reste',
+    'qui travaille sur quoi', 'mes tâches',
+    'récap des tâches', 'point sur les tâches',
+    'tâches prioritaires', 'tâches bloquées',
+    'tâches en cours', 'tâches en attente',
+    'deadline', 'échéance cette semaine',
+  ];
+  const statusPatterns = [
+    'fais un point', 'fais le point', 'fait un point',
+    'où on en est', 'on en est où',
+    'quoi de neuf', 'quoi de nouveau',
+  ];
+  if (!taskPatterns.some(p => low.includes(p)) && !statusPatterns.some(p => low.includes(p))) return false;
+  const topicKeywords = [
+    'tracking', 'tracké', 'ga4', 'segment', 'klaviyo', 'cnil', 'pixel',
+    'audit', 'gtm', 'firebase', 'adjust', 'sdk', 'api', 'tag',
+    'document', 'fichier', 'drive', 'spec', 'cahier des charges',
+    'benchmark', 'attribution', 'consent', 'rgpd',
+  ];
+  if (topicKeywords.some(t => low.includes(t))) return false;
+  return true;
 }
 
 function isComplexQuery(msg) {
@@ -450,7 +480,7 @@ function buildClientContext(client) {
   return client.context || 'Non renseigné.';
 }
 
-function buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction, currentMember }) {
+function buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction, isTaskQuery, currentMember }) {
   const today = new Date().toLocaleDateString('fr-FR', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
   });
@@ -501,6 +531,11 @@ function buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction,
     + '- New : {"id":' + (maxId + 1) + ',"title":"..." (5-6 mots max, actionnable),"prio":"P2","status":"todo","assignee":"","blocker":null,"note":null}\n'
     + '\nINSTRUCTIONS :\n' + responseInstruction + '\n'
     + '- Si tu as besoin de préciser quelque chose avant d\'agir, pose UNE seule question courte et directe, pas plusieurs sous-points.\n'
+    + (isTaskQuery
+      ? '\nCETTE QUESTION PORTE SUR LES TÂCHES / L\'AVANCEMENT — pas sur les documents techniques.\n'
+        + 'Appuie-toi sur le TO-DO ci-dessus et les sessions récentes pour répondre.\n'
+        + 'Ne dis pas que tu n\'as pas de documents — tu as le contexte projet et le to-do, c\'est suffisant.\n'
+      : '')
     + 'Ta réponse DOIT contenir exactement deux parties séparées par "---JSON---" :\n'
     + '\nPARTIE 1 : ' + part1Desc + '\n'
     + '\nPARTIE 2 : UN objet JSON valide :\n'

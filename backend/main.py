@@ -2710,7 +2710,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
     _is_temporal_browse = False
 
     # Skip RAG entirely for task actions — they only need the task list, not documents.
-    if message and message_type != "task_action":
+    if message and message_type not in ("task_action", "task_query"):
         try:
             loop = asyncio.get_running_loop()
 
@@ -3137,7 +3137,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
                         "mmr_dropped": mmr_dropped_count,
                     })
 
-            done_payload = {"type": "done", "sources": sources_used, "tasks_json": tasks_json, "reply_text": reply_text}
+            done_payload = {"type": "done", "sources": sources_used, "tasks_json": tasks_json, "reply_text": reply_text, "routing": message_type}
             if debug_info is not None:
                 done_payload["debug"] = debug_info
                 done_payload["injected_context"] = "\n\n".join(
