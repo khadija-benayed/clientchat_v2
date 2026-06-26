@@ -319,6 +319,9 @@ export default function ClientSettings({
 }
 
 function BriefDisplay({ brief }) {
+  const [expandedFields, setExpandedFields] = useState({});
+  const toggleField = (label) => setExpandedFields(prev => ({ ...prev, [label]: !prev[label] }));
+
   const arrayField = (arr) => {
     if (!Array.isArray(arr) || !arr.length) return <span style={{ color: 'var(--tx3)', fontStyle: 'italic' }}>—</span>;
     const label = (v) => {
@@ -347,7 +350,31 @@ function BriefDisplay({ brief }) {
         <div key={i} className="brief-field">
           <div className="brief-field-label">{f.label}</div>
           {f.isText
-            ? <div className="brief-field-value">{String(f.value || '—')}</div>
+            ? (() => {
+                const text = String(f.value || '—');
+                const isLong = text.length > 200;
+                const isExpanded = expandedFields[f.label];
+                return (
+                  <>
+                    <div
+                      className="brief-field-value"
+                      style={!isExpanded && isLong ? {
+                        display: '-webkit-box',
+                        WebkitLineClamp: 3,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      } : {}}
+                    >
+                      {text}
+                    </div>
+                    {isLong && (
+                      <span className="note-expand" onClick={() => toggleField(f.label)}>
+                        {isExpanded ? 'voir moins' : 'voir plus'}
+                      </span>
+                    )}
+                  </>
+                );
+              })()
             : arrayField(f.value)
           }
         </div>
