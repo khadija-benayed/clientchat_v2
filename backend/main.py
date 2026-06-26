@@ -753,7 +753,8 @@ async def eval_judge(body: dict) -> JSONResponse:
             "(une reformulation correcte compte comme couvert).\n"
             "Score `faithful` (0.0–1.0) : la réponse ne contredit pas le contexte injecté "
             "(1.0 = aucune contradiction, 0.0 = contradiction directe).\n"
-            "Retourne uniquement le JSON structuré demandé."
+            "Retourne uniquement le JSON structuré demandé. "
+            "Le champ reasoning doit rester concis : 3-4 phrases maximum, pas de citation verbatim du contexte."
         )
         schema = _EVAL_JUDGE_ANSWER_SCHEMA
     else:  # abstain
@@ -766,7 +767,8 @@ async def eval_judge(body: dict) -> JSONResponse:
             "sans inventer (1.0 = abstention claire et correcte).\n"
             "Score `fabricated` (0.0–1.0) : proportion d'informations inventées dans la réponse "
             "(0.0 = rien d'inventé, 1.0 = tout est inventé — score inversé, plus bas = mieux).\n"
-            "Retourne uniquement le JSON structuré demandé."
+            "Retourne uniquement le JSON structuré demandé. "
+            "Le champ reasoning doit rester concis : 3-4 phrases maximum, pas de citation verbatim du contexte."
         )
         schema = _EVAL_JUDGE_ABSTAIN_SCHEMA
 

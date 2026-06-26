@@ -109,17 +109,18 @@ def score_judge(case, reply, injected_context):
             mode=mode,
         )
     except Exception as e:
-        return {"judge_error": str(e)[:80]}, None
+        return {"judge_error": str(e)[:80]}, None, None
 
     scores = {}
     reasoning = verdict.get("reasoning", "")
+    reasoning_len = len(reasoning)
     if mode == "answer":
         scores["correctness"] = verdict.get("correctness")
         scores["faithful"]    = verdict.get("faithful")
     else:
         scores["abstained_properly"] = verdict.get("abstained_properly")
         scores["fabricated"]         = verdict.get("fabricated")
-    return scores, reasoning
+    return scores, reasoning, reasoning_len
 
 def judge_pass(metric, value):
     """True si le score passe le seuil (fabricated : inférieur au seuil)."""
@@ -151,16 +152,16 @@ def main():
                                                           mmr_threshold=args.mmr_threshold)
         except Exception as e:
             print("ERROR")
-            rows.append((c["id"], {}, {}, None, None, f"[ERROR] {str(e)[:110]}"))
+            rows.append((c["id"], {}, {}, None, None, None, f"[ERROR] {str(e)[:110]}"))
             continue
 
         checks = score_case(c, reply, sources)
         for k, v in checks.items():
             agg.setdefault(k, []).append(v)
 
-        judge_scores, reasoning = {}, None
+        judge_scores, reasoning, reasoning_len = {}, None, None
         if args.judge:
-            judge_scores, reasoning = score_judge(c, reply, injected_context)
+            judge_scores, reasoning, reasoning_len = score_judge(c, reply, injected_context)
             for k, v in judge_scores.items():
                 if v is not None and not isinstance(v, str):
                     judge_agg.setdefault(k, []).append(judge_pass(k, v))
@@ -172,10 +173,10 @@ def main():
                 p2_parts.append(f"{k}={'✓' if judge_pass(k,v) else '✗'}({v:.2f})")
         p2 = " ".join(p2_parts)
         print(f"{p1}{'  |judge| ' + p2 if p2 else ''}")
-        rows.append((c["id"], checks, judge_scores, reasoning, debug, reply[:80]))
+        rows.append((c["id"], checks, judge_scores, reasoning, reasoning_len, debug, reply[:80]))
 
     print("\n=== DÉTAIL ===")
-    for cid, checks, judge_scores, reasoning, debug, preview in rows:
+    for cid, checks, judge_scores, reasoning, reasoning_len, debug, preview in rows:
         flags = " ".join(f"{k}={'OK' if v else 'KO'}" for k, v in checks.items())
         judge_err = isinstance(judge_scores.get("judge_error"), str)
         if judge_scores and not judge_err:
@@ -191,6 +192,8 @@ def main():
             print(f"  judge_error: {judge_scores['judge_error']}")
         if reasoning:
             print(f"  reasoning: {reasoning[:120]}")
+        if reasoning_len is not None:
+            print(f"  reasoning_len: {reasoning_len} chars")
         if checks and not all(checks.values()) and debug:
             print(f"  --- TRACE {cid} ---")
             for d in debug:
