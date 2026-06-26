@@ -276,12 +276,13 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 STABLE
 AS $$
+#variable_conflict use_column
 DECLARE
   _k  constant integer := 60;   -- constante RRF standard
   _ts tsquery  := NULL;
 BEGIN
-  -- ef_search=40 : compromis rappel/latence pour HNSW (défaut pgvector = 40)
-  SET LOCAL hnsw.ef_search = 40;
+  -- SET LOCAL hnsw.ef_search supprimé : la valeur par défaut de pgvector est déjà 40,
+  -- et SET LOCAL dans une fonction stable peut lever une erreur selon le contexte de transaction.
 
   IF query_text IS NOT NULL AND length(trim(query_text)) > 0 THEN
     _ts := websearch_to_tsquery('simple', query_text);
