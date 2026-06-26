@@ -23,7 +23,7 @@ steps:
       - '2'
       - '--memory'
       - '2Gi'
-      - '--startup-cpu-boost'
+      - '--cpu-boost'
 
 images:
   - 'gcr.io/$PROJECT_ID/clientchat-v2'
