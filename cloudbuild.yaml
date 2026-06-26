@@ -39,7 +39,7 @@ steps:
       - '--cpu'
       - '2'
       - '--memory'
-      - '2Gi'
+      - '4Gi'
       # ── Scaling ──
       - '--min-instances'
       - '1'
