@@ -215,7 +215,7 @@ def main():
             thr = f"{'<' if k == 'fabricated' else '>='}{THRESHOLDS[k]}"
             print(f"  {k:20s} : {rate:.0%}  ({sum(vals)}/{len(vals)})  seuil {thr}")
 
-    fails = [cid for cid, checks, _, _r, _d, _p in rows if checks and not all(checks.values())]
+    fails = [cid for cid, checks, _, _r, _rl, _d, _p in rows if checks and not all(checks.values())]
     if fails:
         print(f"\n  À investiguer (phase 1) : {', '.join(fails)}")
 
