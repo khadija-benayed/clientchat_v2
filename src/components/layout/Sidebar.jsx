@@ -17,12 +17,12 @@
  * @param {boolean}  collapsed       - true = sidebar réduite
  * @param {Function} onToggle        - Toggle collapsed/expanded
  */
-import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { PanelLeftClose, PanelLeftOpen, UserPlus, Plus, BookOpen, LogOut } from 'lucide-react';
 
 export default function Sidebar({
   clients, currentClient, onSelectClient, onLeaveClient,
-  onNewClient, onJoinClient, onOpenKb, onGmailPrefs, onLogout,
-  collapsed, onToggle, onGoHome,
+  onNewClient, onJoinClient, onOpenKb, onLogout,
+  collapsed, onToggle, onGoHome, user,
 }) {
   return (
     <div className={`sidebar${collapsed ? ' collapsed' : ''}`}>
@@ -61,13 +61,35 @@ export default function Sidebar({
         ))}
       </div>
 
-      {/* Boutons bas de sidebar */}
-      <div className="sb-bot">
-        <button className="btn-ghost" onClick={onJoinClient}>+ Rejoindre un client</button>
-        <button className="btn-ghost" onClick={onNewClient} style={{ marginTop: '4px' }}>+ Créer un client</button>
-        <button className="btn-ghost" onClick={onOpenKb}>Base de savoir →</button>
-        <button className="btn-ghost" onClick={onGmailPrefs}>Préférences Gmail</button>
-        <button className="btn-logout" onClick={onLogout}>Déconnexion</button>
+      {/* Actions principales */}
+      <div className="sb-actions">
+        <button className="sb-act" onClick={onJoinClient}>
+          <UserPlus size={14} /> Rejoindre
+        </button>
+        <button className="sb-act" onClick={onNewClient}>
+          <Plus size={14} /> Créer un client
+        </button>
+        <button className="sb-act" onClick={onOpenKb}>
+          <BookOpen size={14} /> Base de savoir
+        </button>
+      </div>
+
+      {/* Zone utilisateur */}
+      <div className="sb-user">
+        <div className="sb-user-av">
+          {user?.user_metadata?.full_name
+            ? user.user_metadata.full_name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase()
+            : '?'}
+        </div>
+        <div className="sb-user-info">
+          <div className="sb-user-name">
+            {user?.user_metadata?.full_name || 'Utilisateur'}
+          </div>
+          <div className="sb-user-email">{user?.email || ''}</div>
+        </div>
+        <button className="sb-user-logout" onClick={onLogout} title="Déconnexion">
+          <LogOut size={14} />
+        </button>
       </div>
     </div>
   );

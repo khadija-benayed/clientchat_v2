@@ -1,46 +1,29 @@
-/**
- * src/components/tasks/TaskCard.jsx — Carte d'une tâche individuelle
- *
- * Affiche les informations d'une tâche : titre, priorité, assignee,
- * statut, note, blocage et badge d'échéance.
- *
- * Supporte le drag & drop HTML5 natif (pas de bibliothèque externe).
- * Les handlers drag sont passés par le parent TaskBoard.
- *
- * Props :
- * @param {object}   task         - Objet tâche (id, title, prio, status…)
- * @param {boolean}  isHighlighted - Animation "new" après création
- * @param {Array}    members       - Membres de l'équipe pour les avatars
- * @param {Function} onClick       - Ouvre le modal de détail
- * @param {Function} onDragStart
- * @param {Function} onDragEnd
- * @param {Function} onDragOver
- * @param {Function} onDragLeave
- * @param {Function} onDrop
- */
+import { useState } from 'react';
+import { AlertCircle } from 'lucide-react';
 import { memberStyle } from '../../lib/constants';
 import { SCOPE_LABELS, SCOPE_STYLES } from '../../utils/scope';
 
-const STATUS_CLASS = {
-  todo: 's-todo', inprogress: 's-inp', blocked: 's-blk',
-  waiting: 's-wait', done: 's-done',
-};
-const STATUS_LABEL = {
-  todo: 'à faire', inprogress: 'en cours', blocked: 'bloqué',
-  waiting: 'en attente', done: 'fait',
+const STATUS_BORDER = {
+  blocked:    '#E24B4A',
+  inprogress: '#8B5CF6',
+  waiting:    '#EF9F27',
+  todo:       '#378ADD',
+  done:       '#52b788',
 };
 
 export default function TaskCard({
   task, isHighlighted, members, onClick,
   onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop,
 }) {
-  const sc = STATUS_CLASS[task.status] || 's-todo';
-  const sl = STATUS_LABEL[task.status] || task.status;
+  const [expandedNote, setExpandedNote] = useState(false);
+  const [expandedBlocker, setExpandedBlocker] = useState(false);
 
-  // Calcul du badge d'échéance
+  const borderColor = STATUS_BORDER[task.status] || STATUS_BORDER.todo;
   const dueBadge = makeDueBadge(task);
 
-  // Calcul des classes CSS supplémentaires
+  const noteLong = task.note && task.note.length > 120;
+  const blockerLong = task.blocker && task.blocker.length > 80;
+
   const now = new Date();
   const due = task.due_date ? new Date(task.due_date + 'T23:59:59') : null;
   const isOverdue = due && task.status !== 'done' && due < now;
@@ -53,13 +36,12 @@ export default function TaskCard({
   if (isP1 && task.status !== 'done') extraCls += ' p1-urgent';
   if (isDoneLate) extraCls += ' done-late';
 
-  // Assignees → avatars
   const assigneeList = (task.assignee || '').split(/[,+\s]+/).map(a => a.trim()).filter(Boolean);
-  const assigneeLabel = assigneeList.join(' + ') || '—';
 
   return (
     <div
       className={`task task-clickable${extraCls}`}
+      style={{ borderLeftColor: borderColor }}
       draggable
       data-id={task.id}
       data-status={task.status}
@@ -70,46 +52,112 @@ export default function TaskCard({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
-      <div className="t1">
+      <div className="ttl">{task.title}</div>
+
+      {task.blocker && (
+        <>
+          <div
+            className="textra blk-encart"
+            style={(!expandedBlocker && blockerLong) ? {
+              display: '-webkit-box',
+              WebkitLineClamp: 1,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+            } : {}}
+          >
+            <AlertCircle size={12} style={{ flexShrink: 0 }} />
+            {task.blocker}
+          </div>
+          {blockerLong && (
+            <span
+              className="note-expand"
+              onClick={e => { e.stopPropagation(); setExpandedBlocker(v => !v); }}
+            >
+              {expandedBlocker ? 'voir moins' : 'voir plus'}
+            </span>
+          )}
+        </>
+      )}
+
+      {task.note && (
+        <>
+          <div
+            className="textra note"
+            style={{
+              whiteSpace: 'pre-wrap',
+              ...(!expandedNote && noteLong ? {
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+              } : {}),
+            }}
+          >
+            {task.note}
+          </div>
+          {noteLong && (
+            <span
+              className="note-expand"
+              onClick={e => { e.stopPropagation(); setExpandedNote(v => !v); }}
+            >
+              {expandedNote ? 'voir moins' : 'voir plus'}
+            </span>
+          )}
+        </>
+      )}
+
+      <div className="task-meta-row">
         <span className={`prio ${(task.prio || 'P2').toLowerCase()}`}>
           {task.prio || 'P2'}
         </span>
-        <span className="ttl">{task.title}</span>
-        {dueBadge}
-      </div>
-      {task.blocker && (
-        <div className="textra blk">Blocage : {task.blocker}</div>
-      )}
-      {task.note && (
-        <div className="textra note" style={{ whiteSpace: 'pre-wrap' }}>{task.note}</div>
-      )}
-      <div className="t2">
+
+        <span className="task-meta-sep" />
+
         <div className="tperson">
-          {assigneeList.length > 0
-            ? assigneeList.map(a => {
+          {assigneeList.length > 0 ? (
+            <div className={assigneeList.length > 1 ? 'av-stack' : ''}>
+              {assigneeList.map((a, i) => {
                 const st = memberStyle(a);
+                const member = (members || []).find(m => m.initials === a);
                 return (
-                  <div key={a} className="av" style={{ background: st.bg, color: st.c }}>
+                  <div
+                    key={a}
+                    className="av"
+                    style={{
+                      background: st.bg,
+                      color: st.c,
+                      ...(i > 0 ? { marginLeft: '-6px' } : {}),
+                      ...(assigneeList.length > 1 ? { border: '1.5px solid var(--sur2)' } : {}),
+                    }}
+                    title={member?.name || a}
+                  >
                     {a.substring(0, 2)}
                   </div>
                 );
-              })
-            : <div className="av" style={{ background: 'var(--sur2)', color: 'var(--tx3)' }}>?</div>
-          }
-          <span>{assigneeLabel}</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          {task.scope && task.scope !== 'internal' && (
-            <span style={{
-              ...SCOPE_STYLES[task.scope],
-              fontSize: '10px', fontWeight: 600, padding: '1px 7px',
-              borderRadius: '6px', whiteSpace: 'nowrap',
-            }}>
-              {SCOPE_LABELS[task.scope]}
-            </span>
+              })}
+            </div>
+          ) : (
+            <span className="meta-unassigned">non assigné</span>
           )}
-          <span className={`spill ${sc}`}>{sl}</span>
         </div>
+
+        {dueBadge && (
+          <>
+            <span className="task-meta-sep" />
+            {dueBadge}
+          </>
+        )}
+
+        {task.scope && task.scope !== 'internal' && (
+          <span style={{
+            ...SCOPE_STYLES[task.scope],
+            fontSize: '10px', fontWeight: 600, padding: '1px 7px',
+            borderRadius: '6px', whiteSpace: 'nowrap',
+            marginLeft: 'auto',
+          }}>
+            {SCOPE_LABELS[task.scope]}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -119,8 +167,8 @@ function makeDueBadge(task) {
   if (!task.due_date) return null;
   const due = new Date(task.due_date); due.setHours(23, 59, 59);
   const now = new Date();
-  const [y, mo, d] = task.due_date.split('-');
-  const label = `${d}/${mo}/${y}`;
+  const [, mo, d] = task.due_date.split('-');
+  const label = `${d}/${mo}`;
   if (task.status === 'done') {
     return due < now
       ? <span key="db" className="due-badge done-late-badge">✓ {label}</span>

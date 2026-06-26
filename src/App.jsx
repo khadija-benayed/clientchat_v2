@@ -340,8 +340,8 @@ export default function App() {
         onNewClient={() => setNewClientOpen(true)}
         onJoinClient={() => setJoinClientOpen(true)}
         onOpenKb={() => setKbBrowserOpen(true)}
-        onGmailPrefs={() => setGmailPrefsOpen(true)}
         onLogout={logout}
+        user={user}
         collapsed={sidebarCollapsed}
         onToggle={toggleSidebar}
         onGoHome={() => setCurrentClient(null)}
