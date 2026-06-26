@@ -1,9 +1,27 @@
+# ── Cloud Build — build + deploy backend sur Cloud Run ──────────────────────
+#
+# Tous les réglages Cloud Run sont codifiés ici.
+# NE PAS modifier les settings dans l'UI Cloud Run — un redéploiement les écrase.
+#
+# Settings clés :
+#   --cpu 2 / --memory 2Gi    : sentence-transformers (mpnet + cross-encoder) en mémoire
+#   --min-instances 1          : évite le cold start (chargement modèles ~30s)
+#   --max-instances 20         : plafond de scaling
+#   --timeout 300              : requêtes longues (digest, sync_drive)
+#   --cpu-boost                : CPU max pendant le démarrage du container
+#   --concurrency 80           : requêtes simultanées par instance
+
 steps:
+  # 1. Build l'image Docker
   - name: 'gcr.io/cloud-builders/docker'
     args: ['build', '-t', 'gcr.io/$PROJECT_ID/clientchat-v2', '.']
     dir: 'backend'
+
+  # 2. Push vers le registre
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/clientchat-v2']
+
+  # 3. Déploie sur Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -17,12 +35,21 @@ steps:
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated'
-      - '--timeout'
-      - '300'
+      # ── Resources ──
       - '--cpu'
       - '2'
       - '--memory'
       - '2Gi'
+      # ── Scaling ──
+      - '--min-instances'
+      - '1'
+      - '--max-instances'
+      - '20'
+      - '--concurrency'
+      - '80'
+      # ── Timeouts & startup ──
+      - '--timeout'
+      - '300'
       - '--cpu-boost'
 
 images:
@@ -31,4 +58,6 @@ images:
 options:
   logging: CLOUD_LOGGING_ONLY
 
+# Timeout du build lui-même (docker build + push + deploy)
+# 20 min — nécessaire quand toutes les couches Docker sont re-poussées
 timeout: '1200s'
