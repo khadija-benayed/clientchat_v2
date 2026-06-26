@@ -5,3 +5,11 @@ dist/
 supabase/.temp/
 .snaplet/
 backend/eval/testset.json
+
+# Backup files
+*.old
+*.bak
+*.backup
+*~
+*.orig
+*.save
