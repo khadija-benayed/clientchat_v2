@@ -2705,6 +2705,9 @@ async def chat(body: dict, user_id: Optional[str] = None):
     system_with_rag = system
     sources_used: list[dict] = []
     injected_chunks: list[dict] = []
+    reranked: list[dict] = []
+    mmr_dropped_count = 0
+    _is_temporal_browse = False
 
     # Skip RAG entirely for task actions — they only need the task list, not documents.
     if message and message_type != "task_action":
@@ -2749,178 +2752,262 @@ async def chat(body: dict, user_id: Optional[str] = None):
                 except Exception:
                     pass  # fall back to raw message
 
-            query_emb = (await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, [query_for_embed]))[0]
-
-            # Mots-clés ≥4 chars extraits du message brut (pas du texte HyDE).
-            # Utilisés pour (1) la requête FTS et (2) le safety net post-retrieval.
-            # OR-joints : websearch_to_tsquery('simple', 'A OR B') → 'A'|'B' —
-            # évite qu'un stopword absent des documents bloque tout le bras FTS.
-            query_words = {w.lower() for w in re.findall(r'\w{4,}', message)}
-            _query_text = ' OR '.join(query_words) if query_words else None
-
-            result = sb.rpc("match_chunks", {
-                "query_embedding": query_emb,
-                "query_text": _query_text,
-                "match_count": 20,
-                "p_client_id": client_id,
-            }).execute()
-            chunks = result.data or []
-            # Normalize: RPC aliases source_name→source_file, chunk_text→content.
-            # rrf_score remplace similarity — non consommé ici (le reranker rescores).
-            chunks = [
-                {
-                    **c,
-                    "source_name": c.get("source_file") or c.get("source_name") or "",
-                    "chunk_text": c.get("content") or c.get("chunk_text") or "",
-                    "source_type": c.get("source_type") if c.get("source_type") is not None else "doc",
-                    "metadata": c.get("metadata"),
-                    "embedding": c.get("embedding"),
-                }
-                for c in chunks
+            # ── Temporal browse detection ────────────────────────────────────────
+            # Exploration temporelle : l'utilisateur veut VOIR les docs récents,
+            # pas chercher DANS les docs. Distinct de temporal_keywords qui booste
+            # la pertinence temporelle dans une recherche sémantique.
+            _TEMPORAL_BROWSE_PATTERNS = [
+                "derniers documents", "derniers docs", "documents récents", "docs récents",
+                "quoi de neuf", "nouveaux documents", "nouveaux docs", "résume les derniers",
+                "résume les documents", "derniers fichiers", "fichiers récents",
+                "ajoutés récemment", "modifiés récemment", "mis à jour récemment",
             ]
+            _is_temporal_browse = any(p in message.lower() for p in _TEMPORAL_BROWSE_PATTERNS)
 
-            # Keyword-source safety net: if a source whose name matches the query
-            # isn't in the semantic results (scored below rank 30), fetch its chunks
-            # directly and add them to the reranker pool.
-            if query_words:
-                semantic_sources = {c["source_name"] for c in chunks}
-                try:
-                    all_src_rows = (
-                        sb.table("document_chunks")
-                        .select("source_name")
-                        .eq("client_id", client_id)
-                        .limit(500)
-                        .execute()
-                    )
-                    all_sources = {r["source_name"] for r in (all_src_rows.data or [])}
-                    missing_kw_sources = [
-                        s for s in all_sources
-                        if s not in semantic_sources
-                        and sum(1 for w in query_words if w in s.lower()) >= 2
-                    ]
-                    for src in missing_kw_sources[:3]:
-                        extra = (
-                            sb.table("document_chunks")
-                            .select("source_name, chunk_text, source_type, client_id, drive_modified_at, embedding")
-                            .eq("client_id", client_id)
-                            .eq("source_name", src)
-                            .limit(2)
-                            .execute()
-                        )
-                        for row in (extra.data or []):
-                            chunks.append({
-                                **row,
-                                "rrf_score": 0.0,
-                            })
-                except Exception as _kw_err:
-                    print(f"keyword safety net error (non bloquant): {_kw_err}")
+            if _is_temporal_browse and client_id:
+                def _cite_name_b(name: str) -> str:
+                    return name.replace('[', '(').replace(']', ')')
 
-            # Cross-encoder reranking on the full pool (semantic top-30 + keyword safety
-            # net chunks). Diversity cap (2 per source) applied AFTER reranking so the
-            # reranker score, not insertion order, determines which chunk of a source wins.
-            reranked = await loop.run_in_executor(_RERANK_EXECUTOR, _rerank_chunks, message, chunks)
+                def _fmt_date(iso_str):
+                    if not iso_str:
+                        return "date inconnue"
+                    try:
+                        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+                        return dt.strftime("%d/%m/%Y")
+                    except Exception:
+                        return "date inconnue"
 
-            temporal_keywords = {"récent", "dernier", "actuelle", "actuel", "aujourd", "maintenant", "nouveau", "dernière"}
-            query_lower = message.lower()
-            decay = 30 if any(k in query_lower for k in temporal_keywords) else 180
+                browse_result = (
+                    sb.table("document_chunks")
+                    .select("source_name, chunk_text, source_type, drive_modified_at")
+                    .eq("client_id", client_id)
+                    .neq("source_type", "session")
+                    .not_.is_("drive_modified_at", "null")
+                    .order("drive_modified_at", desc=True)
+                    .limit(60)
+                    .execute()
+                )
+                browse_chunks = browse_result.data or []
 
-            for c in reranked:
-                t = _temporal_score(c.get("drive_modified_at"), decay)
-                c["final_score"] = 0.7 * c.get("rerank_score", 0.0) + 0.3 * t
+                seen_browse: dict = {}
+                temporal_docs = []
+                for c in browse_chunks:
+                    src = c["source_name"]
+                    if src not in seen_browse:
+                        seen_browse[src] = True
+                        temporal_docs.append(c)
+                    if len(temporal_docs) >= 8:
+                        break
 
-            reranked.sort(key=lambda c: c["final_score"], reverse=True)
-
-            # MMR dedup: embeddings are returned by match_chunks RPC (and fetched for
-            # safety net chunks), so no re-encoding needed — dot product only (~10ms).
-            # Guard: if RPC not yet redeployed, embeddings are None → skip MMR silently.
-            mmr_dropped_count = 0
-            try:
-                mmr_embs = [c.get("embedding") for c in reranked]
-                if mmr_embs and mmr_embs[0] is not None:
-                    pre_mmr_count = len(reranked)
-                    reranked = _mmr_filter(reranked, mmr_embs, mmr_threshold)
-                    mmr_dropped_count = pre_mmr_count - len(reranked)
-            except Exception as _mmr_err:
-                print(f"MMR filter error (non bloquant, ignoré): {_mmr_err}")
-
-            safety_net_sources = {
-                c["source_name"] for c in chunks
-                if c.get("rrf_score") == 0.0
-            }
-
-            seen_src: dict = {}
-            diverse: list = []
-            for c in reranked:
-                src = c["source_name"]
-                cap = 1 if src in safety_net_sources else 2
-                if seen_src.get(src, 0) < cap:
-                    diverse.append(c)
-                    seen_src[src] = seen_src.get(src, 0) + 1
-
-            if diverse:
-                is_account_query = any(k in query_lower for k in CR_KEYWORDS)
-                inject_threshold = -2.0 if is_account_query else -1.0
-                MAX_INJECT = 8 if is_account_query else 6
-
-                guaranteed = [c for c in diverse
-                              if c["source_name"] in safety_net_sources
-                              and c.get("final_score", c.get("rerank_score", 0.0)) >= inject_threshold]
-                normal = [c for c in diverse
-                          if c["source_name"] not in safety_net_sources
-                          and c.get("final_score", c.get("rerank_score", 0.0)) >= inject_threshold]
-
-                to_inject = (guaranteed + normal)[:MAX_INJECT]
-                injected_chunks = to_inject
-
-                doc_chunks = [c for c in to_inject if c["source_type"] != "session"]
-                session_chunks = [c for c in to_inject if c["source_type"] == "session"]
-
-                if doc_chunks:
-                    # Normalize source names for in-text citation: replace [ ] with ( )
-                    # so filenames like "[Client x Agency] || Doc" don't produce nested
-                    # brackets [[Client x Agency] || Doc] that break the citation regex.
-                    def _cite_name(name: str) -> str:
-                        return name.replace('[', '(').replace(']', ')')
-
+                if temporal_docs:
                     doc_block = "\n\n".join(
-                        f"— {_cite_name(c['source_name'])}\n{c['chunk_text']}" for c in doc_chunks
+                        f"— {_cite_name_b(c['source_name'])} (modifié le {_fmt_date(c['drive_modified_at'])})\n{c['chunk_text'][:600]}"
+                        for c in temporal_docs
                     )
                     system_with_rag += (
-                        "\n\n[Documents pertinents]\n"
-                        "RÈGLE DE FIABILITÉ (impérative) :\n"
-                        "- Réponds en t'appuyant UNIQUEMENT sur les extraits ci-dessous, la fiche client "
-                        "et l'historique fourni.\n"
-                        "- N'invente rien et ne comble pas les trous avec des suppositions ou des "
-                        "connaissances générales sur le sujet.\n"
-                        "- Si les extraits ne répondent que partiellement, distingue clairement ce qui est "
-                        "étayé par les documents de ce qui ne l'est pas, et dis explicitement ce que tu ne "
-                        "trouves pas dans les sources.\n"
-                        "- Quand tu utilises une information issue d'un extrait, cite le nom du fichier "
-                        "source entre crochets, ex : [NomDuFichier].\n\n"
+                        "\n\n[Documents récents — triés par date de modification]\n"
+                        "Ces documents sont les plus récemment modifiés dans le Drive du client. "
+                        "Présente-les par ordre chronologique inversé (le plus récent en premier). "
+                        "Pour chaque document, donne le titre, la date, et un résumé en 1-2 phrases.\n"
+                        "Ignore les pièces administratives (factures, devis, bons de commande) si présentes.\n\n"
                         + doc_block
                     )
                     sources_used = [
-                        {
-                            "source_name": c["source_name"],
-                            "source_type": c["source_type"],
-                            "preview": c["chunk_text"][:120],
-                        }
-                        for c in doc_chunks
+                        {"source_name": c["source_name"], "source_type": c["source_type"],
+                         "preview": c["chunk_text"][:120]}
+                        for c in temporal_docs
                     ]
-
-                if session_chunks:
-                    sess_block = "\n\n".join(
-                        f"— {c['source_name']}\n{c['chunk_text']}" for c in session_chunks
-                    )
+                    injected_chunks = temporal_docs
+                else:
                     system_with_rag += (
-                        "\n\n[Historique pertinent]\nExtraits de sessions passées liés à la question. "
-                        "Utilise-les pour enrichir ta réponse mais ne les cite pas — "
-                        "ils font partie de l'historique des échanges, pas des documents de référence."
-                        "\n\n" + sess_block
+                        "\n\n[Disponibilité des documents]\n"
+                        "Aucun document avec date de modification trouvé. "
+                        "Suggère à l'utilisateur de lancer une synchronisation Drive."
                     )
 
-                if not doc_chunks and not session_chunks:
-                    # Documents indexed but none passed the similarity threshold
+            else:
+                query_emb = (await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, [query_for_embed]))[0]
+
+                # Mots-clés ≥4 chars extraits du message brut (pas du texte HyDE).
+                # Utilisés pour (1) la requête FTS et (2) le safety net post-retrieval.
+                # OR-joints : websearch_to_tsquery('simple', 'A OR B') → 'A'|'B' —
+                # évite qu'un stopword absent des documents bloque tout le bras FTS.
+                query_words = {w.lower() for w in re.findall(r'\w{4,}', message)}
+                _query_text = ' OR '.join(query_words) if query_words else None
+
+                result = sb.rpc("match_chunks", {
+                    "query_embedding": query_emb,
+                    "query_text": _query_text,
+                    "match_count": 20,
+                    "p_client_id": client_id,
+                }).execute()
+                chunks = result.data or []
+                # Normalize: RPC aliases source_name→source_file, chunk_text→content.
+                # rrf_score remplace similarity — non consommé ici (le reranker rescores).
+                chunks = [
+                    {
+                        **c,
+                        "source_name": c.get("source_file") or c.get("source_name") or "",
+                        "chunk_text": c.get("content") or c.get("chunk_text") or "",
+                        "source_type": c.get("source_type") if c.get("source_type") is not None else "doc",
+                        "metadata": c.get("metadata"),
+                        "embedding": c.get("embedding"),
+                    }
+                    for c in chunks
+                ]
+
+                # Keyword-source safety net: if a source whose name matches the query
+                # isn't in the semantic results (scored below rank 30), fetch its chunks
+                # directly and add them to the reranker pool.
+                if query_words:
+                    semantic_sources = {c["source_name"] for c in chunks}
+                    try:
+                        all_src_rows = (
+                            sb.table("document_chunks")
+                            .select("source_name")
+                            .eq("client_id", client_id)
+                            .limit(500)
+                            .execute()
+                        )
+                        all_sources = {r["source_name"] for r in (all_src_rows.data or [])}
+                        missing_kw_sources = [
+                            s for s in all_sources
+                            if s not in semantic_sources
+                            and sum(1 for w in query_words if w in s.lower()) >= 2
+                        ]
+                        for src in missing_kw_sources[:3]:
+                            extra = (
+                                sb.table("document_chunks")
+                                .select("source_name, chunk_text, source_type, client_id, drive_modified_at, embedding")
+                                .eq("client_id", client_id)
+                                .eq("source_name", src)
+                                .limit(2)
+                                .execute()
+                            )
+                            for row in (extra.data or []):
+                                chunks.append({
+                                    **row,
+                                    "rrf_score": 0.0,
+                                })
+                    except Exception as _kw_err:
+                        print(f"keyword safety net error (non bloquant): {_kw_err}")
+
+                # Cross-encoder reranking on the full pool (semantic top-30 + keyword safety
+                # net chunks). Diversity cap (2 per source) applied AFTER reranking so the
+                # reranker score, not insertion order, determines which chunk of a source wins.
+                reranked = await loop.run_in_executor(_RERANK_EXECUTOR, _rerank_chunks, message, chunks)
+
+                temporal_keywords = {"récent", "dernier", "actuelle", "actuel", "aujourd", "maintenant", "nouveau", "dernière"}
+                query_lower = message.lower()
+                decay = 30 if any(k in query_lower for k in temporal_keywords) else 180
+
+                for c in reranked:
+                    t = _temporal_score(c.get("drive_modified_at"), decay)
+                    c["final_score"] = 0.7 * c.get("rerank_score", 0.0) + 0.3 * t
+
+                reranked.sort(key=lambda c: c["final_score"], reverse=True)
+
+                # MMR dedup: embeddings are returned by match_chunks RPC (and fetched for
+                # safety net chunks), so no re-encoding needed — dot product only (~10ms).
+                # Guard: if RPC not yet redeployed, embeddings are None → skip MMR silently.
+                mmr_dropped_count = 0
+                try:
+                    mmr_embs = [c.get("embedding") for c in reranked]
+                    if mmr_embs and mmr_embs[0] is not None:
+                        pre_mmr_count = len(reranked)
+                        reranked = _mmr_filter(reranked, mmr_embs, mmr_threshold)
+                        mmr_dropped_count = pre_mmr_count - len(reranked)
+                except Exception as _mmr_err:
+                    print(f"MMR filter error (non bloquant, ignoré): {_mmr_err}")
+
+                safety_net_sources = {
+                    c["source_name"] for c in chunks
+                    if c.get("rrf_score") == 0.0
+                }
+
+                seen_src: dict = {}
+                diverse: list = []
+                for c in reranked:
+                    src = c["source_name"]
+                    cap = 1 if src in safety_net_sources else 2
+                    if seen_src.get(src, 0) < cap:
+                        diverse.append(c)
+                        seen_src[src] = seen_src.get(src, 0) + 1
+
+                if diverse:
+                    is_account_query = any(k in query_lower for k in CR_KEYWORDS)
+                    inject_threshold = -2.0 if is_account_query else -1.0
+                    MAX_INJECT = 8 if is_account_query else 6
+
+                    guaranteed = [c for c in diverse
+                                  if c["source_name"] in safety_net_sources
+                                  and c.get("final_score", c.get("rerank_score", 0.0)) >= inject_threshold]
+                    normal = [c for c in diverse
+                              if c["source_name"] not in safety_net_sources
+                              and c.get("final_score", c.get("rerank_score", 0.0)) >= inject_threshold]
+
+                    to_inject = (guaranteed + normal)[:MAX_INJECT]
+                    injected_chunks = to_inject
+
+                    doc_chunks = [c for c in to_inject if c["source_type"] != "session"]
+                    session_chunks = [c for c in to_inject if c["source_type"] == "session"]
+
+                    if doc_chunks:
+                        # Normalize source names for in-text citation: replace [ ] with ( )
+                        # so filenames like "[Client x Agency] || Doc" don't produce nested
+                        # brackets [[Client x Agency] || Doc] that break the citation regex.
+                        def _cite_name(name: str) -> str:
+                            return name.replace('[', '(').replace(']', ')')
+
+                        doc_block = "\n\n".join(
+                            f"— {_cite_name(c['source_name'])}\n{c['chunk_text']}" for c in doc_chunks
+                        )
+                        system_with_rag += (
+                            "\n\n[Documents pertinents]\n"
+                            "RÈGLE DE FIABILITÉ (impérative) :\n"
+                            "- Réponds en t'appuyant UNIQUEMENT sur les extraits ci-dessous, la fiche client "
+                            "et l'historique fourni.\n"
+                            "- N'invente rien et ne comble pas les trous avec des suppositions ou des "
+                            "connaissances générales sur le sujet.\n"
+                            "- Si les extraits ne répondent que partiellement, distingue clairement ce qui est "
+                            "étayé par les documents de ce qui ne l'est pas, et dis explicitement ce que tu ne "
+                            "trouves pas dans les sources.\n"
+                            "- Quand tu utilises une information issue d'un extrait, cite le nom du fichier "
+                            "source entre crochets, ex : [NomDuFichier].\n\n"
+                            + doc_block
+                        )
+                        sources_used = [
+                            {
+                                "source_name": c["source_name"],
+                                "source_type": c["source_type"],
+                                "preview": c["chunk_text"][:120],
+                            }
+                            for c in doc_chunks
+                        ]
+
+                    if session_chunks:
+                        sess_block = "\n\n".join(
+                            f"— {c['source_name']}\n{c['chunk_text']}" for c in session_chunks
+                        )
+                        system_with_rag += (
+                            "\n\n[Historique pertinent]\nExtraits de sessions passées liés à la question. "
+                            "Utilise-les pour enrichir ta réponse mais ne les cite pas — "
+                            "ils font partie de l'historique des échanges, pas des documents de référence."
+                            "\n\n" + sess_block
+                        )
+
+                    if not doc_chunks and not session_chunks:
+                        # Documents indexed but none passed the similarity threshold
+                        system_with_rag += (
+                            "\n\n[Disponibilité des documents]\n"
+                            "Aucun extrait pertinent trouvé dans les documents indexés pour cette question. "
+                            "Si tu ne trouves pas l'information dans la fiche client ou le contexte disponible, "
+                            "dis-le explicitement plutôt que d'estimer ou d'inventer. Ne réponds PAS depuis des "
+                            "connaissances générales comme s'il s'agissait d'informations vérifiées sur ce client — "
+                            "propose plutôt à l'utilisateur de préciser ou d'indiquer le document concerné."
+                        )
+                else:
+                    # No documents indexed for this client at all
                     system_with_rag += (
                         "\n\n[Disponibilité des documents]\n"
                         "Aucun extrait pertinent trouvé dans les documents indexés pour cette question. "
@@ -2929,16 +3016,6 @@ async def chat(body: dict, user_id: Optional[str] = None):
                         "connaissances générales comme s'il s'agissait d'informations vérifiées sur ce client — "
                         "propose plutôt à l'utilisateur de préciser ou d'indiquer le document concerné."
                     )
-            else:
-                # No documents indexed for this client at all
-                system_with_rag += (
-                    "\n\n[Disponibilité des documents]\n"
-                    "Aucun extrait pertinent trouvé dans les documents indexés pour cette question. "
-                    "Si tu ne trouves pas l'information dans la fiche client ou le contexte disponible, "
-                    "dis-le explicitement plutôt que d'estimer ou d'inventer. Ne réponds PAS depuis des "
-                    "connaissances générales comme s'il s'agissait d'informations vérifiées sur ce client — "
-                    "propose plutôt à l'utilisateur de préciser ou d'indiquer le document concerné."
-                )
         except Exception as e:
             print(f"RAG pipeline error (non bloquant): {e}")
             print(traceback.format_exc())
@@ -3042,20 +3119,23 @@ async def chat(body: dict, user_id: Optional[str] = None):
             debug_info = None
             if body.get("debug"):
                 injected_names = {s["source_name"] for s in sources_used}
-                debug_info = [
-                    {
-                        "source_name": c["source_name"],
-                        "rerank_score": round(c.get("rerank_score", 0.0), 3),
-                        "final_score": round(c.get("final_score", 0.0), 3),
-                        "injected": c["source_name"] in injected_names,
-                        "preview": c["chunk_text"][:80],
-                    }
-                    for c in reranked[:15]
-                ]
-                debug_info.insert(0, {
-                    "mmr_threshold": mmr_threshold,
-                    "mmr_dropped": mmr_dropped_count,
-                })
+                if _is_temporal_browse:
+                    debug_info = [{"temporal_browse": True, "docs_found": len(injected_chunks)}]
+                else:
+                    debug_info = [
+                        {
+                            "source_name": c["source_name"],
+                            "rerank_score": round(c.get("rerank_score", 0.0), 3),
+                            "final_score": round(c.get("final_score", 0.0), 3),
+                            "injected": c["source_name"] in injected_names,
+                            "preview": c["chunk_text"][:80],
+                        }
+                        for c in reranked[:15]
+                    ]
+                    debug_info.insert(0, {
+                        "mmr_threshold": mmr_threshold,
+                        "mmr_dropped": mmr_dropped_count,
+                    })
 
             done_payload = {"type": "done", "sources": sources_used, "tasks_json": tasks_json, "reply_text": reply_text}
             if debug_info is not None:
