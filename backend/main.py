@@ -775,7 +775,7 @@ async def eval_judge(body: dict) -> JSONResponse:
             model_name=GEMINI_FLASH,
             generation_config={
                 "temperature": 0,
-                "max_output_tokens": 2048,
+                "max_output_tokens": 4096,
                 "response_mime_type": "application/json",
                 "response_schema": schema,
             },
