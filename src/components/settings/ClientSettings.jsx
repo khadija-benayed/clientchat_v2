@@ -16,6 +16,7 @@
  * @param {string}   jwtToken
  */
 import { useState, useEffect } from 'react';
+import { Building2, Target, BarChart3, Users, Clock, FileText } from 'lucide-react';
 import Modal from '../shared/Modal';
 import MembersSection from './MembersSection';
 import DriveSection from './DriveSection';
@@ -322,9 +323,10 @@ function BriefDisplay({ brief }) {
   const [expandedFields, setExpandedFields] = useState({});
   const toggleField = (label) => setExpandedFields(prev => ({ ...prev, [label]: !prev[label] }));
 
-  const arrayField = (arr) => {
+  const arrayField = (arr, color) => {
     if (!Array.isArray(arr) || !arr.length) return <span style={{ color: 'var(--tx3)', fontStyle: 'italic' }}>—</span>;
-    const label = (v) => {
+    const tagClass = color ? `brief-tag brief-tag-${color}` : 'brief-tag';
+    const labelOf = (v) => {
       if (typeof v === 'string') return v;
       if (typeof v === 'object' && v !== null) {
         const name = [v.prenom, v.nom].filter(Boolean).join(' ') || v.nom || v.name || '?';
@@ -332,53 +334,70 @@ function BriefDisplay({ brief }) {
       }
       return String(v);
     };
-    return <div className="brief-field-value tags">
-      {arr.map((v, i) => <span key={i} className="brief-tag">{label(v)}</span>)}
-    </div>;
+    return (
+      <div className="brief-field-value tags">
+        {arr.map((v, i) => <span key={i} className={tagClass}>{labelOf(v)}</span>)}
+      </div>
+    );
   };
+
   const fields = [
-    { label: 'Secteur', value: brief.secteur, isText: true },
-    { label: 'Enjeux principaux', value: brief.enjeux_principaux },
-    { label: 'KPIs', value: brief.kpis },
-    { label: 'Équipe client', value: brief.equipe },
-    { label: 'Historique', value: brief.historique, isText: true },
-    { label: 'Notes', value: brief.notes, isText: true },
+    { label: 'Secteur',            value: brief.secteur,            isText: true, isHero: true, icon: Building2, color: null },
+    { label: 'Enjeux principaux',  value: brief.enjeux_principaux,                              icon: Target,    color: 'amb' },
+    { label: 'KPIs',               value: brief.kpis,                                           icon: BarChart3, color: 'blue' },
+    { label: 'Équipe client',      value: brief.equipe,                                         icon: Users,     color: 'pur' },
+    { label: 'Historique',         value: brief.historique,         isText: true,               icon: Clock,     color: null },
+    { label: 'Notes',              value: brief.notes,              isText: true,               icon: FileText,  color: null },
   ];
+
   return (
     <div className="brief-fields">
-      {fields.map((f, i) => (
-        <div key={i} className="brief-field">
-          <div className="brief-field-label">{f.label}</div>
-          {f.isText
-            ? (() => {
-                const text = String(f.value || '—');
-                const isLong = text.length > 200;
-                const isExpanded = expandedFields[f.label];
-                return (
-                  <>
-                    <div
-                      className="brief-field-value"
-                      style={!isExpanded && isLong ? {
-                        display: '-webkit-box',
-                        WebkitLineClamp: 3,
-                        WebkitBoxOrient: 'vertical',
-                        overflow: 'hidden',
-                      } : {}}
-                    >
-                      {text}
-                    </div>
-                    {isLong && (
-                      <span className="note-expand" onClick={() => toggleField(f.label)}>
-                        {isExpanded ? 'voir moins' : 'voir plus'}
-                      </span>
-                    )}
-                  </>
-                );
-              })()
-            : arrayField(f.value)
-          }
-        </div>
-      ))}
+      {fields.map((f, i) => {
+        const Icon = f.icon;
+        const colorClass = f.color ? `brief-color-${f.color}` : '';
+        return (
+          <div key={i}>
+            {i > 0 && <hr className="brief-sep" />}
+            <div className="brief-field">
+              <div className={`brief-field-header ${colorClass}`}>
+                <Icon size={14} />
+                <span className="brief-field-label">{f.label}</span>
+              </div>
+              {f.isHero ? (
+                <div className="brief-hero-value">{String(f.value || '—')}</div>
+              ) : f.isText ? (
+                (() => {
+                  const text = String(f.value || '—');
+                  const isLong = text.length > 200;
+                  const isExpanded = expandedFields[f.label];
+                  return (
+                    <>
+                      <div
+                        className="brief-field-value"
+                        style={!isExpanded && isLong ? {
+                          display: '-webkit-box',
+                          WebkitLineClamp: 3,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                        } : {}}
+                      >
+                        {text}
+                      </div>
+                      {isLong && (
+                        <span className="note-expand" onClick={() => toggleField(f.label)}>
+                          {isExpanded ? 'voir moins' : 'voir plus'}
+                        </span>
+                      )}
+                    </>
+                  );
+                })()
+              ) : (
+                arrayField(f.value, f.color)
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
