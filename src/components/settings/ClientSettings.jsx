@@ -54,7 +54,7 @@ export default function ClientSettings({
     setBrief(b);
     setCtx(b ? '' : (client.context || '').replace(/\n*---\s*Contenu Drive[\s\S]*$/, '').trim());
     setPendingUpdates({});
-    setTab('params');
+    setTab('team');
     setInviteEmail(''); setInviteRole('member'); setInviteLink(null); setInviteError('');
   }, [isOpen, client?.id]); // eslint-disable-line
 
@@ -171,15 +171,18 @@ export default function ClientSettings({
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={`Paramètres — ${client?.name || ''}`}>
       <div className="settings-tabs">
-        <button className={`stab${tab === 'params' ? ' on' : ''}`} onClick={() => setTab('params')}>Paramètres</button>
+        <button className={`stab${tab === 'team' ? ' on' : ''}`} onClick={() => setTab('team')}>Équipe</button>
+        <button className={`stab${tab === 'sources' ? ' on' : ''}`} onClick={() => setTab('sources')}>Sources</button>
+        <button className={`stab${tab === 'brief' ? ' on' : ''}`} onClick={() => setTab('brief')}>Fiche client</button>
         <button className={`stab${tab === 'hist' ? ' on' : ''}`}
           onClick={() => { setTab('hist'); loadHistory(); }}>
-          Historique sessions
+          Historique
         </button>
       </div>
 
-      {tab === 'params' ? (
-        <div id="settings-panel-params">
+      {/* ── Onglet Équipe ─────────────────────────────────────────── */}
+      {tab === 'team' && (
+        <div>
           <MembersSection client={client} jwtToken={jwtToken} onMembersRefresh={onMembersRefresh} />
 
           {canInvite && (
@@ -227,7 +230,26 @@ export default function ClientSettings({
             </div>
           )}
 
-          <label style={{ marginTop: '16px' }}>Contexte client</label>
+          {myRole === 'owner' && (
+            <div style={{ marginTop: '24px', paddingTop: '16px', borderTop: '1px solid var(--brd)' }}>
+              <button className="btn" style={{ width: 'auto', background: 'var(--rbg)', color: 'var(--red)', border: '1px solid var(--red)' }}
+                onClick={deleteClient}>
+                Supprimer ce client
+              </button>
+              <div className="note-txt" style={{ marginTop: '6px' }}>Supprime définitivement le client et toutes ses tâches. Irréversible.</div>
+            </div>
+          )}
+
+          <div className="modal-foot">
+            <button className="btn btn-sec" onClick={onClose}>Fermer</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Onglet Sources ────────────────────────────────────────── */}
+      {tab === 'sources' && (
+        <div>
+          <label>Contexte client</label>
           <textarea value={ctx} onChange={e => setCtx(e.target.value)}
             style={{ minHeight: '110px', fontFamily: "'DM Mono', monospace", fontSize: '12px', marginBottom: '4px' }}
             placeholder="Infos clés : secteur, stack, interlocuteurs, enjeux…" />
@@ -240,14 +262,23 @@ export default function ClientSettings({
             onSyncMessage={onSyncMessage} syncHook={syncHook}
             onOpenGmailPrefs={onOpenGmailPrefs} jwtToken={jwtToken} />
 
-          {/* Fiche client générée */}
+          <div className="modal-foot">
+            <button className="btn btn-sec" onClick={onClose}>Annuler</button>
+            <button className="btn" style={{ width: 'auto' }} onClick={saveSettings}>Enregistrer</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Onglet Fiche client ───────────────────────────────────── */}
+      {tab === 'brief' && (
+        <div>
           <div className="brief-section">
             <div className="brief-header">
-              <span className="brief-label">Fiche client générée</span>
+              <span className="brief-label">Fiche générée automatiquement à partir des documents indexés</span>
               <button className="brief-regen-btn" disabled={!hasDrive || briefLoading}
                 title={hasDrive ? '' : 'Connecte d\'abord une source Drive'}
                 onClick={regenerateBrief}>
-                {briefLoading ? '…génération' : '↻ Régénérer la fiche'}
+                {briefLoading ? '…génération' : '↻ Régénérer'}
               </button>
             </div>
             {brief ? <BriefDisplay brief={brief} /> : (
@@ -256,25 +287,15 @@ export default function ClientSettings({
               </div>
             )}
           </div>
-
-          {/* Danger zone — owner uniquement */}
-          {myRole === 'owner' && (
-            <div style={{ marginTop: '24px', paddingTop: '16px', borderTop: '1px solid var(--brd)' }}>
-              <button className="btn" style={{ width: 'auto', background: 'var(--rbg)', color: 'var(--red)', border: '1px solid var(--red)' }}
-                onClick={deleteClient}>
-                Supprimer ce client
-              </button>
-              <div className="note-txt" style={{ marginTop: '6px' }}>Supprime définitivement le client et toutes ses tâches. Irréversible.</div>
-            </div>
-          )}
-
           <div className="modal-foot">
-            <button className="btn btn-sec" onClick={onClose}>Annuler</button>
-            <button className="btn" style={{ width: 'auto' }} onClick={saveSettings}>Enregistrer</button>
+            <button className="btn btn-sec" onClick={onClose}>Fermer</button>
           </div>
         </div>
-      ) : (
-        <div id="settings-panel-hist">
+      )}
+
+      {/* ── Onglet Historique ─────────────────────────────────────── */}
+      {tab === 'hist' && (
+        <div>
           {histLoading ? (
             <div style={{ fontSize: '12px', color: 'var(--tx3)', fontStyle: 'italic' }}>Chargement…</div>
           ) : histSummaries.length === 0 ? (

@@ -779,7 +779,7 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
 /* ─── SETTINGS ──────────────────────────────────────────────────────────── */
 .settings-tabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--brd); }
 .stab {
-  font-size: 13px; padding: 8px 14px; border: none; background: transparent;
+  font-size: 12px; padding: 8px 11px; border: none; background: transparent;
   color: var(--tx3); cursor: pointer; font-family: 'DM Sans', sans-serif;
   border-bottom: 2px solid transparent; margin-bottom: -1px;
   transition: color .12s, border-color .12s;
