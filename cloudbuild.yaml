@@ -30,4 +30,4 @@ images:
 options:
   logging: CLOUD_LOGGING_ONLY
 
-timeout: '300s'
+timeout: '1200s'
