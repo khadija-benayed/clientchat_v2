@@ -933,16 +933,18 @@ async def summarize_session(body: dict):
         loop = asyncio.get_running_loop()
         embedding = (await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, [summary_text]))[0]
         session_source_name = f"Session du {time.strftime('%Y-%m-%d')}"
-        # UPDATE existing row first — atomic, no unique-constraint race.
-        # INSERT only when no row exists yet (first summary for this client).
+        session_source_id = f"session-{client_id}"
+        # Upsert ancré sur source_id — évite d'écraser plusieurs lignes session
+        # si des doublons existent (ex : race condition entre deux appels simultanés).
         _updated = sb.table("document_chunks")\
             .update({"source_name": session_source_name, "chunk_text": summary_text, "embedding": embedding})\
-            .eq("client_id", client_id).eq("source_type", "session")\
+            .eq("client_id", client_id).eq("source_type", "session").eq("source_id", session_source_id)\
             .execute()
         if not _updated.data:
             sb.table("document_chunks").insert({
                 "client_id": client_id,
                 "source_type": "session",
+                "source_id": session_source_id,
                 "source_name": session_source_name,
                 "chunk_text": summary_text,
                 "embedding": embedding,
@@ -1377,27 +1379,34 @@ def _count_owners(client_id: str) -> int:
 
 
 def _append_member_to_client_json(client_id: str, user_id: str) -> None:
-    """Appends the user to clients.members JSON if not already present. Non-blocking best-effort."""
+    """Appends user to clients.members JSON. Optimistic concurrency (3 retries) sérialise
+    les writes concurrents sur le même champ. Champ cache uniquement — la vérité d'appartenance
+    est dans client_members ; une race cross-instance se corrige au prochain selectClient()."""
     try:
         tm = sb.table("team_members").select("full_name, email").eq("id", user_id).maybe_single().execute()
         if not tm.data:
             return
-        row = sb.table("clients").select("members").eq("id", client_id).maybe_single().execute()
-        if not row.data:
-            return
-        current = row.data.get("members") or []
-        if isinstance(current, str):
-            current = json.loads(current) if current else []
-        if any(m.get("member_id") == user_id for m in current):
-            return
-        used = {m.get("initials", "") for m in current}
-        parts = (tm.data.get("full_name") or tm.data.get("email") or "?").strip().split()
-        base = (parts[0][0] + parts[1][0]).upper() if len(parts) >= 2 else parts[0][:2].upper() if parts else "?"
-        ini, n = base, 2
-        while ini in used:
-            ini = base + str(n); n += 1
-        current.append({"initials": ini, "name": tm.data.get("full_name") or tm.data.get("email") or "?", "member_id": user_id})
-        sb.table("clients").update({"members": json.dumps(current)}).eq("id", client_id).execute()
+        for _attempt in range(3):
+            row = sb.table("clients").select("members").eq("id", client_id).maybe_single().execute()
+            if not row.data:
+                return
+            raw = row.data.get("members")
+            current = raw if isinstance(raw, list) else (json.loads(raw) if isinstance(raw, str) and raw else [])
+            if any(m.get("member_id") == user_id for m in current):
+                return
+            used = {m.get("initials", "") for m in current}
+            parts = (tm.data.get("full_name") or tm.data.get("email") or "?").strip().split()
+            base = (parts[0][0] + parts[1][0]).upper() if len(parts) >= 2 else parts[0][:2].upper() if parts else "?"
+            ini, n = base, 2
+            while ini in used:
+                ini = base + str(n); n += 1
+            new_members = current + [{"initials": ini, "name": tm.data.get("full_name") or tm.data.get("email") or "?", "member_id": user_id}]
+            # UPDATE conditionnel sur la valeur lue — n'écrit que si aucune autre instance
+            # n'a modifié members entre-temps (result.data vide = conflit détecté → retry).
+            upd = sb.table("clients").update({"members": json.dumps(new_members)}).eq("id", client_id)
+            result = (upd.is_("members", "null") if raw is None else upd.eq("members", json.dumps(current))).execute()
+            if result.data:
+                return
     except Exception:
         pass
 
@@ -2007,14 +2016,15 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
     # 4) log coût (non bloquant)
     try:
         usage = getattr(response, "usage_metadata", None)
+        _in  = getattr(usage, "prompt_token_count", 0) if usage else 0
+        _out = getattr(usage, "candidates_token_count", 0) if usage else 0
         sb.table("usage_logs").insert({
             "user_id": user_id,
             "action": "weekly_digest",
             "model": GEMINI_FLASH,
-            "cost": calculate_cost(GEMINI_FLASH, {
-                "input": getattr(usage, "prompt_token_count", 0),
-                "output": getattr(usage, "candidates_token_count", 0),
-            } if usage else None),
+            "tokens_input": _in,
+            "tokens_output": _out,
+            "cost_usd": calculate_cost(GEMINI_FLASH, {"input_tokens": _in, "output_tokens": _out}),
         }).execute()
     except Exception as e:
         print(f"usage_logs digest (non bloquant): {e}")
@@ -2071,11 +2081,7 @@ async def create_invitation(body: dict, user_id: Optional[str]):
     if role not in ("owner", "member"):
         return JSONResponse({"error": "Rôle invalide — valeurs acceptées : owner, member"}, status_code=400)
 
-    # Owner invitations require owner role; member invitations allow owner OR member to invite
-    if role == "owner":
-        await _assert_role(user_id, client_id, ["owner"])
-    else:
-        await _assert_role(user_id, client_id, ["owner", "member"])
+    await _assert_role(user_id, client_id, ["owner"])
 
     inv = sb.table("client_invitations").insert({
         "client_id":     client_id,
@@ -2555,14 +2561,6 @@ async def sync_emails(body: dict, request: Request):
             yield f"data: {json.dumps({'status': 'done', 'total': 0, 'ok': 0, 'skipped': 0, 'errors': 0})}\n\n"
             return
 
-        # Purge all stale email summaries before re-inserting fresh ones.
-        # Threads outside the current date range would otherwise persist indefinitely.
-        try:
-            sb.table("document_chunks").delete()\
-                .eq("client_id", client_id).eq("source_type", "email_summary").execute()
-        except Exception as e:
-            print(f"sync_emails: purge stale summaries error (non bloquant): {e}")
-
         processed = 0
 
         for item in all_threads:
@@ -2656,6 +2654,18 @@ async def sync_emails(body: dict, request: Request):
                 print(f"sync_emails: error thread {thread_id}: {e}")
                 yield f"data: {json.dumps({'thread_id': thread_id, 'status': 'error', 'error': str(e)[:200], 'progress': processed, 'total': total})}\n\n"
 
+        # Purger les threads hors fenêtre de dates — fait APRÈS indexation pour ne pas
+        # perdre les données existantes si la sync est interrompue en cours de route.
+        if seen_thread_ids:
+            try:
+                sb.table("document_chunks").delete()\
+                    .eq("client_id", client_id)\
+                    .eq("source_type", "email_summary")\
+                    .not_.in_("source_id", list(seen_thread_ids))\
+                    .execute()
+            except Exception as e:
+                print(f"sync_emails: purge stale summaries error (non bloquant): {e}")
+
         yield f"data: {json.dumps({'status': 'done', 'total': total, 'ok': ok, 'skipped': skipped, 'errors': errors})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers={
@@ -2694,8 +2704,9 @@ async def chat(body: dict, user_id: Optional[str] = None):
     if len(system) > 500_000 or len(message) > 20_000:
         return JSONResponse({"error": "Requête trop longue"}, status_code=400, headers=_CORS_HEADERS)
 
-    if client_id:
-        await _assert_role(user_id, client_id, ["owner", "member"])
+    if not client_id:
+        return JSONResponse({"error": "client_id requis"}, status_code=400, headers=_CORS_HEADERS)
+    await _assert_role(user_id, client_id, ["owner", "member"])
 
     # Both task_action and chat use Gemini Flash; only generate_brief uses Pro
     chat_model = GEMINI_FLASH

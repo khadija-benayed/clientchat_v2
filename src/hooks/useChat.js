@@ -88,12 +88,16 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, currentU
 
   /** Vide le chat (changement de client) */
   const clearMessages = useCallback(() => {
+    abortCtrlRef.current?.abort();
+    abortCtrlRef.current = null;
+    isSendingRef.current = false;
+    setIsSending(false);
+    setIsLoading(false);
+    cancelPendingRaf();
     setMessages([]);
     exchangeCountRef.current = 0;
     lastSavedCountRef.current = 0;
     saveInFlightRef.current = false;
-    abortCtrlRef.current?.abort();
-    abortCtrlRef.current = null;
     if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
   }, []);
 
@@ -282,7 +286,6 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, currentU
 
 /** Détecte si le message est une action sur une tâche */
 function isTaskAction(msg) {
-  if (isClientQuestion(msg)) return false;
   const verbs = ['marque','assigne','change','mets','met ','passe','déplace','supprime',
     'ajoute une tâche','crée','renomme','bloque','débloque','priorité','statut',
     'p1','p2','p3','done','todo','inprogress','waiting','blocked'];
@@ -290,7 +293,7 @@ function isTaskAction(msg) {
 }
 
 function isClientQuestion(msg) {
-  const words = ['?','client','projet','enjeu','kpi','contexte','brief',
+  const words = ['client','projet','enjeu','kpi','contexte','brief',
     'stratégie','budget','contact','historique','document','fichier'];
   return words.some(w => msg.toLowerCase().includes(w));
 }

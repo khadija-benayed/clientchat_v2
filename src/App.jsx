@@ -287,12 +287,12 @@ export default function App() {
   // ── Messages dans le chat depuis les syncs ────────────────────────────────
   const [chatMessages, setChatMessages] = useState(null); // piloté par ChatPanel
 
+  // File FIFO : plusieurs syncs simultanées (Drive + Email) empilent leurs messages
+  // sans s'écraser — ChatPanel les consomme un par un via onPendingChatMsgConsumed.
+  const [pendingChatMsgs, setPendingChatMsgs] = useState([]);
   function handleSyncMessage({ type, message }) {
-    // On ne peut pas écrire dans ChatPanel directement depuis ici,
-    // on passe par un state "pendingChatMsg" que ChatPanel consomme
-    setPendingChatMsg({ type, message, id: Date.now() });
+    setPendingChatMsgs(prev => [...prev, { type, message, id: Date.now() }]);
   }
-  const [pendingChatMsg, setPendingChatMsg] = useState(null);
 
   // ── Resync Drive depuis la bannière ──────────────────────────────────────
   const [isResyncing, setIsResyncing] = useState(false);
@@ -466,8 +466,8 @@ export default function App() {
                 }}
                 onOpenKbModal={text => { setKbSaveText(text); setKbSaveOpen(true); }}
                 onSetSyncStatus={setChatSyncStatus}
-                pendingChatMsg={pendingChatMsg}
-                onPendingChatMsgConsumed={() => setPendingChatMsg(null)}
+                pendingChatMsg={pendingChatMsgs[0] ?? null}
+                onPendingChatMsgConsumed={() => setPendingChatMsgs(prev => prev.slice(1))}
               />
               <TaskPanel
                 tasks={tasks}

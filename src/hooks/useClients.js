@@ -179,7 +179,7 @@ export function useClients({ jwtToken, currentUserId }) {
     try {
       localStorage.setItem(
         'cc-task-order-' + currentClient.id,
-        JSON.stringify(reorderedTasks.map(t => t.id))
+        JSON.stringify(reorderedTasks.filter(t => t.id > 0).map(t => t.id))
       );
     } catch (_) {}
   }, [currentClient]);

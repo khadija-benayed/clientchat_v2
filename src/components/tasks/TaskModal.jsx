@@ -41,7 +41,7 @@ export default function TaskModal({ taskId, tasks, members, onSave, onDelete, on
   const notes = parseNotes(task.note);
 
   function addNote() {
-    if (!noteInput.trim()) return;
+    if (!noteInput.trim() || task.id < 0) return;
     const now = new Date();
     const ts = now.toLocaleDateString('fr', { day: '2-digit', month: '2-digit' })
       + ' ' + now.toLocaleTimeString('fr', { hour: '2-digit', minute: '2-digit' });
@@ -51,12 +51,14 @@ export default function TaskModal({ taskId, tasks, members, onSave, onDelete, on
   }
 
   function deleteNote(idx) {
+    if (task.id < 0) return;
     const lines = (task.note || '').split('\n').filter(Boolean);
     lines.splice(idx, 1);
     onSave({ ...task, note: lines.join('\n') || null });
   }
 
   function save() {
+    if (task.id < 0) { onClose(); return; }
     const newTitle = title.trim() || task.title;
     const newDue = due || null;
     const newBlocker = status === 'blocked' ? (blocker.trim() || null) : null;
