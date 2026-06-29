@@ -240,18 +240,40 @@ export default function App() {
   }
 
   // ── Digest ───────────────────────────────────────────────────────────────
+  const DIGEST_TTL_MS = 12 * 60 * 60 * 1000;
+  function digestCacheKey() { return `cc-digest-${currentUserId || 'anon'}`; }
+
   async function loadDigest(forceRefresh = false) {
     if (digestLoading) return;
+    setDigestOpen(true);
+
+    if (!forceRefresh) {
+      try {
+        const local = JSON.parse(localStorage.getItem(digestCacheKey()) || 'null');
+        if (local?.text && local?.generatedAt) {
+          const age = Date.now() - new Date(local.generatedAt).getTime();
+          if (age < DIGEST_TTL_MS) {
+            setDigestText(local.text);
+            setDigestCached(true);
+            setDigestGeneratedAt(local.generatedAt);
+            return;
+          }
+        }
+      } catch (_) {}
+    }
+
     setDigestLoading(true);
     setDigestText('');
     setDigestCached(false);
     setDigestGeneratedAt(null);
-    setDigestOpen(true);
     try {
       const res = await callBackend({ action: 'weekly_digest', force_refresh: forceRefresh }, jwtToken);
-      setDigestText(res.digest || '');
-      setDigestCached(!!res.cached);
-      setDigestGeneratedAt(res.generated_at || null);
+      const text = res.digest || '';
+      const generatedAt = res.generated_at || new Date().toISOString();
+      setDigestText(text);
+      setDigestCached(false);
+      setDigestGeneratedAt(generatedAt);
+      localStorage.setItem(digestCacheKey(), JSON.stringify({ text, generatedAt }));
     } catch (e) {
       setDigestText(`Erreur : ${e.message}`);
     } finally {
