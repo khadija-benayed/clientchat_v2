@@ -205,10 +205,16 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, currentU
 
           onDone({ sources, tasks_json, reply_text }) {
             cancelPendingRaf();
-            // Finaliser le message avec le texte propre et les sources
+            const hasWebSearchPrompt = !!(reply_text && /veux[- ]tu que je cherche sur internet\s*\?/i.test(reply_text));
             setMessages(prev => prev.map(m =>
               m.id === streamId
-                ? { ...m, text: reply_text || '', sources: sources || [], streaming: false }
+                ? {
+                    ...m,
+                    text: reply_text || '',
+                    sources: sources || [],
+                    streaming: false,
+                    ...(hasWebSearchPrompt ? { webSearchPrompt: true, webSearchQuery: text } : {}),
+                  }
                 : m
             ));
 
@@ -283,7 +289,89 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, currentU
     }
   }
 
-  return { messages, isLoading, isSending, sendMessage, addMessage, clearMessages, triggerSessionSave };
+  const sendWebSearch = useCallback(async (query) => {
+    if (!query?.trim() || !client || isSendingRef.current) return;
+    isSendingRef.current = true;
+    setIsSending(true);
+
+    addMessage('u', query);
+    setIsLoading(true);
+
+    const ctxForPrompt = buildClientContext(client);
+    const systemPrompt = buildWebSearchSystem(ctxForPrompt);
+
+    const streamId = Date.now() + Math.random();
+    let accum = '';
+    let firstToken = true;
+
+    const payload = {
+      system: systemPrompt,
+      message: query,
+      message_type: 'web_search',
+      client_id: client.id,
+      chat_history: [],
+    };
+
+    const abortCtrl = new AbortController();
+    abortCtrlRef.current = abortCtrl;
+
+    try {
+      await new Promise((resolve, reject) => {
+        streamChatSSE(payload, jwtToken, {
+          onToken(chunk) {
+            accum += chunk;
+            if (firstToken) {
+              firstToken = false;
+              setIsLoading(false);
+              setMessages(prev => [...prev, {
+                id: streamId, role: 'a', text: accum,
+                time: new Date(), streaming: true,
+              }]);
+              return;
+            }
+            pendingDisplayRef.current = accum;
+            if (!rafIdRef.current) {
+              rafIdRef.current = requestAnimationFrame(() => {
+                rafIdRef.current = null;
+                setMessages(prev => prev.map(m =>
+                  m.id === streamId ? { ...m, text: pendingDisplayRef.current } : m
+                ));
+              });
+            }
+          },
+          onDone({ reply_text, web_sources }) {
+            cancelPendingRaf();
+            setMessages(prev => prev.map(m =>
+              m.id === streamId
+                ? { ...m, text: reply_text || '', webSources: web_sources || [], streaming: false }
+                : m
+            ));
+            resolve();
+          },
+          onError(msg) {
+            cancelPendingRaf();
+            if (firstToken) {
+              addMessage('a', 'Erreur : ' + msg);
+            } else {
+              setMessages(prev => prev.map(m =>
+                m.id === streamId ? { ...m, text: 'Erreur : ' + msg, streaming: false } : m
+              ));
+            }
+            reject(new Error(msg));
+          },
+        }, abortCtrl.signal);
+      });
+    } catch (_) {}
+    finally {
+      cancelPendingRaf();
+      if (abortCtrlRef.current === abortCtrl) abortCtrlRef.current = null;
+      isSendingRef.current = false;
+      setIsLoading(false);
+      setIsSending(false);
+    }
+  }, [client, jwtToken, addMessage]); // eslint-disable-line
+
+  return { messages, isLoading, isSending, sendMessage, sendWebSearch, addMessage, clearMessages, triggerSessionSave };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -518,8 +606,10 @@ function buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction,
     + '→ Concentre-toi sur les documents de travail : audits, specs, comptes-rendus, benchmarks. '
     + 'Ignore les pièces administratives (factures, devis, bons de commande, NDA). '
     + 'Si tu vois des montants financiers (EUR, TTC, HT), ne les mentionne pas.\n'
-    + '4. Questions hors périmètre (recettes de cuisine, météo, questions sur d\'autres entreprises) '
-    + '→ Dis que ce n\'est pas dans les documents disponibles. Ne réponds pas avec des connaissances générales.\n'
+    + '4. Questions hors périmètre ou information introuvable (questions sans rapport avec le projet — météo, recettes, vie personnelle — ou données externes : concurrents, tendances marché) '
+    + '→ Dis que tu ne trouves pas cette information dans les éléments disponibles. Ne réponds pas avec des connaissances générales.'
+    + (!isAction && !isTaskQuery ? ' Termine ta réponse par la phrase exacte : "Veux-tu que je cherche sur internet ?" (obligatoire, sans variation).' : '')
+    + '\n'
     + '5. Questions temporelles (« les derniers », « les plus récents ») '
     + '→ Priorise les contenus avec les dates les plus récentes. Les résumés de session sont les plus récents, '
     + 'puis les documents Drive triés par date de modification indiquée dans leur en-tête.\n'
@@ -579,6 +669,14 @@ function buildL2(ctxForPrompt, summaries, docCache, injectDocs = false) {
     if (total > 0) block += cacheBlock;
   }
   return block;
+}
+
+function buildWebSearchSystem(ctxForPrompt) {
+  return 'Tu es un assistant de projet. Tu dois rechercher des informations sur internet pour répondre à la question posée.\n'
+    + 'Contexte du client :\n' + ctxForPrompt + '\n\n'
+    + 'Appuie-toi sur les résultats de recherche web pour donner une réponse factuelle et contextualisée. '
+    + 'Cite tes sources web à la fin de ta réponse.\n'
+    + 'Réponds en français de façon précise et structurée.';
 }
 
 function buildL3(summaries) {

@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 import traceback
-from collections import defaultdict
+from collections import defaultdict, Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
@@ -2808,6 +2808,112 @@ async def update_gmail_sync(body: dict, user_id: Optional[str]):
     return {"updated": True}
 
 
+# ── web search stream helper ─────────────────────────────────────────────────
+async def _chat_web_search_stream(system: str, message: str, user_id: Optional[str], client_id: str):
+    loop = asyncio.get_running_loop()
+    q: asyncio.Queue = asyncio.Queue()
+    cancel_event = threading.Event()
+
+    def _sync():
+        try:
+            gm = genai.GenerativeModel(
+                model_name=GEMINI_FLASH,
+                system_instruction=system,
+                generation_config={"max_output_tokens": 3000},
+                tools=[genai.protos.Tool(
+                    google_search_retrieval=genai.protos.GoogleSearchRetrieval()
+                )],
+                safety_settings=_SAFETY_OFF,
+            )
+            contents = [{"role": "user", "parts": [message]}]
+            resp = gm.generate_content(contents, stream=True, request_options={"timeout": 120})
+            for chunk in resp:
+                if cancel_event.is_set():
+                    break
+                try:
+                    t = chunk.text
+                    if t:
+                        loop.call_soon_threadsafe(q.put_nowait, ("tok", t))
+                except Exception:
+                    pass
+            if not cancel_event.is_set():
+                loop.call_soon_threadsafe(q.put_nowait, ("done", resp))
+        except Exception as exc:
+            if not cancel_event.is_set():
+                loop.call_soon_threadsafe(q.put_nowait, ("err", str(exc)))
+
+    threading.Thread(target=_sync, daemon=True).start()
+
+    try:
+        accumulated = ""
+        stream_resp = None
+
+        while True:
+            try:
+                kind, data = await asyncio.wait_for(q.get(), timeout=120.0)
+            except asyncio.TimeoutError:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Timeout IA'})}\n\n"
+                return
+            if kind == "tok":
+                accumulated += data
+                yield f"data: {json.dumps({'type': 'token', 'text': data})}\n\n"
+            elif kind == "done":
+                stream_resp = data
+                break
+            elif kind == "err":
+                yield f"data: {json.dumps({'type': 'error', 'message': f'Erreur recherche web : {data}'})}\n\n"
+                return
+
+        # Extraire les sources web depuis les grounding_chunks
+        web_sources = []
+        try:
+            candidates = stream_resp.candidates if stream_resp else []
+            if candidates:
+                gmd = candidates[0].grounding_metadata
+                if gmd:
+                    for gc in gmd.grounding_chunks:
+                        try:
+                            if gc.HasField("web"):
+                                web_sources.append({
+                                    "title": gc.web.title or "",
+                                    "uri": gc.web.uri or "",
+                                })
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"grounding_metadata error (non bloquant): {e}")
+
+        done_payload = {
+            "type": "done",
+            "sources": [],
+            "tasks_json": "",
+            "reply_text": accumulated,
+            "routing": "web_search",
+            "web_sources": web_sources,
+        }
+        yield f"data: {json.dumps(done_payload)}\n\n"
+
+        # Log usage
+        try:
+            usage_meta = stream_resp.usage_metadata if stream_resp else None
+            in_tok = usage_meta.prompt_token_count if usage_meta else 0
+            out_tok = usage_meta.candidates_token_count if usage_meta else 0
+            sb.table("usage_logs").insert({
+                "client_id": client_id or None,
+                "user_id": user_id or None,
+                "model": GEMINI_FLASH,
+                "message_type": "web_search",
+                "tokens_input": in_tok,
+                "tokens_output": out_tok,
+                "cost_usd": calculate_cost(GEMINI_FLASH, {"input_tokens": in_tok, "output_tokens": out_tok}),
+            }).execute()
+        except Exception as exc:
+            print(f"usage_logs insert error (non bloquant): {exc}")
+
+    finally:
+        cancel_event.set()
+
+
 # ── chat (default) ────────────────────────────────────────────────────────────
 async def chat(body: dict, user_id: Optional[str] = None):
     message = body.get("message", "")
@@ -2827,6 +2933,14 @@ async def chat(body: dict, user_id: Optional[str] = None):
     if not client_id:
         return JSONResponse({"error": "client_id requis"}, status_code=400, headers=_CORS_HEADERS)
     await _assert_role(user_id, client_id, ["owner", "member"])
+
+    # Web search — Gemini avec Google Search grounding, skip RAG entièrement
+    if message_type == "web_search":
+        return StreamingResponse(
+            _chat_web_search_stream(system, message, user_id, client_id),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # Both task_action and chat use Gemini Flash; only generate_brief uses Pro
     chat_model = GEMINI_FLASH
@@ -3079,11 +3193,26 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     if c.get("rrf_score") == 0.0
                 }
 
+                # Focused document detection: si une source domine le top-10
+                # reranké (≥3 chunks), c'est une requête ciblée sur un doc
+                # → on augmente son cap à 4 pour injecter plus de contenu.
+                _top10_sources = [c["source_name"] for c in reranked[:10]]
+                _src_counts = Counter(_top10_sources)
+                _focused_source = None
+                for _src, _cnt in _src_counts.most_common(1):
+                    if _cnt >= 3:
+                        _focused_source = _src
+
                 seen_src: dict = {}
                 diverse: list = []
                 for c in reranked:
                     src = c["source_name"]
-                    cap = 1 if src in safety_net_sources else 2
+                    if src in safety_net_sources:
+                        cap = 1
+                    elif src == _focused_source:
+                        cap = 4
+                    else:
+                        cap = 2
                     if seen_src.get(src, 0) < cap:
                         diverse.append(c)
                         seen_src[src] = seen_src.get(src, 0) + 1

@@ -18,7 +18,7 @@
 import { useEffect, useRef } from 'react';
 import MessageBubble from './MessageBubble';
 
-export default function MessageList({ messages, isLoading, clientName, client, onSaveToKb, onPromptClick }) {
+export default function MessageList({ messages, isLoading, clientName, client, onSaveToKb, onPromptClick, onWebSearch }) {
   const bottomRef = useRef(null);
 
   // Scroll automatique vers le bas à chaque nouveau message
@@ -40,6 +40,7 @@ export default function MessageList({ messages, isLoading, clientName, client, o
               msg={msg}
               clientName={clientName}
               onSaveToKb={onSaveToKb}
+              onWebSearch={onWebSearch}
             />
           ))}
           {isLoading && <ThinkingIndicator clientName={clientName} />}

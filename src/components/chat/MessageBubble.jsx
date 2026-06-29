@@ -60,7 +60,7 @@ const mdComponents = {
   },
 };
 
-export default function MessageBubble({ msg, clientName, onSaveToKb }) {
+export default function MessageBubble({ msg, clientName, onSaveToKb, onWebSearch }) {
   const [kbSaved, setKbSaved] = useState(false);
 
   const isUser = msg.role === 'u';
@@ -135,6 +135,40 @@ export default function MessageBubble({ msg, clientName, onSaveToKb }) {
         >
           {kbSaved ? '✓ KB' : '+ KB'}
         </button>
+      )}
+
+      {/* Bouton "Chercher sur internet" — apparaît quand le RAG n'a pas l'info */}
+      {!isUser && msg.webSearchPrompt && !msg.streaming && (
+        <button
+          className="web-search-btn"
+          onClick={() => onWebSearch?.(msg.webSearchQuery)}
+        >
+          🔍 Chercher sur internet
+        </button>
+      )}
+
+      {/* Sources web (résultats Google Search grounding) */}
+      {!isUser && msg.webSources?.length > 0 && (
+        <div className="msg-sources">
+          <div className="msg-sources-label">
+            🌐 Sources web
+          </div>
+          <div className="msg-sources-chips">
+            {msg.webSources.map((s, i) => (
+              <a
+                key={i}
+                className="src-chip web-src-chip"
+                href={s.uri}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={s.uri}
+              >
+                <span>🌐</span>
+                <span>{s.title || s.uri}</span>
+              </a>
+            ))}
+          </div>
+        </div>
       )}
 
       <div className="msg-time">{formatTime(msg.time)}</div>

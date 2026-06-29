@@ -30,7 +30,7 @@ export default function ChatPanel({
   onTasksUpdate, onSessionSave, onOpenKbModal, onSetSyncStatus,
   pendingChatMsg, onPendingChatMsgConsumed,
 }) {
-  const { messages, isLoading, isSending, sendMessage, addMessage, clearMessages, triggerSessionSave } =
+  const { messages, isLoading, isSending, sendMessage, sendWebSearch, addMessage, clearMessages, triggerSessionSave } =
     useChat({ client, tasks, summaries, docCache, jwtToken, currentUserId, onTasksUpdate, onSessionSave });
 
   // Vider le chat quand le client change
@@ -77,6 +77,7 @@ export default function ChatPanel({
         client={client}
         onSaveToKb={handleSaveToKb}
         onPromptClick={handlePromptClick}
+        onWebSearch={sendWebSearch}
       />
       <ChatInput
         onSend={handleSend}

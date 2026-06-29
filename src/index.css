@@ -449,6 +449,19 @@ body {
 .kb-btn:hover { background: var(--c-green-bg); color: var(--c-green); border-color: var(--c-green); }
 .kb-btn.saved { background: var(--c-green-bg); color: var(--c-green); }
 
+/* Web search button */
+.web-search-btn {
+  font-size: 11px; padding: 4px 10px; border-radius: 6px;
+  border: 1px solid var(--brd2); background: transparent;
+  color: var(--tx2); cursor: pointer; margin-top: 6px; display: inline-block;
+  transition: all .12s; font-family: 'DM Sans', sans-serif;
+}
+.web-search-btn:hover { background: var(--sur2); border-color: var(--tx3); }
+
+/* Web source chips (cliquables, contrairement aux src-chip internes) */
+.web-src-chip { cursor: pointer; text-decoration: none; }
+.web-src-chip:hover { background: var(--sur); border-color: var(--tx3); }
+
 /* Session saved badge */
 .session-saved-badge {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
