@@ -247,6 +247,12 @@ CREATE INDEX IF NOT EXISTS document_chunks_fts_gin_idx
   ON document_chunks
   USING gin(fts);
 
+-- Temporal browse : tri par date de modification Drive (eq client_id + order DESC)
+-- Index partiel — seulement les rows avec date, donc compact.
+CREATE INDEX IF NOT EXISTS idx_chunks_drive_modified
+  ON document_chunks (client_id, drive_modified_at DESC NULLS LAST)
+  WHERE drive_modified_at IS NOT NULL;
+
 -- ── Fonctions RPC ────────────────────────────────────────────────────────────
 
 -- Supprime toutes les surcharges connues avant de créer la nouvelle signature

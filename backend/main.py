@@ -2944,7 +2944,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
                 result = sb.rpc("match_chunks", {
                     "query_embedding": query_emb,
                     "query_text": _query_text,
-                    "match_count": 20,
+                    "match_count": 30,
                     "p_client_id": client_id,
                 }).execute()
                 chunks = result.data or []
