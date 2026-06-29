@@ -135,7 +135,12 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, currentU
     const _needL2 = !_isAction;
     const _needL3 = _isComplex;
 
-    const _needDocs = (_isQuestion || _isComplex) && !_isTaskQuery;
+    const _isBrowse = [
+      'derniers documents', 'derniers docs', 'documents récents',
+      'résume les derniers', 'résume les documents', 'quoi de neuf',
+    ].some(p => text.toLowerCase().includes(p));
+
+    const _needDocs = (_isQuestion || _isComplex) && !_isTaskQuery && !_isBrowse;
     const systemPrompt =
       buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction: _isAction, isTaskQuery: _isTaskQuery, currentMember }) +
       (_needL2 ? buildL2(ctxForPrompt, summaries, docCache, _needDocs) : '') +
@@ -313,8 +318,8 @@ function isTaskQuery(msg) {
   ];
   const statusPatterns = [
     'fais un point', 'fais le point', 'fait un point',
-    'où on en est', 'on en est où',
-    'quoi de neuf', 'quoi de nouveau',
+    'où on en est', 'on en est où', 'où en est-on',
+    // 'quoi de neuf' et 'quoi de nouveau' gérés par le backend (_TEMPORAL_BROWSE_PATTERNS)
   ];
   if (!taskPatterns.some(p => low.includes(p)) && !statusPatterns.some(p => low.includes(p))) return false;
   const topicKeywords = [

@@ -2803,7 +2803,20 @@ async def chat(body: dict, user_id: Optional[str] = None):
             # more accurate than question-to-doc for paraphrase-style models.
             # Skip for short/conversational turns — they don't benefit from it.
             query_for_embed = message
-            if len(message.strip()) > 25:
+
+            # ── Temporal browse detection (AVANT HyDE — évite un appel Gemini inutile) ──
+            # Exploration temporelle : l'utilisateur veut VOIR les docs récents,
+            # pas chercher DANS les docs. Distinct de temporal_keywords qui booste
+            # la pertinence temporelle dans une recherche sémantique.
+            _TEMPORAL_BROWSE_PATTERNS = [
+                "derniers documents", "derniers docs", "documents récents", "docs récents",
+                "quoi de neuf", "nouveaux documents", "nouveaux docs", "résume les derniers",
+                "résume les documents", "derniers fichiers", "fichiers récents",
+                "ajoutés récemment", "modifiés récemment", "mis à jour récemment",
+            ]
+            _is_temporal_browse = any(p in message.lower() for p in _TEMPORAL_BROWSE_PATTERNS)
+
+            if not _is_temporal_browse and len(message.strip()) > 25:
                 try:
                     _hyde_model = genai.GenerativeModel(GEMINI_FLASH)
                     is_cr_query = any(k in message.lower() for k in CR_KEYWORDS)
@@ -2834,18 +2847,6 @@ async def chat(body: dict, user_id: Optional[str] = None):
                         query_for_embed = _hyde_text
                 except Exception:
                     pass  # fall back to raw message
-
-            # ── Temporal browse detection ────────────────────────────────────────
-            # Exploration temporelle : l'utilisateur veut VOIR les docs récents,
-            # pas chercher DANS les docs. Distinct de temporal_keywords qui booste
-            # la pertinence temporelle dans une recherche sémantique.
-            _TEMPORAL_BROWSE_PATTERNS = [
-                "derniers documents", "derniers docs", "documents récents", "docs récents",
-                "quoi de neuf", "nouveaux documents", "nouveaux docs", "résume les derniers",
-                "résume les documents", "derniers fichiers", "fichiers récents",
-                "ajoutés récemment", "modifiés récemment", "mis à jour récemment",
-            ]
-            _is_temporal_browse = any(p in message.lower() for p in _TEMPORAL_BROWSE_PATTERNS)
 
             if _is_temporal_browse and client_id:
                 def _cite_name_b(name: str) -> str:
