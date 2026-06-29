@@ -133,7 +133,7 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, currentU
     const _isQuestion  = isClientQuestion(text);
     const _isComplex   = isComplexQuery(text);
     const _needL2 = !_isAction;
-    const _needL3 = _isComplex;
+    const _needL3 = _isComplex && !_isTaskQuery && !_isBrowse;
 
     const _isBrowse = [
       'derniers documents', 'derniers docs', 'documents récents',
@@ -318,15 +318,19 @@ function isTaskQuery(msg) {
   ];
   const statusPatterns = [
     'fais un point', 'fais le point', 'fait un point',
-    'où on en est', 'on en est où', 'où en est-on',
+    'où on en est', 'on en est où', 'où en est-on', 'où en est',
+    'c\'est où', 'ça en est où', 'on en est',
     // 'quoi de neuf' et 'quoi de nouveau' gérés par le backend (_TEMPORAL_BROWSE_PATTERNS)
   ];
   if (!taskPatterns.some(p => low.includes(p)) && !statusPatterns.some(p => low.includes(p))) return false;
   const topicKeywords = [
     'tracking', 'tracké', 'ga4', 'segment', 'klaviyo', 'cnil', 'pixel',
-    'audit', 'gtm', 'firebase', 'adjust', 'sdk', 'api', 'tag',
-    'document', 'fichier', 'drive', 'spec', 'cahier des charges',
+    'gtm', 'firebase', 'adjust', 'sdk',
+    'document', 'fichier', 'drive', 'cahier des charges',
     'benchmark', 'attribution', 'consent', 'rgpd',
+    // 'audit', 'api', 'tag', 'spec' retirés (trop génériques) — remplacés par des patterns précis :
+    'audit tracking', 'audit ga4', 'audit gtm',
+    'api segment', 'api klaviyo',
   ];
   if (topicKeywords.some(t => low.includes(t))) return false;
   return true;
