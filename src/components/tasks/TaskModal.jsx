@@ -16,6 +16,8 @@ export default function TaskModal({ taskId, tasks, members, onSave, onDelete, on
   const [due, setDue] = useState('');
   const [blocker, setBlocker] = useState('');
   const [noteInput, setNoteInput] = useState('');
+  const [editIdx, setEditIdx] = useState(-1);
+  const [editText, setEditText] = useState('');
 
   useEffect(() => {
     if (task) {
@@ -55,6 +57,31 @@ export default function TaskModal({ taskId, tasks, members, onSave, onDelete, on
     const lines = (task.note || '').split('\n').filter(Boolean);
     lines.splice(idx, 1);
     onSave({ ...task, note: lines.join('\n') || null });
+  }
+
+  function startEdit(idx) {
+    setEditIdx(idx);
+    setEditText(notes[idx].text);
+  }
+
+  function saveEdit() {
+    if (editIdx < 0) return;
+    const lines = (task.note || '').split('\n').filter(Boolean);
+    const original = lines[editIdx];
+    const m = original.match(/^(\d{2}\/\d{2}(?:\s+\d{2}:\d{2})?)\s+—\s+/);
+    if (m) {
+      lines[editIdx] = m[0] + editText.trim();
+    } else {
+      lines[editIdx] = editText.trim();
+    }
+    onSave({ ...task, note: lines.join('\n') || null });
+    setEditIdx(-1);
+    setEditText('');
+  }
+
+  function cancelEdit() {
+    setEditIdx(-1);
+    setEditText('');
   }
 
   function save() {
@@ -127,9 +154,25 @@ export default function TaskModal({ taskId, tasks, members, onSave, onDelete, on
             ? <div style={{ fontSize: '12px', color: 'var(--tx3)', fontStyle: 'italic' }}>Aucune note pour l'instant.</div>
             : notes.map((n, i) => (
               <div key={i} className="note-entry">
-                <button className="note-del" onClick={() => deleteNote(i)}>×</button>
-                {n.date && <div className="note-entry-date">{n.date}</div>}
-                <div className="note-entry-text">{n.text}</div>
+                {editIdx === i ? (
+                  <div className="note-edit">
+                    <textarea value={editText} onChange={e => setEditText(e.target.value)}
+                      className="note-edit-input" autoFocus />
+                    <div className="note-edit-actions">
+                      <button className="note-edit-btn save" onClick={saveEdit}>✓</button>
+                      <button className="note-edit-btn cancel" onClick={cancelEdit}>✕</button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="note-entry-actions">
+                      <button className="note-action-btn" onClick={() => startEdit(i)} title="Modifier">✎</button>
+                      <button className="note-action-btn del" onClick={() => deleteNote(i)} title="Supprimer">×</button>
+                    </div>
+                    {n.date && <div className="note-entry-date">{n.date}</div>}
+                    <div className="note-entry-text">{n.text}</div>
+                  </>
+                )}
               </div>
             ))
           }

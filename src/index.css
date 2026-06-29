@@ -1026,15 +1026,36 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
   border: 1px solid var(--brd); border-radius: var(--rs);
   padding: 6px 8px; margin-bottom: 8px; min-height: 40px;
 }
-.note-entry { padding: 5px 0; border-bottom: 1px solid var(--brd); }
+.note-entry { position: relative; padding: 5px 0; border-bottom: 1px solid var(--brd); }
 .note-entry:last-child { border-bottom: none; }
 .note-entry-date { font-size: 10px; color: var(--tx3); font-family: 'DM Mono', monospace; }
 .note-entry-text { font-size: 12px; color: var(--tx); margin-top: 2px; white-space: pre-wrap; }
-.note-del {
-  float: right; background: none; border: none; cursor: pointer;
-  color: var(--tx3); font-size: 14px; transition: color .12s;
+.note-entry-actions {
+  position: absolute; top: 4px; right: 4px;
+  display: none; gap: 2px;
 }
-.note-del:hover { color: var(--red); }
+.note-entry:hover .note-entry-actions { display: flex; }
+.note-action-btn {
+  background: none; border: none; cursor: pointer;
+  font-size: 13px; color: var(--tx3); padding: 2px 4px;
+  border-radius: 4px;
+}
+.note-action-btn:hover { background: var(--sur2); color: var(--tx); }
+.note-action-btn.del:hover { color: var(--c-red); }
+.note-edit-input {
+  width: 100%; font-size: 12px; padding: 6px 8px;
+  border: 1px solid var(--brd2); border-radius: var(--rs);
+  background: var(--sur1); color: var(--tx);
+  font-family: 'DM Sans', sans-serif; resize: vertical;
+  min-height: 50px; box-sizing: border-box;
+}
+.note-edit-actions { display: flex; gap: 4px; margin-top: 4px; }
+.note-edit-btn {
+  padding: 3px 10px; border-radius: 4px; border: none;
+  cursor: pointer; font-size: 12px; font-family: 'DM Sans', sans-serif;
+}
+.note-edit-btn.save { background: var(--sb-navy); color: #fff; }
+.note-edit-btn.cancel { background: var(--sur2); color: var(--tx3); }
 .note-add { display: flex; gap: 6px; align-items: flex-end; }
 .note-add textarea {
   flex: 1; resize: none; min-height: 36px; max-height: 80px; margin-bottom: 0;
@@ -1184,3 +1205,11 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
   transition: color .12s;
 }
 .btn-rem-member:hover { color: var(--red); }
+
+/* ─── DIGEST ─────────────────────────────────────────────────────────────── */
+.digest-refresh {
+  background: none; border: 1px solid var(--brd2); border-radius: 4px;
+  cursor: pointer; font-size: 13px; color: var(--tx3); padding: 1px 6px;
+  transition: all .12s; line-height: 1.4;
+}
+.digest-refresh:hover { background: var(--sur2); color: var(--tx); border-color: var(--sb-orange); }

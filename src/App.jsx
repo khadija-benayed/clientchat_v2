@@ -130,9 +130,11 @@ export default function App() {
   const [joinClientOpen, setJoinClientOpen] = useState(false);
   const [leaveConfirm, setLeaveConfirm] = useState(null); // { id, name } | null
   const [leaveError, setLeaveError] = useState('');
-  const [digestOpen, setDigestOpen]     = useState(false);
-  const [digestText, setDigestText]     = useState('');
+  const [digestOpen, setDigestOpen]       = useState(false);
+  const [digestText, setDigestText]       = useState('');
   const [digestLoading, setDigestLoading] = useState(false);
+  const [digestCached, setDigestCached]   = useState(false);
+  const [digestGeneratedAt, setDigestGeneratedAt] = useState(null);
 
   // ── Pop automatique du digest le vendredi ─────────────────────────────────
   useEffect(() => {
@@ -141,13 +143,8 @@ export default function App() {
     if (!isFriday()) return;
     const key = fridayKey();
     if (localStorage.getItem(key)) return;
-    setDigestLoading(true);
-    setDigestText('');
-    setDigestOpen(true);
-    callBackend({ action: 'weekly_digest' }, jwtToken)
-      .then(res => { setDigestText(res.digest || ''); localStorage.setItem(key, '1'); })
-      .catch(e => setDigestText(`Erreur : ${e.message}`))
-      .finally(() => setDigestLoading(false));
+    localStorage.setItem(key, '1');
+    loadDigest(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jwtToken, currentClient]);
 
@@ -240,6 +237,26 @@ export default function App() {
       setTasks([]);
     }
     setLeaveConfirm(null);
+  }
+
+  // ── Digest ───────────────────────────────────────────────────────────────
+  async function loadDigest(forceRefresh = false) {
+    if (digestLoading) return;
+    setDigestLoading(true);
+    setDigestText('');
+    setDigestCached(false);
+    setDigestGeneratedAt(null);
+    setDigestOpen(true);
+    try {
+      const res = await callBackend({ action: 'weekly_digest', force_refresh: forceRefresh }, jwtToken);
+      setDigestText(res.digest || '');
+      setDigestCached(!!res.cached);
+      setDigestGeneratedAt(res.generated_at || null);
+    } catch (e) {
+      setDigestText(`Erreur : ${e.message}`);
+    } finally {
+      setDigestLoading(false);
+    }
   }
 
   // ── Mise à jour de tâches depuis le chat ──────────────────────────────────
@@ -361,16 +378,7 @@ export default function App() {
 
             {/* ── Carte digest ── */}
             <div
-              onClick={() => {
-                if (digestLoading) return;
-                setDigestLoading(true);
-                setDigestText('');
-                setDigestOpen(true);
-                callBackend({ action: 'weekly_digest' }, jwtToken)
-                  .then(res => setDigestText(res.digest || ''))
-                  .catch(e => setDigestText(`Erreur : ${e.message}`))
-                  .finally(() => setDigestLoading(false));
-              }}
+              onClick={() => loadDigest(false)}
               style={{
                 marginTop: '30px',
                 width: '100%',
@@ -643,7 +651,19 @@ export default function App() {
         {digestLoading ? (
           <p style={{ color: 'var(--tx3)', fontSize: '13px' }}>Génération en cours… 🐝</p>
         ) : (
-          <DigestBody text={digestText} />
+          <>
+            {digestCached && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                <span style={{ fontSize: '11px', color: 'var(--tx3)' }}>
+                  {digestGeneratedAt
+                    ? `Généré le ${new Date(digestGeneratedAt).toLocaleString('fr', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
+                    : 'Depuis le cache'}
+                </span>
+                <button className="digest-refresh" onClick={() => loadDigest(true)} title="Rafraîchir">↻</button>
+              </div>
+            )}
+            <DigestBody text={digestText} />
+          </>
         )}
       </Modal>
     </div>

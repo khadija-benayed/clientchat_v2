@@ -559,6 +559,18 @@ ALTER TABLE client_invitations ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "client_invitations_service_role" ON client_invitations FOR ALL
   USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
 
+-- digest_cache : un row par user, TTL géré côté backend (12h)
+CREATE TABLE IF NOT EXISTS digest_cache (
+  user_id      uuid        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  generated_at timestamptz NOT NULL DEFAULT now(),
+  digest_text  text        NOT NULL,
+  facts_hash   text,
+  PRIMARY KEY (user_id)
+);
+ALTER TABLE digest_cache ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "digest_cache_service_role" ON digest_cache FOR ALL
+  USING (auth.role() = 'service_role') WITH CHECK (auth.role() = 'service_role');
+
 -- ── Realtime ──────────────────────────────────────────────────────────────────
 -- subscribeRT() dans db.js s'abonne aux changements sur tasks pour le client actif.
 ALTER PUBLICATION supabase_realtime ADD TABLE tasks;

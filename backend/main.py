@@ -1,6 +1,7 @@
 # LLM chat/résumés : Gemini | PDF Vision : Claude Haiku (extract_worker.py)
 import asyncio
 import base64
+import hashlib
 import io
 import json
 import math
@@ -1855,6 +1856,34 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
     if not user_id:
         return JSONResponse({"error": "JWT requis"}, status_code=401)
 
+    force_refresh = body.get("force_refresh", False)
+    CACHE_TTL_HOURS = 12
+
+    # ── Check cache ──
+    if not force_refresh:
+        try:
+            cached = (
+                sb.table("digest_cache")
+                .select("digest_text, generated_at, facts_hash")
+                .eq("user_id", user_id)
+                .single()
+                .execute()
+            )
+            if cached.data:
+                gen_at = datetime.fromisoformat(
+                    cached.data["generated_at"].replace("Z", "+00:00")
+                )
+                age_hours = (datetime.now(timezone.utc) - gen_at).total_seconds() / 3600
+                if age_hours < CACHE_TTL_HOURS:
+                    return JSONResponse({
+                        "digest": cached.data["digest_text"],
+                        "empty": False,
+                        "cached": True,
+                        "generated_at": cached.data["generated_at"],
+                    })
+        except Exception:
+            pass  # pas de cache, on génère
+
     # 1) Clients accessibles (même logique que /me)
     try:
         rows = (
@@ -1962,11 +1991,16 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
                     if recent:
                         for entry in recent:
                             lines.append(f"- note récente sur « {nr['title']} » : {entry}")
-                    else:
-                        tail = note_txt.strip()[-200:].replace('\n', ' ')
-                        lines.append(f"- dernière note sur « {nr['title']} » : ...{tail}")
-            except Exception:
-                pass
+                    # Toujours inclure les 2 dernières entrées de note pour le contexte,
+                    # même si elles sont hors fenêtre de 7 jours
+                    all_entries = _recent_note_entries(note_txt, "2000-01-01")
+                    if all_entries:
+                        latest = all_entries[-2:]
+                        for entry in latest:
+                            if entry not in recent:
+                                lines.append(f"- contexte sur « {nr['title']} » : {entry}")
+            except Exception as _note_err:
+                print(f"digest note fetch error (non bloquant): {_note_err}")
 
         # Sessions récentes : résumés de conversations de la semaine
         try:
@@ -2054,8 +2088,10 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
             "« en attente de [raison] », « en cours ». Les noms de tâches entre guillemets français (« »), pas droits. "
             "Mentionne TOUJOURS les tâches terminées et les nouvelles tâches créées : ce sont les "
             "signaux les plus importants, ne les omets jamais. "
-            "Maximum 1 ligne par tâche, même si plusieurs changements l'ont touchée cette semaine : "
-            "regroupe-les en une seule phrase synthétique. "
+            "Maximum 2-3 lignes par tâche. La première ligne résume le changement de statut. "
+            "Les lignes suivantes intègrent le CONTENU des notes récentes (décisions, retours, contexte). "
+            "Les notes apportent le 'pourquoi' et le 'quoi' — ne les omets jamais au profit du simple statut. "
+            "Si une note contient une décision ou un retour d'une personne, cite-la. "
             "Tu peux regrouper le reste, mais ne supprime "
             "pas une avancée ou un blocage. Si un client n'a vraiment rien (aucune ligne de faits), ne le mentionne pas.\n\n"
             "FORMAT IMPÉRATIF de ta réponse :\n"
@@ -2101,7 +2137,19 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
     except Exception as e:
         print(f"usage_logs digest (non bloquant): {e}")
 
-    return JSONResponse({"digest": digest_text, "empty": False})
+    # ── Sauvegarder en cache ──
+    try:
+        fhash = hashlib.md5(facts.encode()).hexdigest()[:16]
+        sb.table("digest_cache").upsert({
+            "user_id": user_id,
+            "digest_text": digest_text,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "facts_hash": fhash,
+        }).execute()
+    except Exception as _cache_err:
+        print(f"digest cache write error (non bloquant): {_cache_err}")
+
+    return JSONResponse({"digest": digest_text, "empty": False, "cached": False})
 
 
 # ── delete_client ──────────────────────────────────────────────────────────────
