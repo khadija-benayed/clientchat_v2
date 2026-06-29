@@ -133,12 +133,13 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, currentU
     const _isQuestion  = isClientQuestion(text);
     const _isComplex   = isComplexQuery(text);
     const _needL2 = !_isAction;
-    const _needL3 = _isComplex && !_isTaskQuery && !_isBrowse;
 
     const _isBrowse = [
       'derniers documents', 'derniers docs', 'documents récents',
       'résume les derniers', 'résume les documents', 'quoi de neuf',
     ].some(p => text.toLowerCase().includes(p));
+
+    const _needL3 = _isComplex && !_isTaskQuery && !_isBrowse;
 
     const _needDocs = (_isQuestion || _isComplex) && !_isTaskQuery && !_isBrowse;
     const systemPrompt =

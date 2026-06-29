@@ -2076,7 +2076,7 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
                 "les nouveaux points bloquants, ce qui traîne. Factuel, concis, pas de remplissage. "
                 "Tu écris en 'on' (première personne du pluriel)."
             ),
-            generation_config={"max_output_tokens": 3000},
+            generation_config={"max_output_tokens": 8000},
             safety_settings=_SAFETY_OFF,
         )
         prompt = (
