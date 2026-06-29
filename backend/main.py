@@ -46,6 +46,19 @@ _RERANK_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 # In-memory sync state — lets the frontend poll progress after an SSE drop.
 _sync_state: dict = {}  # key: f"{client_id}|{folder_id}"
 
+# Patterns de noms de fichiers indiquant une source administrative/financière.
+# Évalués UNE FOIS à l'indexation (index_source) pour écrire is_administrative=True en DB.
+# Le RAG filtre ensuite via la colonne — pas de pattern-matching au runtime.
+_ADMIN_PATTERNS = [
+    "facture", "devis", "bon de commande", "invoice",
+    "order", "avoir", "nda", "commande", "proforma",
+]
+
+
+def _is_administrative(source_name: str) -> bool:
+    low = source_name.lower()
+    return any(p in low for p in _ADMIN_PATTERNS)
+
 
 def _load_biencoder() -> SentenceTransformer:
     return SentenceTransformer("paraphrase-multilingual-mpnet-base-v2", device="cpu")
@@ -1288,6 +1301,7 @@ async def index_source(body: dict, user_id: Optional[str] = None):
             "chunk_text": chunk,
             "embedding": emb,
             "last_indexed_at": now,
+            "is_administrative": _is_administrative(source_name),
         }
         for chunk, emb in zip(chunks, embeddings)
     ]
@@ -1426,17 +1440,47 @@ async def _assert_role(user_id: Optional[str], client_id: str, allowed_roles: li
 
 
 def _recent_note_entries(note_text: str, since_date: str) -> list[str]:
-    """Retourne les entrées de note datées >= since_date (format [YYYY-MM-DD] en préfixe)."""
+    """Retourne les entrées de note datées >= since_date.
+
+    Supporte deux formats :
+    - [YYYY-MM-DD] texte...        (format historique)
+    - DD/MM HH:MM — texte...       (format courant dans l'app)
+    - DD/MM/YYYY HH:MM — texte...  (variante avec année)
+    """
     if not note_text:
         return []
-    parts = re.split(r'(?=\[\d{4}-\d{2}-\d{2}\])', note_text)
+
+    current_year = datetime.now().year
+    parts = re.split(
+        r'(?=\[\d{4}-\d{2}-\d{2}\]|(?:^|\n)\d{2}/\d{2}(?:/\d{4})?\s+\d{2}:\d{2}\s*—)',
+        note_text,
+    )
+
     out = []
     for p in parts:
-        m = re.match(r'\[(\d{4}-\d{2}-\d{2})\]\s*(.*)', p.strip(), re.DOTALL)
-        if m and m.group(1) >= since_date:
-            txt = m.group(2).strip().replace('\n', ' ')
+        p = p.strip()
+        if not p:
+            continue
+
+        # Format [YYYY-MM-DD]
+        m1 = re.match(r'\[(\d{4}-\d{2}-\d{2})\]\s*(.*)', p, re.DOTALL)
+        if m1 and m1.group(1) >= since_date:
+            txt = m1.group(2).strip().replace('\n', ' ')
             if txt:
-                out.append(txt[:300])
+                out.append(txt[:400])
+            continue
+
+        # Format DD/MM HH:MM — ou DD/MM/YYYY HH:MM —
+        m2 = re.match(r'(\d{2})/(\d{2})(?:/(\d{4}))?\s+\d{2}:\d{2}\s*—\s*(.*)', p, re.DOTALL)
+        if m2:
+            day, month = m2.group(1), m2.group(2)
+            year = m2.group(3) or str(current_year)
+            iso = f"{year}-{month}-{day}"
+            if iso >= since_date:
+                txt = m2.group(4).strip().replace('\n', ' ')
+                if txt:
+                    out.append(txt[:400])
+
     return out
 
 
@@ -1900,23 +1944,49 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
                     if f != "note":
                         lines.append(f"- {t_label} : {f} {h.get('old_value')} → {h.get('new_value')}")
 
-        # Notes récentes : tâches dont la note a bougé cette semaine → on joint le contenu daté
-        note_task_ids = list({h["task_id"] for h in hist if h.get("field") == "note"})
-        if note_task_ids:
+        # Notes récentes : toutes les tâches actives cette semaine (pas seulement celles avec field=note)
+        active_task_ids = list({h["task_id"] for h in hist})
+        if active_task_ids:
             try:
                 note_rows = (
                     sb.table("tasks")
                     .select("id, title, note")
-                    .in_("id", note_task_ids)
+                    .in_("id", active_task_ids)
                     .execute()
                 ).data or []
                 for nr in note_rows:
                     note_txt = nr.get("note") or ""
+                    if not note_txt.strip():
+                        continue
                     recent = _recent_note_entries(note_txt, since_date)
-                    for entry in recent:
-                        lines.append(f"- note sur {nr['title']} : {entry}")
+                    if recent:
+                        for entry in recent:
+                            lines.append(f"- note récente sur « {nr['title']} » : {entry}")
+                    else:
+                        tail = note_txt.strip()[-200:].replace('\n', ' ')
+                        lines.append(f"- dernière note sur « {nr['title']} » : ...{tail}")
             except Exception:
                 pass
+
+        # Sessions récentes : résumés de conversations de la semaine
+        try:
+            session_chunks = (
+                sb.table("document_chunks")
+                .select("source_name, chunk_text, last_indexed_at")
+                .eq("client_id", cid)
+                .eq("source_type", "session")
+                .gte("last_indexed_at", since)
+                .order("last_indexed_at", desc=True)
+                .limit(5)
+                .execute()
+            ).data or []
+            if session_chunks:
+                lines.append("Points abordés dans les sessions de la semaine :")
+                for sc in session_chunks:
+                    summary = sc["chunk_text"][:300].replace('\n', ' ').strip()
+                    lines.append(f"- {sc['source_name']} : {summary}")
+        except Exception:
+            pass
 
         newly_blocked_ids = {
             h["task_id"] for h in hist
@@ -2000,8 +2070,10 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
             "brièvement, séparément des nouveautés, sans en faire un drame.\n"
             "- « À suivre côté client » = actions externes qu'on surveille sans en être responsables : "
             "présente-les comme du suivi, pas comme nos retards.\n"
-            "- Les lignes « note sur … » sont des notes prises récemment sur les tâches : intègre-les "
-            "dans le récap quand elles apportent du contexte (avancée, blocage, décision), sinon ignore-les.\n\n"
+            "- Les « note récente sur … » contiennent des décisions, retours, ou contexte clé : "
+            "intègre-les naturellement dans le récap de la tâche concernée (pas comme une ligne séparée).\n"
+            "- Les « Points abordés dans les sessions » sont des résumés de conversations : "
+            "mentionne les décisions ou avancées importantes, pas les détails opérationnels.\n\n"
             + facts
         )
         response = gemini.generate_content(prompt)
@@ -2788,39 +2860,61 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     except Exception:
                         return "date inconnue"
 
-                browse_result = (
+                # Étape 1 : récupérer les 10 sources les plus récentes (une ligne par source).
+                # On fetche source_name + drive_modified_at sans chunk_text pour rester léger,
+                # puis on déduplique en Python (PostgREST ne supporte pas DISTINCT ON).
+                all_sources_result = (
                     sb.table("document_chunks")
-                    .select("source_name, chunk_text, source_type, drive_modified_at")
+                    .select("source_name, drive_modified_at, source_type")
                     .eq("client_id", client_id)
                     .neq("source_type", "session")
+                    .eq("is_administrative", False)
                     .not_.is_("drive_modified_at", "null")
                     .order("drive_modified_at", desc=True)
-                    .limit(60)
+                    .limit(5000)
                     .execute()
                 )
-                browse_chunks = browse_result.data or []
+                all_rows = all_sources_result.data or []
 
-                seen_browse: dict = {}
-                temporal_docs = []
-                for c in browse_chunks:
-                    src = c["source_name"]
-                    if src not in seen_browse:
-                        seen_browse[src] = True
-                        temporal_docs.append(c)
-                    if len(temporal_docs) >= 8:
+                seen_src: dict = {}
+                for r in all_rows:
+                    src = r["source_name"]
+                    if src not in seen_src:
+                        seen_src[src] = {
+                            "source_name": src,
+                            "drive_modified_at": r["drive_modified_at"],
+                            "source_type": r["source_type"],
+                        }
+                    if len(seen_src) >= 10:
                         break
+
+                top_sources = list(seen_src.values())
+
+                # Étape 2 : récupérer le premier chunk de chaque source (10 requêtes ciblées).
+                temporal_docs = []
+                for src_info in top_sources:
+                    chunk_result = (
+                        sb.table("document_chunks")
+                        .select("source_name, chunk_text, source_type, drive_modified_at")
+                        .eq("client_id", client_id)
+                        .eq("source_name", src_info["source_name"])
+                        .limit(1)
+                        .execute()
+                    )
+                    if chunk_result.data:
+                        temporal_docs.append(chunk_result.data[0])
 
                 if temporal_docs:
                     doc_block = "\n\n".join(
-                        f"— {_cite_name_b(c['source_name'])} (modifié le {_fmt_date(c['drive_modified_at'])})\n{c['chunk_text'][:600]}"
+                        f"— {_cite_name_b(c['source_name'])} (modifié le {_fmt_date(c['drive_modified_at'])})\n{c['chunk_text'][:500]}"
                         for c in temporal_docs
                     )
                     system_with_rag += (
                         "\n\n[Documents récents — triés par date de modification]\n"
                         "Ces documents sont les plus récemment modifiés dans le Drive du client. "
                         "Présente-les par ordre chronologique inversé (le plus récent en premier). "
-                        "Pour chaque document, donne le titre, la date, et un résumé en 1-2 phrases.\n"
-                        "Ignore les pièces administratives (factures, devis, bons de commande) si présentes.\n\n"
+                        "Pour chaque document, donne le titre, la date de modification, et un résumé en 1-2 phrases.\n"
+                        "Présente uniquement les documents de travail ci-dessous (pas de pièces comptables).\n\n"
                         + doc_block
                     )
                     sources_used = [

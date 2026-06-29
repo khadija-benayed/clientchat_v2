@@ -178,6 +178,14 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
 -- Migration : stocke la date de modification Drive réelle (vs last_indexed_at = date de sync)
 ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS drive_modified_at timestamptz;
 
+-- Migration : marque les sources administratives/financières à exclure du RAG
+-- Classifié une fois à l'indexation (index_source) — jamais en runtime.
+ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS is_administrative BOOLEAN NOT NULL DEFAULT FALSE;
+UPDATE document_chunks
+  SET is_administrative = TRUE
+  WHERE lower(source_name) ~ '(facture|devis|bon de commande|invoice|order|avoir|nda|commande|proforma)'
+    AND NOT is_administrative;
+
 -- Migration : colonne FTS générée pour le hybrid search (pgvector + FTS, fusion RRF)
 ALTER TABLE document_chunks
   ADD COLUMN IF NOT EXISTS fts tsvector
@@ -300,8 +308,8 @@ BEGIN
       (1 - (dc.embedding <=> query_embedding))::double precision  AS rrf_score,
       dc.embedding
     FROM document_chunks dc
-    WHERE dc.client_id = p_client_id
-       OR dc.client_id IS NULL
+    WHERE (dc.client_id = p_client_id OR dc.client_id IS NULL)
+      AND NOT dc.is_administrative
     ORDER BY dc.embedding <=> query_embedding
     LIMIT match_count;
     RETURN;
@@ -313,8 +321,8 @@ BEGIN
     SELECT dc.id,
            ROW_NUMBER() OVER (ORDER BY dc.embedding <=> query_embedding) AS rank
     FROM   document_chunks dc
-    WHERE  dc.client_id = p_client_id
-        OR dc.client_id IS NULL
+    WHERE  (dc.client_id = p_client_id OR dc.client_id IS NULL)
+      AND  NOT dc.is_administrative
     ORDER  BY dc.embedding <=> query_embedding
     LIMIT  60
   ),
@@ -324,6 +332,7 @@ BEGIN
            ts_rank_cd(dc.fts, _ts) AS ts_score
     FROM   document_chunks dc
     WHERE  (dc.client_id = p_client_id OR dc.client_id IS NULL)
+      AND  NOT dc.is_administrative
       AND  dc.fts @@ _ts
   ),
   kw AS (
