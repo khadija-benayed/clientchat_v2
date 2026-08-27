@@ -25,7 +25,13 @@
 -- absente côté Python et le comportement est celui d'avant (fallback 0.5).
 --
 -- À appliquer dans le SQL Editor Supabase (idempotent via DROP + CREATE).
+--
+-- Enveloppé dans une transaction : le DDL est transactionnel sous PostgreSQL,
+-- donc la fonction n'est jamais absente pour les requêtes concurrentes. Sans ça,
+-- un chat lancé entre le DROP et le CREATE échouerait.
 -- ════════════════════════════════════════════════════════════════════════════
+
+BEGIN;
 
 -- Le type de retour change → CREATE OR REPLACE ne suffit pas
 DROP FUNCTION IF EXISTS match_chunks(vector, text, uuid, integer);
@@ -124,3 +130,5 @@ BEGIN
   LIMIT       match_count;
 END;
 $$;
+
+COMMIT;
