@@ -202,7 +202,7 @@ Supabase (PostgreSQL + pgvector)
 1. Le front envoie `POST BACKEND_URL` avec `{ action: 'chat', ... }` + `Authorization: Bearer <jwt>`
 2. Le middleware FastAPI valide le JWT via Supabase Auth, pose `user_id` sur la requête
 3. Le backend encode le message en vecteur (sentence-transformers, local, ~10ms)
-4. Il lance `match_chunks` sur Supabase (cosine similarity, max 6 chunks) pour le RAG
+4. Il lance le pipeline RAG : HyDE → `match_chunks` (hybride RRF) → filet par nom de fichier → cross-encoder → score temporel → MMR → injection (max 6-8 chunks). Détail en section 5
 5. Il construit le payload Gemini avec system prompt + contexte RAG + historique de session
 6. Gemini répond ; le backend loggue l'usage (`user_id` inclus) et retourne `{ text, sources_used }`
 7. Le front parse la réponse : partie conversationnelle + JSON tâches séparé par `---JSON---`
@@ -359,19 +359,69 @@ embed_texts() — sentence-transformers local
   Output : float32[768], normalisé L2 — latence ~10ms/batch
         │
         ▼
+embed_texts() sur « nom_du_fichier [jj/mm/aaaa]\n » + chunk
+  Le préfixe est embeddé mais PAS stocké dans chunk_text : le bras sémantique
+  connaît donc le nom du fichier et sa date, ce que le bras FTS obtient de son
+  côté via le tsvector généré sur source_name + chunk_text.
+        │
+        ▼
 INSERT document_chunks
-  (client_id, source_type, source_name, chunk_text, embedding, source_id, last_indexed_at)
-        │
-        ▼
-[À chaque message utilisateur]
-embed_texts([message]) → vecteur requête (768 dims)
-        │
-        ▼
-match_chunks RPC — hybrid search (pgvector cosine + FTS, fusion RRF)
-  Index HNSW cosinus sur embedding vector(768)
-  ef_search=40 — compromis rappel/latence
-  MAX_INJECT = 6 — injection dans system prompt + sources_used retournés au front
+  (client_id, source_type, source_name, chunk_text, embedding, source_id,
+   last_indexed_at, drive_modified_at, doc_date, is_administrative)
+  doc_date ← _doc_date_from_name() : date lue dans le nom (jj/mm/aaaa ou aaaa-mm-jj)
 ```
+
+**[À chaque message utilisateur]** — `chat()` dans `backend/main.py` :
+
+```
+0. Browse temporel ?  « quoi de neuf », « derniers docs »…
+   → court-circuite tout : les 10 sources les plus récentes, pas de recherche
+        │
+        ▼
+1. HyDE — question > 25 chars : Gemini Flash rédige un faux extrait de document,
+   et c'est LUI qui est embeddé. Le doc-à-doc bat le question-à-doc sur un modèle
+   de paraphrase.
+        │
+        ▼
+2. match_chunks RPC — hybride RRF (k=60), match_count=30
+     bras sémantique : HNSW cosinus, LIMIT 60
+     bras FTS        : ts_rank_cd sur fts, LIMIT 60
+     les deux excluent is_administrative
+        │
+        ▼
+3. Filet par nom de fichier — sources dont le nom partage ≥ 2 mots avec la
+   question et absentes du top-30 (max 3 sources × 2 chunks). Passe par
+   _client_source_names(), qui PAGINE — un .limit() tronquerait les chunks,
+   pas les sources.
+        │
+        ▼
+4. Cross-encoder mmarco-mMiniLMv2 sur tout le pool → rerank_score (logit brut)
+        │
+        ▼
+5. final_score = 0.7 × sigmoid(rerank_score) + 0.3 × score_temporel
+     score_temporel = exp(-âge / decay), âge depuis COALESCE(doc_date,
+       drive_modified_at, created_at)
+     decay = 30 j si la question contient un mot temporel, 180 j sinon
+     les chunks `session` reçoivent 0.5 — leur date d'écriture ne dit rien
+        │
+        ▼
+6. MMR dedup (seuil cosinus 0.92) sur les embeddings renvoyés par le RPC
+        │
+        ▼
+7. Cap de diversité — 2 chunks/source, 1 si la source vient du filet,
+   4 si une source domine le top-10 (requête ciblée sur un document)
+        │
+        ▼
+8. Injection — seuil sur le logit BRUT (-1.0, ou -2.0 si question de type
+   compte-rendu), MAX_INJECT 6 ou 8
+     [Documents pertinents]              → citables entre crochets
+     [Historique pertinent — NON VÉRIFIÉ] → résumés de session, JAMAIS une source
+     sources_used retourné au front
+```
+
+**Observabilité** : `RAG_DEBUG=1` sur Cloud Run trace `[RAG]` chaque étape (pool, scores, MMR, injection). Le payload chat accepte aussi `debug: true` → le `done` SSE renvoie `debug` et `injected_context`.
+
+⚠️ Les pièges connus de ce pipeline — et pourquoi chaque garde-fou existe — sont documentés dans [CLAUDE.md](CLAUDE.md#pipeline-rag--ordre-réel-et-pièges-connus) et [MIGRATION_NOTES.md](MIGRATION_NOTES.md) (Migration 6).
 
 ---
 
@@ -430,15 +480,20 @@ session_summaries (
 
 -- Chunks vectorisés (RAG)
 document_chunks (
-  id               uuid PK,
-  client_id        uuid FK → clients,  -- NULL = base agence
-  source_type      text,               -- 'doc' | 'sheet' | 'pdf' | 'file' | 'session'
-  source_name      text,
-  chunk_text       text,
-  embedding        vector(768),        -- paraphrase-multilingual-mpnet-base-v2
-  source_id        text,               -- Google Drive file ID (résistant au renommage)
-  last_indexed_at  timestamptz,
-  fts              tsvector            -- généré automatiquement pour le hybrid search
+  id                 uuid PK,
+  client_id          uuid FK → clients,  -- NULL = base agence
+  source_type        text,               -- 'doc' | 'sheet' | 'pdf' | 'file' | 'csv' | 'txt' | 'session'
+  source_name        text,
+  chunk_text         text,
+  embedding          vector(768),        -- paraphrase-multilingual-mpnet-base-v2
+  source_id          text,               -- Google Drive file ID (résistant au renommage)
+  created_at         timestamptz,
+  last_indexed_at    timestamptz,
+  drive_modified_at  timestamptz,        -- modifiedTime Drive : quand le FICHIER a été touché
+  doc_date           timestamptz,        -- date lue dans le nom du fichier : de quand date le CONTENU
+                                         -- prioritaire sur drive_modified_at dans le score temporel
+  is_administrative  boolean,            -- pièce comptable/financière → exclue du RAG
+  fts                tsvector            -- généré sur source_name + chunk_text (hybrid search)
 )
 
 -- Insights cross-clients

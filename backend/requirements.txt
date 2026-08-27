@@ -17,3 +17,4 @@ python-multipart==0.0.9
 pypdf==4.3.1
 openpyxl==3.1.5
 requests>=2.31.0
+langfuse==4.14.5

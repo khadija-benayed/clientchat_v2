@@ -46,6 +46,103 @@ python eval/run_eval.py --judge > /tmp/eval_mmr_092.txt
 
 ---
 
+## Migration 6 — Le RAG cesse d'ignorer les noms de fichiers et de se citer lui-même (août 2026)
+
+### Le symptôme
+
+Le 27/08/2026, à la question « que s'est-il passé lors du dernier point de tracking ? », le chat répond que le dernier point s'est tenu **le 29 juin 2026**. Or il existe des notes de suivi datées du 31/07/2026, bien indexées, et aucun document du Drive ne mentionne le 29 juin.
+
+### Le diagnostic
+
+Tracé sur la base de prod, client aroma-zone (5 110 chunks, 123 sources). Quatre causes se cumulaient.
+
+**1. La date du contenu n'existait nulle part d'exploitable.** Les 6 « Notes point suivi tracking » sont 6 Google Docs distincts couvrant avril→juillet, tous retouchés le 31/07/2026 — donc `drive_modified_at = 2026-07-31` pour les six. `modifiedTime` dit quand le fichier a été touché, pas de quand date son contenu. Et le corps des notes ne contient pas sa propre date. Aucun signal chronologique.
+
+**2. Le bras FTS ne voyait pas les noms de fichiers.** `fts` était généré sur le seul `chunk_text`. Rangs mesurés pour la tsquery `passé|lors|dernier|point|tracking` :
+
+| Source | Rang FTS | Dans le `LIMIT 60` |
+|---|---|---|
+| Point 10/06/2026 | 5 | oui |
+| Notes point suivi tracking 10/07/2026 | 12 | oui |
+| Notes point suivi tracking 24/04/2026 | 14 | oui |
+| **Notes point suivi tracking 31/07/2026** | **279** | **non** |
+| Notes point suivi tracking 19/06/2026 | 281 | non |
+| Notes point suivi tracking 05/06/2026 | 615 | non |
+
+Le fichier littéralement intitulé « Notes point suivi tracking 31/07/2026 » n'entrait jamais dans le pool du reranker. Que 10/07 passe et 31/07 non ne tenait qu'au vocabulaire du corps du texte.
+
+**3. Le filet de sécurité par nom de fichier était aveugle.** Il listait les sources avec `.select("source_name").limit(500)` — un `limit` sur les **chunks**, pas sur les **sources**. Sur aroma-zone il ne voyait que **17 sources sur 123**, et aucune note de tracking. Le mécanisme précisément conçu pour rattraper un document nommé dans la question ne pouvait quasiment jamais se déclencher. Ce même bloc ne filtrait pas `is_administrative`, rouvrant au RAG les pièces comptables que `match_chunks` exclut.
+
+**4. Une boucle de rétroaction — la cause de la date inventée.** La réponse servie à 14:16 venait mot pour mot de `Session du 2026-08-27`, un résumé écrit le matin même. Chaîne complète :
+
+- **09:37** — `summarize_session` produit un résumé déjà faux, qui cite « `[Sessions récentes]` » — l'en-tête de son propre prompt — comme s'il s'agissait d'un nom de fichier.
+- Ce résumé repart dans **chaque** prompt suivant par deux chemins indépendants : `useChat.js buildL2/buildL3` → `[Sessions récentes]` (inconditionnel), et `document_chunks(source_type='session')` → RAG.
+- **10:25** — le modèle relit son propre texte et produit une version plus nette, plus assurée, toujours fausse.
+- **14:16** — servie telle quelle à l'utilisateur, sans réserve, comme un fait sourcé.
+
+Aggravant : les chunks `session` sont insérés sans `drive_modified_at`, le RPC leur substituait `created_at` — « écrit aujourd'hui » devenait « document le plus frais » et ils raflaient le bonus temporel maximal. Et le garde-fou « aucun extrait pertinent » ne se déclenchait que si `doc_chunks` **et** `session_chunks` étaient vides : le cas le plus dangereux, un résumé seul sans aucun document, passait sans avertissement.
+
+**Écarté :** MMR n'y était pour rien (cosine max entre chunks voisins 0.75, loin du seuil 0.92). Le correctif de la date du matin (`20260827b`) était bien appliqué en prod — vérifié via `pg_get_functiondef` — mais quasi inerte pour une autre raison, voir ci-dessous.
+
+### Ce qui a été corrigé
+
+| # | Correctif | Où |
+|---|---|---|
+| 1 | Cadrage « NON VÉRIFIÉ » des résumés de session, sur les deux chemins d'injection ; un chunk `session` ne compte plus comme « document trouvé » ; score temporel neutre (0.5) pour les sessions | `main.py`, `useChat.js` |
+| 2 | `_client_source_names()` pagine au lieu de `.limit(500)` ; `is_administrative` filtré dans le filet | `main.py` |
+| 3 | `fts` généré sur `source_name + chunk_text` | `20260827c_fts_source_name.sql` |
+| 4 | Colonne `doc_date`, extraite du nom de fichier, prioritaire dans le score temporel | `20260827d_doc_date.sql`, `_doc_date_from_name()` |
+| 5 | `final_score = 0.7 × sigmoid(rerank) + 0.3 × temporel` | `main.py` |
+| 6 | Le cross-encoder reçoit le nom de la source dans la paire | `_rerank_chunks()` |
+| — | Purge des lignes empoisonnées | `oneshot/20260827_purge_boucle_session.sql` |
+
+Sur le **5** : `reranker.predict` renvoie un logit brut (~-11 à +11). La combinaison était donc `0.7 × logit + 0.3 × temporel`, soit un premier terme dans [-7.7, +7.7] contre un second dans [0, 0.3]. Le score temporel ne pouvait réordonner que des chunks à moins de 0.43 d'écart de logit : la pondération 0.7/0.3 était décorative, et c'est pourquoi le correctif de la date restait sans effet mesurable. Le seuil d'injection, lui, continue de porter sur le **logit brut** — c'est sur cette échelle qu'il a été calibré.
+
+Le **4** a été validé à blanc sur les 123 sources avant écriture : 14 sources datées, 0 faux positif, et « Point 10/06/2026 » / « Point 08/07/2026 » retombent exactement sur leur `drive_modified_at`. Les 6 notes s'ordonnent enfin : 24/04 → 22/05 → 05/06 → 19/06 → 10/07 → **31/07**.
+
+### Le 6 — la dernière étape aveugle au nom du fichier
+
+Une fois les migrations `c` et `d` appliquées, la question qui avait déclenché l'enquête remontait « Notes point suivi tracking 31/07/2026 » au **rang 1** du pool reranké, contre l'absence totale avant. Mais avec un logit de **-4.83**, sous le seuil d'injection : rien n'était injecté, et le chat répondait « je ne trouve pas cette information ». Honnête, mais toujours inutile.
+
+Premier réflexe : baisser le seuil. **Mauvaise piste, écartée par la mesure.** Distribution du logit du top-1 sur le testset :
+
+| | n | min | médiane | max |
+|---|---|---|---|---|
+| cas `answer` | 17 | **-0.96** | +3.95 | +10.12 |
+| cas `abstain` | 14 | -7.33 | **-1.23** | +6.74 |
+
+Le seuil -1.0 / -2.0 tombe exactement sur la frontière entre les deux populations — il est empiriquement bien placé. Le descendre à -4 injecterait ≥ 1 chunk dans **12 des 14** cas d'abstention (8/14 dès -2, 13/14 à -6, 14/14 à -8), alors que l'abstention est mesurée à 14/14. Un flag `--inject-threshold` a été câblé dans `run_eval.py` et `main.py` pour que ce balayage soit rejouable, mais **la conclusion est de ne pas y toucher**.
+
+La vraie cause : `_rerank_chunks` construisait ses paires en `(query, chunk_text)`. Le nom de la source était donc invisible au cross-encoder — la dernière étape à l'être, une fois l'embedding (préfixe d'`index_source`) et le FTS (migration `c`) alignés. Or la pertinence de ces notes ne vit pas dans leur corps, des puces techniques sans intitulé ni date, mais dans leur nom. Le cross-encoder classait légitimement la question parmi celles auxquelles s'abstenir de répondre. Correctif : la paire devient `(query, « nom [date]\n texte »)`, en miroir du préfixe d'indexation.
+
+### Scorecard mesurée le 27/08/2026
+
+Après les migrations `c` et `d`, backend encore sur l'ancien code Python, 31 cas :
+
+| Métrique | Résultat |
+|---|---|
+| `source_recall` | **14/15** (93 %) |
+| `abstention` | **14/14** (100 %) |
+| `must_contain` | **9/10** (90 %) |
+
+L'unique échec de `source_recall` est `az-projet-Pierre` : le document attendu (`[Aroma-Zone x Smart Bees] PDM WEB`) n'est pas dans le top-15 du pool — un défaut de rappel, pas de seuil. À traiter séparément.
+
+Le testset compte **33 cas** depuis l'ajout de `az-dernier-point-tracking` et `az-point-tracking-19juin`. C'était la lacune qui avait laissé passer tout ça : aucun cas ne couvrait la classe « que s'est-il passé lors du dernier X », dont la réponse dépend d'une date qui n'existe que dans un nom de fichier.
+
+### Reste à faire
+
+- **Migrations `c`, `d` et purge : appliquées le 27/08/2026.** Vérifié : 463 chunks / 13 sources datés, `fts` regénéré sur `source_name + chunk_text`, `match_chunks` renvoie `COALESCE(doc_date, …)`, plus aucune trace du « 29 juin » en base.
+- **Mesurer les correctifs 5 et 6 après déploiement du backend.** Ils ne sont pas encore en prod. Le **5** est le plus risqué : en normalisant le logit, le terme temporel passe de négligeable (0.3 face à une amplitude de 7.7) à réellement influent, ce qui peut faire primer la fraîcheur sur la pertinence. Avec `source_recall` à 93 % et l'abstention à 100 %, il y a plus à perdre qu'à gagner — à vérifier, et à annuler si la scorecard se dégrade.
+- **`az-projet-Pierre`** — rappel insuffisant sur `PDM WEB`, hors top-15. Défaut distinct, non traité.
+- **Décathlon et Ornikar n'ont aucun chunk indexé** — seul aroma-zone a du contenu. À lancer si ces espaces doivent servir.
+- Le `README.md` décrivait un pipeline RAG antérieur au reranker, à HyDE et au score temporel — mis à jour en même temps.
+
+### Leçon transférable
+
+Un résumé généré par le modèle et réinjecté dans ses propres prompts n'est pas de la mémoire, c'est un canal de contamination : sans cadrage explicite, une erreur y devient un fait, puis se renforce à chaque tour. Tout texte produit par le modèle et réinjecté doit porter la marque de son origine.
+
+---
+
 ## Migration 5 — Documentation team_members + tasks.created_at (juin 2026)
 
 ### Ce qui a été ajouté

@@ -29,12 +29,14 @@ THRESHOLDS = {
     "fabricated":         0.3,  # doit être INFÉRIEUR à ce seuil
 }
 
-def ask(question, client_id, mmr_threshold=None):
+def ask(question, client_id, mmr_threshold=None, inject_threshold=None):
     """Appelle le chat (SSE) et renvoie (reply_text, [source_names], debug, injected_context)."""
     payload = {"message": question, "client_id": client_id,
                "system": SYSTEM, "chat_history": [], "debug": True}
     if mmr_threshold is not None:
         payload["mmr_threshold"] = mmr_threshold
+    if inject_threshold is not None:
+        payload["inject_threshold"] = inject_threshold
     resp = requests.post(
         BACKEND_URL,
         headers={"Authorization": f"Bearer {JWT}", "Content-Type": "application/json"},
@@ -133,6 +135,12 @@ def judge_pass(metric, value):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--judge", action="store_true", help="Active la phase 2 LLM-juge")
+    parser.add_argument("--inject-threshold", type=float, default=None,
+                        help="Override du seuil d'injection (logit brut du cross-encoder). "
+                             "Defaut backend : -1.0, ou -2.0 pour une question compte-rendu. "
+                             "Balayer -2 / -4 / -6 / -8 et comparer source_recall (cas answer) "
+                             "ET abstention (cas abstain) : baisser le seuil gagne du rappel et "
+                             "perd de l'abstention, l'optimum est un compromis à mesurer.")
     parser.add_argument("--mmr-threshold", type=float, default=None,
                         help="Override MMR similarity threshold (ex: 1.01 pour désactiver, 0.90 pour plus strict)")
     args = parser.parse_args()
@@ -143,13 +151,16 @@ def main():
 
     if args.mmr_threshold is not None:
         print(f"  [MMR override] mmr_threshold={args.mmr_threshold}")
+    if args.inject_threshold is not None:
+        print(f"  [seuil injection override] inject_threshold={args.inject_threshold}")
 
     rows, agg, judge_agg = [], {}, {}
     for i, c in enumerate(cases):
         print(f"[{i+1}/{len(cases)}] {c['id']} ...", end=" ", flush=True)
         try:
             reply, sources, debug, injected_context = ask(c["question"], c["client_id"],
-                                                          mmr_threshold=args.mmr_threshold)
+                                                          mmr_threshold=args.mmr_threshold,
+                                                          inject_threshold=args.inject_threshold)
         except Exception as e:
             print("ERROR")
             rows.append((c["id"], {}, {}, None, None, None, f"[ERROR] {str(e)[:110]}"))

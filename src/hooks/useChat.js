@@ -645,6 +645,20 @@ function buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction,
     + '{"updates":[],"new_tasks":[],"delete_ids":[],"clarification":false}';
 }
 
+// Cadrage des résumés de session. Ce sont des textes générés par le modèle à partir
+// de ses propres réponses, réinjectés ensuite dans chaque prompt : sans cet avertissement,
+// une date inventée lors d'un échange devient un « fait » que l'assistant resert
+// indéfiniment. Constaté le 27/08/2026 sur aroma-zone — un « point de tracking du
+// 29 juin 2026 » absent de tous les documents Drive, né d'un résumé et répété depuis.
+const SESSION_MEM_CAVEAT =
+  'Ces résumés sont générés automatiquement à partir de tes propres réponses passées. '
+  + 'Ce ne sont PAS des sources : ils peuvent contenir des dates, des chiffres ou des noms '
+  + 'que tu as inventés lors d\'un échange précédent.\n'
+  + '- Sers-t\'en uniquement pour te rappeler le fil des échanges.\n'
+  + '- N\'en tire jamais un fait que les documents ne confirment pas.\n'
+  + '- Si une information ne se trouve que là, dis qu\'elle vient d\'un échange précédent '
+  + 'et qu\'elle n\'est pas étayée par les documents.\n';
+
 function buildL2(ctxForPrompt, summaries, docCache, injectDocs = false) {
   const recent3 = summaries.slice(-3);
   let block = '\n\n[Contexte client]\n' + ctxForPrompt;
@@ -653,7 +667,7 @@ function buildL2(ctxForPrompt, summaries, docCache, injectDocs = false) {
       const d = new Date(s.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
       return '— Session du ' + d + ' :\n' + s.summary_text;
     });
-    block += '\n\n[Sessions récentes — 3 dernières]\n' + lines.join('\n\n');
+    block += '\n\n[Sessions récentes — 3 dernières — NON VÉRIFIÉ]\n' + SESSION_MEM_CAVEAT + '\n' + lines.join('\n\n');
   }
   if (injectDocs && docCache?.length) {
     const MAX_CHARS = 80000;
@@ -686,7 +700,7 @@ function buildL3(summaries) {
     const d = new Date(s.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
     return '— Session du ' + d + ' :\n' + s.summary_text;
   });
-  return '\n\n[Sessions plus anciennes]\n' + lines.join('\n\n');
+  return '\n\n[Sessions plus anciennes — NON VÉRIFIÉ]\n' + SESSION_MEM_CAVEAT + '\n' + lines.join('\n\n');
 }
 
 /**

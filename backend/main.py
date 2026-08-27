@@ -47,6 +47,39 @@ _RERANK_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 # In-memory sync state — lets the frontend poll progress after an SSE drop.
 _sync_state: dict = {}  # key: f"{client_id}|{folder_id}"
 
+# ── Langfuse — observabilité LLM (API v4), fail-open ──────────────────────
+# Lit LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_HOST depuis l'env.
+#
+# La télémétrie ne doit JAMAIS pouvoir empêcher le service de démarrer. Le
+# 27/08/2026, `langfuse>=2.51.0` résolvait vers la 4.14.5 alors que le code
+# appelait l'API v2 (`langfuse.decorators`, supprimée en v3) : l'import au niveau
+# module aurait suffi à tuer FastAPI au démarrage, pas à dégrader l'observabilité.
+# Deux protections, complémentaires :
+#   - `langfuse==4.14.5` épinglé exactement dans requirements.txt (un `>=` sur une
+#     bibliothèque qui a cassé son API deux fois rend le build non reproductible) ;
+#   - ce garde : import raté, version incompatible ou clés absentes → `observe`
+#     devient transparent et le client muet, le backend démarre normalement.
+try:
+    from langfuse import Langfuse, observe  # noqa: F401
+    _langfuse = Langfuse()
+    LANGFUSE_ENABLED = True
+except Exception as _lf_import_err:  # pragma: no cover — chemin de secours
+    print(f"Langfuse indisponible, observabilité désactivée : {_lf_import_err}")
+    LANGFUSE_ENABLED = False
+
+    def observe(func=None, **_kwargs):
+        """Décorateur transparent — remplace langfuse.observe quand le SDK manque."""
+        return func if func is not None else (lambda f: f)
+
+    class _NullLangfuse:
+        """Absorbe tout appel, y compris chaîné (start_observation().update().end())."""
+        def __getattr__(self, _name):
+            def _noop(*_args, **_kwargs):
+                return self
+            return _noop
+
+    _langfuse = _NullLangfuse()
+
 # Patterns de noms de fichiers indiquant une source administrative/financière.
 # Évalués UNE FOIS à l'indexation (index_source) pour écrire is_administrative=True en DB.
 # Le RAG filtre ensuite via la colonne — pas de pattern-matching au runtime.
@@ -80,6 +113,8 @@ async def lifespan(app: FastAPI):
     )
     print(f"All models loaded. Embedding dim: {len(model.encode('test'))}")
     yield
+    # Flush Langfuse au shutdown pour ne pas perdre les dernières traces
+    _langfuse.flush()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -225,11 +260,43 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 
 
 def _rerank_chunks(query: str, chunks: list[dict]) -> list[dict]:
-    """Score (query, chunk_text) pairs with the cross-encoder, return sorted by score desc.
-    Falls back to input order if reranker is unavailable."""
+    """Score (query, « nom [date]\n texte ») pairs with the cross-encoder, sorted desc.
+    Falls back to input order if reranker is unavailable.
+
+    Le nom de la source fait partie de la paire, comme le préfixe d'`index_source` fait
+    partie de ce qui est embeddé et comme `source_name` fait partie du tsvector depuis
+    la migration 20260827c. Sans lui le reranker était le dernier étage aveugle au nom
+    du fichier, et c'est ce qui restait cassé après ces deux correctifs :
+
+    « que s'est-il passé lors du dernier point de tracking ? » plaçait bien
+    « Notes point suivi tracking 31/07/2026 » au rang 1 du pool, mais avec un logit de
+    -4.83 — mesuré le 27/08/2026. Or sur le testset le minimum des cas « answer » est
+    -0.96 et la médiane des cas « abstain » -1.23 : le cross-encoder classait donc cette
+    question parmi celles auxquelles il faut s'abstenir de répondre, et le seuil
+    d'injection la rejetait à juste titre selon lui. La pertinence de ces notes ne vit
+    pas dans leur corps — des puces techniques sans date ni intitulé — mais dans leur
+    nom, que le reranker ne voyait pas.
+
+    Ne PAS compenser en baissant le seuil d'injection : mesuré, il tombe pile sur la
+    frontière answer/abstain, et le descendre à -4 injecterait des documents dans 12 des
+    14 cas d'abstention du testset.
+    """
     if reranker is None or not chunks:
         return chunks
-    pairs = [(query, c["chunk_text"]) for c in chunks]
+
+    def _pair_text(c: dict) -> str:
+        name = (c.get("source_name") or "")[:60]
+        date_tag = ""
+        raw = c.get("drive_modified_at")
+        if raw:
+            try:
+                date_tag = f" [{datetime.fromisoformat(str(raw).replace('Z', '+00:00')).strftime('%d/%m/%Y')}]"
+            except Exception:
+                pass
+        prefix = f"{name}{date_tag}\n" if name else ""
+        return prefix + (c.get("chunk_text") or "")
+
+    pairs = [(query, _pair_text(c)) for c in chunks]
     scores = reranker.predict(pairs)
     return sorted(
         [dict(c, rerank_score=float(s)) for c, s in zip(chunks, scores)],
@@ -254,6 +321,41 @@ def _mmr_filter(chunks: list, embeddings: list, threshold: float) -> list:
         selected.append(chunk)
         selected_embs.append(emb_arr)
     return selected
+
+
+# ── Sources d'un client ───────────────────────────────────────────────────────
+def _client_source_names(client_id: str, page_size: int = 1000, max_pages: int = 50) -> set:
+    """Noms de sources distincts d'un client, tous confondus.
+
+    PostgREST ne sait pas faire DISTINCT : on pagine sur la seule colonne
+    `source_name` et on déduplique en Python.
+
+    Un `.limit(N)` ne convient pas — il tronque les CHUNKS, pas les sources.
+    Mesuré le 27/08/2026 sur aroma-zone (5 110 chunks, 123 sources) : le
+    `.limit(500)` d'avant ne révélait que 17 sources. Le filet de sécurité par
+    nom de fichier, censé rattraper un document nommé dans la question, était
+    donc aveugle à 86 % du corpus et ne se déclenchait quasiment jamais.
+
+    `order("source_name")` rend la pagination `range()` déterministe.
+    """
+    names: set = set()
+    for page in range(max_pages):
+        start = page * page_size
+        rows = (
+            sb.table("document_chunks")
+            .select("source_name")
+            .eq("client_id", client_id)
+            .not_.is_("source_name", "null")
+            .order("source_name")
+            .range(start, start + page_size - 1)
+            .execute()
+        ).data or []
+        names.update(r["source_name"] for r in rows)
+        if len(rows) < page_size:
+            return names
+    print(f"_client_source_names: plafond de {max_pages * page_size} chunks atteint "
+          f"pour {client_id} — la liste des sources est peut-être incomplète")
+    return names
 
 
 # ── Supabase retry ───────────────────────────────────────────────────────────
@@ -678,6 +780,64 @@ def _parse_modified(f: dict) -> datetime:
         return datetime.min.replace(tzinfo=timezone.utc)
 
 
+def _sigmoid(x: float) -> float:
+    """Logit de cross-encoder → [0, 1].
+
+    `reranker.predict` (mmarco-mMiniLMv2, num_labels=1) renvoie un logit brut, en
+    pratique entre -11 et +11. La combinaison était donc
+        final = 0.7 * logit  +  0.3 * temporel
+    soit un premier terme dans [-7.7, +7.7] contre un second dans [0, 0.3] : le
+    score temporel ne pouvait réordonner que des chunks à moins de 0.43 d'écart de
+    logit. Autrement dit la pondération 0.7/0.3 était décorative, et le correctif
+    de la date (20260827b) restait presque sans effet mesurable.
+
+    Normalisé, les deux termes sont enfin sur la même échelle et les poids veulent
+    dire ce qu'ils annoncent. Le seuil d'injection continue de porter sur le logit
+    BRUT — c'est sur cette échelle qu'il a été calibré (-1.0 / -2.0).
+    """
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(-x))
+    e = math.exp(x)           # évite exp(+grand) → OverflowError
+    return e / (1.0 + e)
+
+
+# Date portée par le nom du fichier. Deux formats, année sur 4 chiffres seulement.
+# La DERNIÈRE occurrence est retenue : sur une plage (« Audit 10/10/23 - 10/04/24 »)
+# la date de fin est la plus parlante. Les années sur 2 chiffres sont ignorées —
+# « 15_05_24 » est ambigu, mieux vaut retomber sur drive_modified_at que deviner.
+# Doit rester aligné sur le backfill SQL de la migration 20260827d.
+_DOC_DATE_DMY = re.compile(r".*([0-3]\d)/([01]\d)/(20\d{2})")
+_DOC_DATE_YMD = re.compile(r".*(20\d{2})-([01]\d)-([0-3]\d)")
+
+
+def _doc_date_from_name(source_name: str | None) -> Optional[str]:
+    """ISO 8601 (midi UTC) si le nom porte une date, sinon None.
+
+    Pourquoi : `modifiedTime` de Drive dit quand le fichier a été touché, pas de
+    quand date son contenu. Les 6 « Notes point suivi tracking » d'aroma-zone ont
+    toutes drive_modified_at = 2026-07-31 (rangées le même jour) alors qu'elles
+    couvrent avril à juillet. Sans cette extraction, « le dernier point » n'a
+    aucun signal sur lequel s'appuyer.
+
+    Midi UTC volontaire : évite qu'un décalage de fuseau fasse basculer la date
+    d'un jour dans un sens ou dans l'autre.
+    """
+    if not source_name:
+        return None
+    m = _DOC_DATE_DMY.match(source_name)
+    if m:
+        d, mo, y = m.group(1), m.group(2), m.group(3)
+    else:
+        m = _DOC_DATE_YMD.match(source_name)
+        if not m:
+            return None
+        y, mo, d = m.group(1), m.group(2), m.group(3)
+    try:
+        return datetime(int(y), int(mo), int(d), 12, 0, 0, tzinfo=timezone.utc).isoformat()
+    except ValueError:
+        return None  # 31/02/2026 et autres dates impossibles
+
+
 def _temporal_score(drive_modified_at: str | None, decay_days: int = 180) -> float:
     if not drive_modified_at:
         return 0.5
@@ -713,12 +873,13 @@ def _rag_log_pool(title: str, rows: list, limit: int = 15) -> None:
         return
     try:
         _rag_log(f"{title} — {len(rows)} chunks")
-        _rag_log(f"  {'rerank':>8} {'temp':>6} {'final':>8}  {'type':<14} {'date':<10} source")
+        _rag_log(f"  {'rerank':>8} {'norm':>6} {'temp':>6} {'final':>8}  {'type':<14} {'date':<10} source")
         _nan = float("nan")
         for c in rows[:limit]:
             _d = str(c.get("drive_modified_at") or "")[:10] or "—"
             _rag_log(
                 f"  {c.get('rerank_score', _nan):>8.3f}"
+                f" {c.get('_rerank_norm', _nan):>6.2f}"
                 f" {c.get('_temporal', _nan):>6.2f}"
                 f" {c.get('final_score', _nan):>8.3f}"
                 f"  {str(c.get('source_type'))[:14]:<14} {_d:<10} {str(c.get('source_name'))[:60]}"
@@ -785,6 +946,7 @@ _EVAL_JUDGE_ABSTAIN_SCHEMA = {
     "required": ["abstained_properly", "fabricated", "reasoning"],
 }
 
+@observe(name="eval_judge", as_type="generation")
 async def eval_judge(body: dict) -> JSONResponse:
     question = body.get("question", "")
     context = body.get("context", "")
@@ -847,13 +1009,32 @@ async def eval_judge(body: dict) -> JSONResponse:
     except Exception as e:
         return JSONResponse({"error": f"eval_judge error: {e}"}, status_code=502)
 
+    # ── Langfuse (non bloquant) ────────────────────────────────────────────
+    try:
+        _um = getattr(resp, "usage_metadata", None)
+        _langfuse.update_current_generation(
+            input=prompt[:3000],
+            output=json.dumps(result)[:2000],
+            model=GEMINI_FLASH,
+            usage_details={"input": getattr(_um, "prompt_token_count", 0) if _um else 0,
+                   "output": getattr(_um, "candidates_token_count", 0) if _um else 0},
+            metadata={"case_id": body.get("case_id", "unknown")},
+        )
+    except Exception:
+        pass
+
     return JSONResponse(result)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    return {"ok": True, "model_loaded": model is not None, "reranker_loaded": reranker is not None}
+    # langfuse_enabled : le garde d'import est fail-open et donc silencieux. Sans
+    # cette clé, un retour au mode dégradé (SDK absent ou incompatible) ne se voit
+    # nulle part. À vérifier après chaque déploiement qui touche la dépendance.
+    return {"ok": True, "model_loaded": model is not None,
+            "reranker_loaded": reranker is not None,
+            "langfuse_enabled": LANGFUSE_ENABLED}
 
 
 @app.post("/")
@@ -1112,6 +1293,7 @@ _CR_PROPOSAL_SCHEMA = {
 }
 
 
+@observe(name="generate_brief", as_type="generation")
 async def generate_brief(body: dict, user_id: Optional[str] = None):
     client_id = body.get("client_id")
     docs_content = body.get("docs_content", [])
@@ -1212,6 +1394,19 @@ async def generate_brief(body: dict, user_id: Optional[str] = None):
     except Exception as e:
         print(f"usage_logs insert error (non bloquant): {e}")
 
+    # ── Langfuse (non bloquant) ────────────────────────────────────────────
+    try:
+        _langfuse.update_current_generation(
+            input=brief_prompt[:3000],
+            output=raw_text[:2000],
+            model=GEMINI_PRO,
+            usage_details={"input": _in, "output": _out},
+            metadata={"client_id": client_id,
+                       "cost_usd": calculate_cost(GEMINI_PRO, {"input_tokens": _in, "output_tokens": _out})},
+        )
+    except Exception:
+        pass
+
     try:
         brief = json.loads(raw_text)
     except Exception:
@@ -1307,13 +1502,19 @@ async def index_source(body: dict, user_id: Optional[str] = None):
     # Prefix = "filename [dd/mm/yyyy]\n" so semantic search benefits from both
     # the document name and its modification date (helps "récent", "dernière version"…).
     loop = asyncio.get_running_loop()
+    # doc_date prioritaire sur drive_modified_at, ici comme dans le score temporel :
+    # la date du nom qualifie le contenu, modifiedTime seulement le fichier.
+    doc_date = _doc_date_from_name(source_name)
     date_tag = ""
-    if drive_modified_at:
+    for _candidate in (doc_date, drive_modified_at):
+        if not _candidate:
+            continue
         try:
-            _dt = datetime.fromisoformat(drive_modified_at.replace("Z", "+00:00"))
+            _dt = datetime.fromisoformat(_candidate.replace("Z", "+00:00"))
             date_tag = f" [{_dt.strftime('%d/%m/%Y')}]"
+            break
         except Exception:
-            pass
+            continue
     prefix = (source_name[:60] + date_tag + "\n") if source_name else ""
     prefixed_chunks = [(prefix + c) if prefix else c for c in chunks]
     embeddings = await loop.run_in_executor(_EMBED_EXECUTOR, embed_texts, prefixed_chunks)
@@ -1340,6 +1541,7 @@ async def index_source(body: dict, user_id: Optional[str] = None):
             "source_name": source_name,
             **({"source_id": source_id} if source_id else {}),
             **({"drive_modified_at": drive_modified_at} if drive_modified_at else {}),
+            **({"doc_date": doc_date} if doc_date else {}),
             "chunk_text": chunk,
             "embedding": emb,
             "last_indexed_at": now,
@@ -1712,6 +1914,7 @@ async def upsert_task(body: dict, user_id: Optional[str]):
     return JSONResponse({"task": task})
 
 
+@observe(name="propose_cr_tasks", as_type="generation")
 async def propose_cr_tasks(body: dict, user_id: Optional[str]):
     client_id = body.get("client_id")
     cr_text = (body.get("cr_text") or "").strip()
@@ -1861,6 +2064,20 @@ async def propose_cr_tasks(body: dict, user_id: Optional[str]):
     except Exception as e:
         return JSONResponse({"error": f"Erreur IA (CR) : {e}"}, status_code=502)
 
+    # ── Langfuse (non bloquant) ────────────────────────────────────────────
+    try:
+        _um = getattr(response, "usage_metadata", None)
+        _langfuse.update_current_generation(
+            input=prompt[:3000],
+            output=raw_text[:2000],
+            model=GEMINI_FLASH,
+            usage_details={"input": getattr(_um, "prompt_token_count", 0) if _um else 0,
+                   "output": getattr(_um, "candidates_token_count", 0) if _um else 0},
+            metadata={"client_id": body.get("client_id")},
+        )
+    except Exception:
+        pass
+
     try:
         proposal = json.loads(raw_text)
     except Exception:
@@ -1893,6 +2110,7 @@ async def delete_task(body: dict, user_id: Optional[str]):
 
 
 # ── weekly_digest ──────────────────────────────────────────────────────────────
+@observe(name="weekly_digest", as_type="generation")
 async def weekly_digest(body: dict, user_id: Optional[str]):
     if not user_id:
         return JSONResponse({"error": "JWT requis"}, status_code=401)
@@ -2177,6 +2395,18 @@ async def weekly_digest(body: dict, user_id: Optional[str]):
         }).execute()
     except Exception as e:
         print(f"usage_logs digest (non bloquant): {e}")
+
+    # ── Langfuse (non bloquant) ────────────────────────────────────────────
+    try:
+        _langfuse.update_current_generation(
+            input=prompt[:3000],
+            output=digest_text[:2000],
+            model=GEMINI_FLASH,
+            usage_details={"input": _in, "output": _out},
+            metadata={"user_id": user_id, "scope": "all_clients"},
+        )
+    except Exception:
+        pass
 
     # ── Sauvegarder en cache ──
     try:
@@ -2850,7 +3080,7 @@ async def update_gmail_sync(body: dict, user_id: Optional[str]):
 
 
 # ── web search stream helper ─────────────────────────────────────────────────
-async def _chat_web_search_stream(system: str, message: str, user_id: Optional[str], client_id: str):
+async def _chat_web_search_stream(system: str, message: str, user_id: Optional[str], client_id: str, lf_trace=None):
     loop = asyncio.get_running_loop()
     q: asyncio.Queue = asyncio.Queue()
     cancel_event = threading.Event()
@@ -2951,8 +3181,32 @@ async def _chat_web_search_stream(system: str, message: str, user_id: Optional[s
         except Exception as exc:
             print(f"usage_logs insert error (non bloquant): {exc}")
 
+        # ── Langfuse generation span ───────────────────────────────────────
+        if lf_trace:
+            try:
+                lf_trace.start_observation(
+                    as_type="generation",
+                    name="gemini_web_search",
+                    model=GEMINI_FLASH,
+                    input={"system": system[:2000], "message": message},
+                    output=accumulated[:3000],
+                    usage_details={"input": in_tok, "output": out_tok},
+                    metadata={
+                        "web_sources": [s.get("title", "") for s in web_sources],
+                        "cost_usd": calculate_cost(GEMINI_FLASH, {"input_tokens": in_tok, "output_tokens": out_tok}),
+                    },
+                ).end()
+            except Exception:
+                pass
+
     finally:
         cancel_event.set()
+        try:
+            if lf_trace:
+                lf_trace.end()
+            _langfuse.flush()
+        except Exception:
+            pass
 
 
 # ── chat (default) ────────────────────────────────────────────────────────────
@@ -2965,6 +3219,12 @@ async def chat(body: dict, user_id: Optional[str] = None):
     message_type = body.get("message_type", "chat")
     # Per-request MMR override (eval/calibration only — production omits this key)
     mmr_threshold = float(body["mmr_threshold"]) if "mmr_threshold" in body else MMR_SIM_THRESHOLD
+    # Idem pour le seuil d'injection. Il porte sur le logit brut du cross-encoder,
+    # une échelle qui n'a jamais été mesurée : constaté le 27/08/2026 que le top-15
+    # d'une question légitime tenait entre -4.8 et -7.8, donc très en dessous du
+    # seuil -2.0, et que le RAG n'injectait rien malgré un classement correct.
+    # None = comportement par défaut (-1.0, ou -2.0 pour une question compte-rendu).
+    inject_threshold_override = float(body["inject_threshold"]) if "inject_threshold" in body else None
 
     # Taille max : un prompt légitime peut atteindre ~120k chars (80k docs + tasks + context).
     # Ces limites empêchent l'abus de ressources sans bloquer aucun usage normal.
@@ -2975,10 +3235,33 @@ async def chat(body: dict, user_id: Optional[str] = None):
         return JSONResponse({"error": "client_id requis"}, status_code=400, headers=_CORS_HEADERS)
     await _assert_role(user_id, client_id, ["owner", "member"])
 
+    # ── Langfuse trace (manuelle pour SSE) ─────────────────────────────────
+    # v4 n'a plus `.trace()` : la trace EST son span racine, ouvert ici et fermé
+    # dans le `finally` du générateur SSE (ou de _chat_web_search_stream).
+    #
+    # `user_id` voyage dans les métadonnées et non comme attribut de trace : en v4,
+    # l'attribut de premier niveau ne se pose que via `propagate_attributes()`, un
+    # context manager. Il faudrait donc ouvrir le span racine À L'INTÉRIEUR du
+    # générateur, ce qui sortirait de la trace tout le pipeline RAG — construit ici,
+    # avant que StreamingResponse ne soit renvoyé. Compromis assumé : on garde le RAG
+    # dans la trace, on perd le filtrage par utilisateur dans l'UI Langfuse. Pour le
+    # récupérer, déplacer l'ouverture du span dans `generate()` sous
+    # `with propagate_attributes(user_id=user_id):` et accepter de perdre le RAG.
+    _lf_trace = _langfuse.start_observation(
+        name="chat",
+        as_type="span",
+        input=message,
+        metadata={
+            "client_id": client_id,
+            "message_type": message_type,
+            "user_id": user_id,
+        },
+    )
+
     # Web search — Gemini avec Google Search grounding, skip RAG entièrement
     if message_type == "web_search":
         return StreamingResponse(
-            _chat_web_search_stream(system, message, user_id, client_id),
+            _chat_web_search_stream(system, message, user_id, client_id, lf_trace=_lf_trace),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -3178,25 +3461,22 @@ async def chat(body: dict, user_id: Optional[str] = None):
                 if query_words:
                     semantic_sources = {c["source_name"] for c in chunks}
                     try:
-                        all_src_rows = (
-                            sb.table("document_chunks")
-                            .select("source_name")
-                            .eq("client_id", client_id)
-                            .limit(500)
-                            .execute()
-                        )
-                        all_sources = {r["source_name"] for r in (all_src_rows.data or [])}
+                        all_sources = _client_source_names(client_id)
                         missing_kw_sources = [
                             s for s in all_sources
                             if s not in semantic_sources
                             and sum(1 for w in query_words if w in s.lower()) >= 2
                         ]
                         for src in missing_kw_sources[:3]:
+                            # is_administrative filtré ici aussi : sans ça le filet
+                            # rouvrait au RAG les pièces comptables que match_chunks
+                            # exclut, en contournant la colonne.
                             extra = (
                                 sb.table("document_chunks")
                                 .select("source_name, chunk_text, source_type, client_id, drive_modified_at, embedding")
                                 .eq("client_id", client_id)
                                 .eq("source_name", src)
+                                .eq("is_administrative", False)
                                 .limit(2)
                                 .execute()
                             )
@@ -3233,9 +3513,19 @@ async def chat(body: dict, user_id: Optional[str] = None):
                 decay = 30 if any(k in query_lower for k in temporal_keywords) else 180
 
                 for c in reranked:
-                    t = _temporal_score(c.get("drive_modified_at"), decay)
-                    c["_temporal"] = t          # conservé pour la trace uniquement
-                    c["final_score"] = 0.7 * c.get("rerank_score", 0.0) + 0.3 * t
+                    # Les chunks `session` sont des résumés générés par le modèle, insérés
+                    # sans drive_modified_at : le RPC leur substitue created_at, donc « écrit
+                    # aujourd'hui » devenait « document le plus frais » et ils raflaient le
+                    # bonus temporel maximal face aux vrais documents. Score neutre : leur
+                    # date d'écriture ne dit rien de la fraîcheur de l'information.
+                    if c.get("source_type") == "session":
+                        t = 0.5
+                    else:
+                        t = _temporal_score(c.get("drive_modified_at"), decay)
+                    r = _sigmoid(c.get("rerank_score", 0.0))
+                    c["_temporal"] = t          # conservés pour la trace uniquement
+                    c["_rerank_norm"] = r
+                    c["final_score"] = 0.7 * r + 0.3 * t
 
                 reranked.sort(key=lambda c: c["final_score"], reverse=True)
 
@@ -3294,15 +3584,23 @@ async def chat(body: dict, user_id: Optional[str] = None):
 
                 if diverse:
                     is_account_query = any(k in query_lower for k in CR_KEYWORDS)
-                    inject_threshold = -2.0 if is_account_query else -1.0
+                    inject_threshold = (
+                        inject_threshold_override
+                        if inject_threshold_override is not None
+                        else (-2.0 if is_account_query else -1.0)
+                    )
                     MAX_INJECT = 8 if is_account_query else 6
 
+                    # Le seuil porte sur le logit BRUT du cross-encoder, pas sur
+                    # final_score : -1.0 / -2.0 ont été calibrés sur cette échelle.
+                    # final_score est désormais dans [0, 1] (sigmoid) et ne s'y
+                    # compare plus — l'utiliser ici laisserait tout passer.
                     guaranteed = [c for c in diverse
                                   if c["source_name"] in safety_net_sources
-                                  and c.get("final_score", c.get("rerank_score", 0.0)) >= inject_threshold]
+                                  and c.get("rerank_score", 0.0) >= inject_threshold]
                     normal = [c for c in diverse
                               if c["source_name"] not in safety_net_sources
-                              and c.get("final_score", c.get("rerank_score", 0.0)) >= inject_threshold]
+                              and c.get("rerank_score", 0.0) >= inject_threshold]
 
                     to_inject = (guaranteed + normal)[:MAX_INJECT]
                     injected_chunks = to_inject
@@ -3361,14 +3659,26 @@ async def chat(body: dict, user_id: Optional[str] = None):
                             f"— {c['source_name']}\n{c['chunk_text']}" for c in session_chunks
                         )
                         system_with_rag += (
-                            "\n\n[Historique pertinent]\nExtraits de sessions passées liés à la question. "
-                            "Utilise-les pour enrichir ta réponse mais ne les cite pas — "
-                            "ils font partie de l'historique des échanges, pas des documents de référence."
+                            "\n\n[Historique pertinent — NON VÉRIFIÉ]\n"
+                            "Ces extraits sont des résumés de tes propres conversations passées, "
+                            "rédigés automatiquement. Ce ne sont PAS des sources : ils peuvent "
+                            "contenir des erreurs, y compris des dates ou des chiffres que tu as "
+                            "inventés lors d'un échange précédent.\n"
+                            "- Ne t'en sers que pour te rappeler le fil des échanges.\n"
+                            "- N'en tire JAMAIS un fait, une date, un chiffre ni un nom que les "
+                            "documents ci-dessus ne confirment pas.\n"
+                            "- Si l'information ne se trouve que là, dis qu'elle vient d'un échange "
+                            "précédent et qu'elle n'est pas étayée par les documents.\n"
+                            "- Ne les cite pas entre crochets — ce ne sont pas des fichiers sources."
                             "\n\n" + sess_block
                         )
 
-                    if not doc_chunks and not session_chunks:
-                        # Documents indexed but none passed the similarity threshold
+                    if not doc_chunks:
+                        # Aucun extrait documentaire retenu. Le cas `session_chunks` non
+                        # vide était le plus dangereux : le modèle ne recevait qu'un résumé
+                        # de ses propres réponses et le resservait comme un fait sourcé.
+                        # C'est ce qui a produit le « point de tracking du 29 juin 2026 »,
+                        # date absente de tous les documents Drive (27/08/2026).
                         system_with_rag += (
                             "\n\n[Disponibilité des documents]\n"
                             "Aucun extrait pertinent trouvé dans les documents indexés pour cette question. "
@@ -3535,10 +3845,35 @@ async def chat(body: dict, user_id: Optional[str] = None):
             except Exception as exc:
                 print(f"usage_logs insert error (non bloquant): {exc}")
 
+            # ── Langfuse generation span ───────────────────────────────────
+            try:
+                _lf_trace.start_observation(
+                    as_type="generation",
+                    name="gemini_stream",
+                    model=chat_model,
+                    input={"system": system_final[:3000], "message": message},
+                    output=reply_text[:3000],
+                    usage_details={"input": in_tok, "output": out_tok},
+                    metadata={
+                        "sources": [s["source_name"] for s in sources_used],
+                        "message_type": message_type,
+                        "temporal_browse": _is_temporal_browse,
+                        "cost_usd": calculate_cost(chat_model, {"input_tokens": in_tok, "output_tokens": out_tok}),
+                    },
+                ).end()
+                _lf_trace.update(output=reply_text[:3000])
+            except Exception as _lf_err:
+                print(f"langfuse chat error (non bloquant): {_lf_err}")
+
         finally:
             # Garantit que le thread s'arrête même si le client se déconnecte
             # en plein stream (GeneratorExit levé par FastAPI → finally déclenché).
             cancel_event.set()
+            try:
+                _lf_trace.end()      # v4 : la trace reste ouverte sans ça
+                _langfuse.flush()
+            except Exception:
+                pass
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers={
         "Cache-Control": "no-cache",
