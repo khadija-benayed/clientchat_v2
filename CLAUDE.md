@@ -68,9 +68,10 @@
 - **Builder le frontend** : `npm run build` → génère `dist/`
 - **Déployer le front** : `git push origin main` → GitHub Actions → `npm run build` → GitHub Pages
 - **Déployer le backend** : `git push origin main` → Cloud Build trigger → build + deploy Cloud Run automatique
-  - ⚠️ Le trigger n'est pas encore reconnecté sur `clientchat-v2-prod` (projet recréé le 27/08/2026). En attendant, déploiement manuel :
+  - Trigger : `deploy-clientchat-v2` sur `clientchat-v2-prod`, branche `^main$`, fichier `cloudbuild.yaml`
+  - Déploiement manuel de secours (si le trigger est indisponible) :
     `gcloud builds submit --config cloudbuild.yaml --project=clientchat-v2-prod --service-account="projects/clientchat-v2-prod/serviceAccounts/167005458056-compute@developer.gserviceaccount.com" .`
-    Le build part de la source **locale** : bien vérifier que le working tree est propre avant.
+    ⚠️ Contrairement au trigger, `builds submit` part de la source **locale** et non du commit poussé : vérifier que le working tree est propre avant.
 - **Backend local** : `cd backend && uvicorn main:app --reload --port 8080` (avec les vars d'env exportées)
 - **Lancer l'éval** : `cd backend && python eval/run_eval.py [--judge]` (requiert `BACKEND_URL` et `EVAL_JWT`)
 - **Tests** : aucun framework de test — vérifier manuellement dans le navigateur
