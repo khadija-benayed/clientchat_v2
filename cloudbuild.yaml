@@ -14,23 +14,21 @@
 #   --cpu-boost                : CPU max pendant le démarrage du container
 #   --concurrency 80           : requêtes simultanées par instance
 #
-# Registre & région (migration 27/08/2026) :
-#   Le projet a été supprimé puis restauré → l'ancien hôte `gcr.io/<projet>/…`
-#   reste bloqué en "project has been deleted" et ne peut plus servir d'images.
-#   Les images sont désormais poussées vers Artifact Registry, dépôt `clientchat`
-#   en europe-west9 (Paris), et Cloud Run déploie dans cette même région.
-#   Les `gcr.io/cloud-builders/…` ci-dessous sont les images publiques de Google
-#   (builders) — elles ne sont pas concernées, ne pas les modifier.
+# Identité & secrets :
+#   --service-account / --set-env-vars / --set-secrets sont explicites ci-dessous
+#   et doivent le rester. `gcloud run deploy` ne recopie la config de la révision
+#   précédente que sur un service DÉJÀ existant ; un service neuf (recréé, ou
+#   déployé dans une nouvelle région) démarrerait sans secrets ni identité.
 
 steps:
   # 1. Build l'image Docker
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'europe-west9-docker.pkg.dev/$PROJECT_ID/clientchat/clientchat-v2', '.']
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/clientchat-v2', '.']
     dir: 'backend'
 
   # 2. Push vers le registre
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'europe-west9-docker.pkg.dev/$PROJECT_ID/clientchat/clientchat-v2']
+    args: ['push', 'gcr.io/$PROJECT_ID/clientchat-v2']
 
   # 3. Déploie sur Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -40,18 +38,16 @@ steps:
       - 'deploy'
       - 'clientchat-v2'
       - '--image'
-      - 'europe-west9-docker.pkg.dev/$PROJECT_ID/clientchat/clientchat-v2'
+      - 'gcr.io/$PROJECT_ID/clientchat-v2'
       - '--region'
-      - 'europe-west9'
+      - 'europe-west1'
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated'
       # ── Identité & config runtime ──────────────────────────────────────
-      # OBLIGATOIRE depuis le passage à europe-west9 : c'est un service Cloud Run
-      # neuf, il n'hérite d'aucune révision précédente. Sans ces trois flags, le
-      # conteneur démarre sans secrets ni compte de service et le backend meurt
-      # au boot. (En europe-west1 ils étaient implicites : `gcloud run deploy`
-      # recopiait la config de la révision d'avant.)
+      # Explicites volontairement : ils étaient jusqu'ici hérités en silence de
+      # la révision précédente. Sur un service recréé, cet héritage n'existe pas
+      # et le conteneur démarrerait sans secrets ni compte de service.
       - '--service-account'
       - '${PROJECT_NUMBER}-compute@developer.gserviceaccount.com'
       - '--set-env-vars'
@@ -76,7 +72,7 @@ steps:
       - '--cpu-boost'
 
 images:
-  - 'europe-west9-docker.pkg.dev/$PROJECT_ID/clientchat/clientchat-v2'
+  - 'gcr.io/$PROJECT_ID/clientchat-v2'
 
 options:
   logging: CLOUD_LOGGING_ONLY
