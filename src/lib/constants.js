@@ -6,7 +6,7 @@
  */
 
 // URL du backend FastAPI sur Cloud Run
-export const BACKEND_URL = 'https://clientchat-v2-1004127157825.europe-west1.run.app';
+export const BACKEND_URL = 'https://clientchat-v2-167005458056.europe-west9.run.app';
 
 // Credentials Supabase (lecture publique — la clé "anon" n'a que les droits RLS)
 export const SB_URL = 'https://erpjerfvswesipmdqxab.supabase.co';

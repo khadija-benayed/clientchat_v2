@@ -61,7 +61,7 @@ Cette section est le point d'entrée unique si tu rejoins le projet. Elle te gui
 | Python 3.11 | Le backend est sur Python 3.11 exactement — d'autres versions peuvent poser problème |
 | Git | Pour cloner et pousser |
 | Accès au repo GitHub | `github.com/khadija-benayed/clientchat_v2` — demande l'accès à Khadija |
-| Accès au projet Google Cloud | Projet `arctic-rite-497707-s6` — demande à Khadija une invitation |
+| Accès au projet Google Cloud | Projet `clientchat-v2-prod` — demande à Khadija une invitation |
 | Accès au projet Supabase | URL : `erpjerfvswesipmdqxab.supabase.co` — demande à Khadija |
 
 ### 2. Les secrets à récupérer
@@ -126,7 +126,7 @@ export const BACKEND_URL = 'http://localhost:8080';
 |---|---|
 | Frontend qui démarre | `npm run dev` → http://localhost:5173/clientchat_v2/ |
 | Login Google qui fonctionne | Connexion avec `@smart-bees.fr` depuis l'app locale |
-| Backend Cloud Run en vie | https://clientchat-v2-1004127157825.europe-west1.run.app/health |
+| Backend Cloud Run en vie | https://clientchat-v2-167005458056.europe-west9.run.app/health |
 | Backend local en vie | http://localhost:8080/health (si lancé) |
 
 ---
@@ -181,7 +181,7 @@ Navigateur (React 18 + Vite)
         │  POST JSON  { action: '...', ... }
         │  Authorization: Bearer <jwt>
         ▼
-Cloud Run — FastAPI Python  (clientchat-v2, europe-west1)
+Cloud Run — FastAPI Python  (clientchat-v2, europe-west9)
   ├── auth_middleware : vérifie JWT via sb.auth.get_user()
   ├── sentence-transformers (embeddings locaux, chargés au démarrage)
   ├── google.generativeai SDK (Gemini 2.5 Flash / Pro)
@@ -477,7 +477,7 @@ RETURNS TABLE (id, source_name, source_type, chunk_text, similarity)
 
 ## 7. API Backend — Actions disponibles
 
-Toutes les requêtes : `POST https://clientchat-v2-1004127157825.europe-west1.run.app`
+Toutes les requêtes : `POST https://clientchat-v2-167005458056.europe-west9.run.app`
 Headers : `Content-Type: application/json` + `Authorization: Bearer <jwt>`
 
 | Action | Paramètres principaux | Réponse |
@@ -604,16 +604,16 @@ git push origin main
 
 ```bash
 git push origin main
-# → Cloud Build trigger (projet arctic-rite-497707-s6) détecte le push
-# → docker build -t gcr.io/arctic-rite-497707-s6/clientchat-v2 ./backend
-# → Push image vers GCR
-# → gcloud run deploy clientchat-v2 --region europe-west1
+# → Cloud Build trigger (projet clientchat-v2-prod) détecte le push
+# → docker build -t europe-west9-docker.pkg.dev/clientchat-v2-prod/clientchat/clientchat-v2 ./backend
+# → Push image vers Artifact Registry (dépôt `clientchat`, europe-west9)
+# → gcloud run deploy clientchat-v2 --region europe-west9
 # → Nouvelle révision active en ~3-5 min
 ```
 
 **Infra Cloud Run :**
-- Service : `clientchat-v2` | Projet GCP : `arctic-rite-497707-s6`
-- Région : `europe-west1` | Image : `gcr.io/arctic-rite-497707-s6/clientchat-v2`
+- Service : `clientchat-v2` | Projet GCP : `clientchat-v2-prod`
+- Région : `europe-west9` (Paris) | Image : `europe-west9-docker.pkg.dev/clientchat-v2-prod/clientchat/clientchat-v2`
 - Mémoire : 8 Gi | CPU : 2 | Min instances : 0 | Max instances : 3
 
 > **Note cold start** : avec Min instances = 0, le backend "dort" si personne ne l'utilise. UptimeRobot ping `/health` toutes les 5 min pour éviter un cold start de ~30s.
@@ -703,7 +703,7 @@ Le backend Cloud Run n'accepte que les origines connues. Pour dev local, lance l
 
 ### Le déploiement Cloud Run échoue (build timeout)
 
-La bake du modèle dans le Docker (~500 MB) peut dépasser le timeout par défaut de Cloud Build. Vérifie les logs dans la console Google Cloud (projet `arctic-rite-497707-s6` → Cloud Build → Historique).
+La bake du modèle dans le Docker (~500 MB) peut dépasser le timeout par défaut de Cloud Build. Vérifie les logs dans la console Google Cloud (projet `clientchat-v2-prod` → Cloud Build → Historique).
 
 ### Réponses lentes (~30s) sur l'app de production
 

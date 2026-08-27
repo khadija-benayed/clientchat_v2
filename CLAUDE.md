@@ -21,7 +21,7 @@
   - Les deux modèles sont baked dans le Docker au build (cold start ~2s)
 - **Stockage documents** : Google Drive API v3 (service account) — export via backend Python
 - **Déploiement front** : GitHub Pages (push sur `main` → CI → `npm run build` → `dist/`)
-- **Déploiement backend** : Cloud Build (`cloudbuild.yaml`, timeout 300s) → Docker build → Cloud Run `clientchat-v2` (europe-west1)
+- **Déploiement backend** : Cloud Build (`cloudbuild.yaml`, timeout 300s) → Docker build → Cloud Run `clientchat-v2` (europe-west9)
 - **CORS** : backend accepte uniquement `https://khadija-benayed.github.io`
 
 ## Architecture des fichiers
