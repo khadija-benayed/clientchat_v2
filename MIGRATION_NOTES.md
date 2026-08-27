@@ -214,6 +214,22 @@ Le dernier était instructif : `source_recall` OK, `faithful` 1.00, mais 2 point
 
 Sans les métriques de phase 2, ce défaut serait resté invisible — `source_recall` était vert.
 
+### La leçon la plus coûteuse — le banc de mesure n'était pas reproductible
+
+Après le correctif de complétude, deux passes du même testset donnaient : `correctness` 15/19 → 17/19, `must_contain` 9/10 → 8/10, `faithful` 19/19 → 18/19. Tentant d'y lire une amélioration et deux régressions. **Ce n'était que du bruit.**
+
+Le correctif ne se déclenchait que sur un cas sur 33, mesuré. Or six cas avaient bougé, dont :
+
+- `az-app-ga4` — réponse passée de « **Le** problème de segmentation… » à « **Un** problème de segmentation… », donc `must_contain` OK→KO. `correctness` et `source_recall` identiques. Un article défini.
+- `az-point-tracking-19juin` — les deux passes s'abstiennent, `source_recall` KO les deux fois, et le juge note **0.00 puis 1.00** le même comportement.
+- `az-cnil-deadline`, `az-add_to_cart-pdm`, `az-attribution-modele` — mêmes réponses, scores du juge à ±0.3 / ±0.5.
+
+Cause : `main.py` ne fixait aucune température pour la réponse du chat. HyDE était à 0, le juge à 0, mais la génération elle-même tournait au défaut de Gemini — donc un texte différent à chaque passe, ce qui faisait varier les checks exacts *et* l'entrée du juge, et sa notation en cascade.
+
+Correctif : paramètre `temperature` dans le body du chat (production l'omet), et `run_eval.py` envoie 0 par défaut. La contrepartie est assumée : l'éval mesure la capacité du pipeline, pas la variance que la production ajoute par-dessus. Un banc de mesure doit être reproductible avant d'être représentatif.
+
+**Conséquence rétroactive sur ce document** : les métriques de retrieval — `source_recall`, `abstention` — restent fiables, elles ne dépendent pas de la génération, et elles n'ont pas bougé d'un iota entre les deux passes. C'est sur `source_recall` que reposait l'attribution de la régression du fix 6, avec en plus une explication mécanique dans la table des scores : elle tient. En revanche le « `faithful` 19/19 » annoncé plus haut comme le chiffre de la journée était une passe chanceuse : la suivante donnait 18/19 sur un cas que rien n'avait touché.
+
 ### Ce que Langfuse a révélé au passage
 
 `/health` renvoie `langfuse_enabled: false` en production. Ce n'est pas une régression : aucun secret Langfuse n'existe dans Secret Manager (`clientchat-v2-prod` n'a que `ANTHROPIC_KEY`, `GOOGLE_API_KEY`, `GOOGLE_SA_KEY`, `SUPABASE_SERVICE_KEY`, `SUPABASE_URL`), et `cloudbuild.yaml` ne les passerait pas de toute façon. Le SDK v4 construit alors un client désactivé avec un simple avertissement, sans lever : **l'intégration tournait à vide en silence**, et l'ancien `/health` affichait `true` par-dessus.

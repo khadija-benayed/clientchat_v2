@@ -84,6 +84,17 @@
   - `EVAL_JWT` reste accepté et prioritaire, pour un token d'accès ponctuel (1 h).
   - `requests` n'est pas dans le Python système de la machine (PEP 668) : passer par un venv.
   - **Pourquoi c'est important** : tant que mesurer coûtait un aller-retour humain, la tentation de déployer sans mesurer revenait — c'est ainsi que deux correctifs de classement non validés sont partis en production le 27/08/2026.
+  - **`--temperature` vaut 0 par défaut, ne pas l'enlever.** La production laisse le défaut de Gemini ; l'éval force 0 pour être reproductible. Sans ça, deux passes du *même* build donnaient des textes différents, donc des `must_contain` et des scores de juge différents.
+
+### Quelles métriques croire
+
+| Métrique | Fiabilité | Pourquoi |
+|---|---|---|
+| `source_recall`, `abstention` | **fiables** | dépendent du retrieval, déterministe (embedding, HyDE à température 0, cross-encoder) |
+| `must_contain` | fiable **seulement** à `--temperature 0` | check de sous-chaîne exacte sur un texte généré |
+| tout le phase 2 (`correctness`, `faithful`, `fabricated`) | fiable **seulement** à `--temperature 0` | le juge est à température 0, mais son entrée est la réponse générée |
+
+Mesuré le 27/08/2026, deux passes consécutives du même build **sans** température fixée : six cas ont bougé sans qu'aucun correctif ne les touche. `az-app-ga4` basculait `must_contain` OK→KO parce que la réponse passait de « Le problème » à « Un problème » ; le juge notait 0.00 puis 1.00 la même abstention sur `az-point-tracking-19juin`. **Un delta sur ces métriques hors `--temperature 0` ne prouve rien, dans aucun des deux sens.**
 - **Tests** : aucun framework de test — vérifier manuellement dans le navigateur
 - **Avant tout déploiement backend** : `pyflakes backend/main.py | grep "undefined name"` doit être vide. `main.py` ne s'importe pas hors du conteneur (torch + sentence-transformers), donc rien d'autre n'attrape une erreur de nom — et le `try/except` large du pipeline RAG la déguise en « aucun document pertinent ». Cloud Build refuse désormais le build dans ce cas (étape 0 de `cloudbuild.yaml`), mais autant le voir avant de pousser.
 

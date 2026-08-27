@@ -114,10 +114,15 @@ THRESHOLDS = {
     "fabricated":         0.3,  # doit être INFÉRIEUR à ce seuil
 }
 
-def ask(question, client_id, mmr_threshold=None, inject_threshold=None):
+def ask(question, client_id, mmr_threshold=None, inject_threshold=None, temperature=0.0):
     """Appelle le chat (SSE) et renvoie (reply_text, [source_names], debug, injected_context)."""
-    payload = {"message": question, "client_id": client_id,
-               "system": SYSTEM, "chat_history": [], "debug": True}
+    # temperature=0 par défaut : sans elle, deux passes du MÊME build donnaient des
+    # textes différents, donc des checks exacts et des scores de juge différents. Un
+    # banc de mesure doit être reproductible avant d'être représentatif.
+    payload = {"message": question, "client_id": client_id, "system": SYSTEM,
+               "chat_history": [], "debug": True}
+    if temperature is not None:
+        payload["temperature"] = temperature
     if mmr_threshold is not None:
         payload["mmr_threshold"] = mmr_threshold
     if inject_threshold is not None:
@@ -220,6 +225,10 @@ def judge_pass(metric, value):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--judge", action="store_true", help="Active la phase 2 LLM-juge")
+    parser.add_argument("--temperature", type=float, default=0.0,
+                        help="Température de génération (défaut 0 = reproductible). "
+                             "Mettre -1 pour laisser le défaut de Gemini et retrouver la "
+                             "variance de production.")
     parser.add_argument("--inject-threshold", type=float, default=None,
                         help="Override du seuil d'injection (logit brut du cross-encoder). "
                              "Defaut backend : -1.0, ou -2.0 pour une question compte-rendu. "
@@ -238,6 +247,8 @@ def main():
         print(f"  [MMR override] mmr_threshold={args.mmr_threshold}")
     if args.inject_threshold is not None:
         print(f"  [seuil injection override] inject_threshold={args.inject_threshold}")
+    print(f"  [génération] temperature="
+          + ("défaut Gemini (non reproductible)" if args.temperature < 0 else str(args.temperature)))
 
     rows, agg, judge_agg = [], {}, {}
     for i, c in enumerate(cases):
@@ -245,7 +256,9 @@ def main():
         try:
             reply, sources, debug, injected_context = ask(c["question"], c["client_id"],
                                                           mmr_threshold=args.mmr_threshold,
-                                                          inject_threshold=args.inject_threshold)
+                                                          inject_threshold=args.inject_threshold,
+                                                          temperature=(None if args.temperature < 0
+                                                                       else args.temperature))
         except Exception as e:
             print("ERROR")
             rows.append((c["id"], {}, {}, None, None, None, f"[ERROR] {str(e)[:110]}"))

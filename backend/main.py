@@ -3198,6 +3198,21 @@ async def chat(body: dict, user_id: Optional[str] = None):
     # seuil -2.0, et que le RAG n'injectait rien malgré un classement correct.
     # None = comportement par défaut (-1.0, ou -2.0 pour une question compte-rendu).
     inject_threshold_override = float(body["inject_threshold"]) if "inject_threshold" in body else None
+    # Température de la réponse. Omise en production : on garde le défaut de Gemini.
+    #
+    # L'éval envoie 0 pour rendre la génération reproductible. Sans ça, deux passes
+    # produisaient des textes différents, ce qui faisait varier les checks exacts ET
+    # l'entrée du LLM-juge — donc ses scores en cascade. Mesuré le 27/08/2026 : sur
+    # deux passes consécutives d'un même build, `az-app-ga4` basculait must_contain
+    # OK→KO parce que la réponse passait de « Le problème » à « Un problème », et le
+    # juge notait 0.00 puis 1.00 la même abstention sur `az-point-tracking-19juin`.
+    # Six cas bougeaient sur des requêtes qu'aucun correctif ne touchait : impossible
+    # de distinguer une régression du bruit.
+    #
+    # Contrepartie assumée : l'éval mesure la capacité du pipeline, pas la variance
+    # que la production ajoute par-dessus. C'est ce qu'on veut d'un banc de mesure.
+    _temp_raw = body.get("temperature")
+    temperature = max(0.0, min(2.0, float(_temp_raw))) if _temp_raw is not None else None
 
     # Taille max : un prompt légitime peut atteindre ~120k chars (80k docs + tasks + context).
     # Ces limites empêchent l'abus de ressources sans bloquer aucun usage normal.
@@ -3893,12 +3908,16 @@ async def chat(body: dict, user_id: Optional[str] = None):
         # proprement sans laisser la connexion Gemini ouverte inutilement.
         cancel_event = threading.Event()
 
+        _gen_config: dict = {"max_output_tokens": max_tokens}
+        if temperature is not None:
+            _gen_config["temperature"] = temperature
+
         def _sync_stream():
             try:
                 gm = genai.GenerativeModel(
                     model_name=chat_model,
                     system_instruction=system_final,
-                    generation_config={"max_output_tokens": max_tokens},
+                    generation_config=_gen_config,
                     safety_settings=_SAFETY_OFF,
                 )
                 resp = gm.generate_content(contents, stream=True,
