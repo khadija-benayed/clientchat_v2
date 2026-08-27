@@ -260,43 +260,25 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 
 
 def _rerank_chunks(query: str, chunks: list[dict]) -> list[dict]:
-    """Score (query, « nom [date]\n texte ») pairs with the cross-encoder, sorted desc.
+    """Score (query, chunk_text) pairs with the cross-encoder, return sorted by score desc.
     Falls back to input order if reranker is unavailable.
 
-    Le nom de la source fait partie de la paire, comme le préfixe d'`index_source` fait
-    partie de ce qui est embeddé et comme `source_name` fait partie du tsvector depuis
-    la migration 20260827c. Sans lui le reranker était le dernier étage aveugle au nom
-    du fichier, et c'est ce qui restait cassé après ces deux correctifs :
+    ⚠️ NE PAS préfixer la paire du nom de la source ni de sa date. Tenté le 27/08/2026,
+    annulé le jour même sur mesure : les noms de fichiers portent des dates, donc toute
+    question mentionnant une année s'appariait lexicalement à tous les documents de cette
+    année. Sur « Y a-t-il une dimension personnalisée GA4 pour différencier les pays côté
+    web en 2026 ? », les six notes de suivi datées de 2026 sont passées de -3.6/+2.6 à
+    +1.1/+6.6 et ont éjecté la source attendue, « Dimensions personnalisées GA4 », du
+    rang 3 au rang 7 — hors des emplacements d'injection. source_recall 14/15 → 13/15.
 
-    « que s'est-il passé lors du dernier point de tracking ? » plaçait bien
-    « Notes point suivi tracking 31/07/2026 » au rang 1 du pool, mais avec un logit de
-    -4.83 — mesuré le 27/08/2026. Or sur le testset le minimum des cas « answer » est
-    -0.96 et la médiane des cas « abstain » -1.23 : le cross-encoder classait donc cette
-    question parmi celles auxquelles il faut s'abstenir de répondre, et le seuil
-    d'injection la rejetait à juste titre selon lui. La pertinence de ces notes ne vit
-    pas dans leur corps — des puces techniques sans date ni intitulé — mais dans leur
-    nom, que le reranker ne voyait pas.
-
-    Ne PAS compenser en baissant le seuil d'injection : mesuré, il tombe pile sur la
-    frontière answer/abstain, et le descendre à -4 injecterait des documents dans 12 des
-    14 cas d'abstention du testset.
+    Le nom de la source est déjà exploité là où il est utile et sans effet de bord :
+    dans l'embedding (préfixe d'index_source), dans le tsvector (migration 20260827c)
+    et dans la sélection du plus récent d'une série (_series_source). Le reranker, lui,
+    doit juger le TEXTE — c'est ce qu'il sait faire.
     """
     if reranker is None or not chunks:
         return chunks
-
-    def _pair_text(c: dict) -> str:
-        name = (c.get("source_name") or "")[:60]
-        date_tag = ""
-        raw = c.get("drive_modified_at")
-        if raw:
-            try:
-                date_tag = f" [{datetime.fromisoformat(str(raw).replace('Z', '+00:00')).strftime('%d/%m/%Y')}]"
-            except Exception:
-                pass
-        prefix = f"{name}{date_tag}\n" if name else ""
-        return prefix + (c.get("chunk_text") or "")
-
-    pairs = [(query, _pair_text(c)) for c in chunks]
+    pairs = [(query, c["chunk_text"]) for c in chunks]
     scores = reranker.predict(pairs)
     return sorted(
         [dict(c, rerank_score=float(s)) for c, s in zip(chunks, scores)],

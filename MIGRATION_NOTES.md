@@ -93,7 +93,7 @@ Aggravant : les chunks `session` sont insérés sans `drive_modified_at`, le RPC
 | 3 | `fts` généré sur `source_name + chunk_text` | `20260827c_fts_source_name.sql` |
 | 4 | Colonne `doc_date`, extraite du nom de fichier, prioritaire dans le score temporel | `20260827d_doc_date.sql`, `_doc_date_from_name()` |
 | 5 | ~~`final_score = 0.7 × sigmoid(rerank) + 0.3 × temporel`~~ — **annulé, voir ci-dessous** | `main.py` |
-| 6 | Le cross-encoder reçoit le nom de la source dans la paire | `_rerank_chunks()` |
+| 6 | ~~Le cross-encoder reçoit le nom de la source dans la paire~~ — **annulé, voir ci-dessous** | `_rerank_chunks()` |
 | 7 | « le dernier X » sélectionne le plus récent d'une série datée | `main.py` |
 | — | Purge des lignes empoisonnées | `oneshot/20260827_purge_boucle_session.sql` |
 
@@ -154,6 +154,47 @@ Le fond du problème : un cross-encoder note la proximité d'un texte à une que
 Vérifié avant déploiement, sur les 33 cas : le 7 ne se déclenche que sur **1 cas**, `az-dernier-point-tracking`, et sélectionne bien `Notes point suivi tracking 31/07/2026`. **Aucun cas d'abstention ne le déclenche** — c'est ce qui compte, puisqu'il contourne le seuil qui protège l'abstention.
 
 En complément, une règle de fiabilité ajoutée au prompt traite la cause directe de l'affirmation fausse : le modèle avait déduit « c'est le dernier » du seul fait qu'on lui avait fourni ce document. Les extraits sont désormais présentés comme une sélection et non un inventaire, avec interdiction explicite d'en inférer une position dans une série.
+
+### Le 6 annulé aussi — mesuré sur les 33 cas
+
+Deuxième correctif retiré le jour même, pour la même raison que le 5 : un changement global de classement dont le bénéfice était réel mais l'effet de bord plus coûteux.
+
+Préfixer la paire du cross-encoder de `nom [jj/mm/aaaa]` crée un appariement lexical parasite : les noms de fichiers portent des dates, donc **toute question mentionnant une année s'apparie à tous les documents de cette année**. Sur `az-GA4-proprietes` — « Y a-t-il une dimension personnalisée GA4 pour différencier les pays côté web en 2026 ? » :
+
+| source | avant | après |
+|---|---|---|
+| Notes point suivi tracking 10/07/2026 | 2.64 | **6.625** |
+| Notes point suivi tracking 24/04/2026 | -3.577 | **+2.431** |
+| Notes point suivi tracking 31/07/2026 | -1.818 | **+2.115** |
+| `Dimensions personnalisées GA4` (attendu) | -0.172 | +0.885 |
+
+La source attendue monte elle aussi, mais les six notes datées la doublent sur le seul mot « 2026 » et la font passer du rang 3 au rang 7 — hors des 6 emplacements d'injection. `source_recall` 14/15 → 13/15.
+
+Décisif pour la décision : **le 6 n'apporte rien que le 7 ne fasse déjà.** Le 7 sélectionne le document par nom et `doc_date` en SQL, indépendamment du reranker, et l'injecte sans condition de score — le cas cible passe même avec le 31/07 à -4.83. Entre un changement global avec régression mesurée et un mécanisme ciblé sans, le choix est fait.
+
+Le nom de la source reste exploité là où il est utile et sans effet de bord : dans l'embedding (préfixe d'`index_source`), dans le tsvector (migration `c`) et dans `_series_source`. Le reranker juge le texte, c'est ce qu'il sait faire.
+
+### Scorecard finale — 33 cas, après annulation des 5 et 6
+
+| Métrique | Référence 27/08 | Après |
+|---|---|---|
+| `abstention` | 14/14 | **14/14** |
+| `must_contain` | 9/10 | **9/10** |
+| `source_recall` (cas communs) | 14/15 | **à remesurer** |
+| `az-dernier-point-tracking` | — | **passe** |
+
+Le bug d'origine est corrigé et l'abstention n'a jamais bougé, à aucune étape. Reste à confirmer que l'annulation du 6 ramène bien `source_recall` à 14/15.
+
+### Manque connu, non traité — question datée en lettres
+
+`az-point-tracking-19juin` (« qu'est-ce qui a été abordé au point de suivi tracking du 19 juin 2026 ? ») échoue : il ramène les notes du 10/07, 24/04 et 31/07, pas celle du 19/06. Le parser PostgreSQL garde `19/06/2026` en un seul lexème alors que la question produit `juin` + `2026` — aucun appariement possible :
+
+```sql
+SELECT to_tsvector('simple','Notes point suivi tracking 19/06/2026')
+       @@ websearch_to_tsquery('simple','juin');   -- false
+```
+
+Le `doc_date` existe pourtant en base. Il faudrait normaliser les dates de la question (« 19 juin 2026 » → `19/06/2026`) et filtrer sur `doc_date`, dans le même esprit que `_series_source` mais pour une date explicite au lieu de « la plus récente ». Ce n'est pas une régression — c'est un manque que le nouveau cas de test met au jour, et qui restera visible tant qu'il échoue.
 
 ### Reste à faire
 
