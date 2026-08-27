@@ -4,22 +4,33 @@
 # NE PAS modifier les settings dans l'UI Cloud Run — un redéploiement les écrase.
 #
 # Settings clés :
-#   --cpu 2 / --memory 2Gi    : sentence-transformers (mpnet + cross-encoder) en mémoire
-#   --min-instances 1          : évite le cold start (chargement modèles ~30s)
-#   --max-instances 20         : plafond de scaling
+#   --cpu 2 / --memory 8Gi    : sentence-transformers (mpnet + cross-encoder) en mémoire
+#   --min-instances 0          : scale-to-zero — 0 € quand personne n'utilise l'app.
+#                                Contrepartie : ~80 s de cold start sur la 1re requête
+#                                (chargement des 2 modèles). Repasser à 1 coûte ~0,60 $/j.
+#   --max-instances 3          : garde-fou coût — usage solo, 3 conteneurs suffisent.
+#                                À 20, une boucle pouvait allumer 20×8 GiB d'un coup.
 #   --timeout 300              : requêtes longues (digest, sync_drive)
 #   --cpu-boost                : CPU max pendant le démarrage du container
 #   --concurrency 80           : requêtes simultanées par instance
+#
+# Registre & région (migration 27/08/2026) :
+#   Le projet a été supprimé puis restauré → l'ancien hôte `gcr.io/<projet>/…`
+#   reste bloqué en "project has been deleted" et ne peut plus servir d'images.
+#   Les images sont désormais poussées vers Artifact Registry, dépôt `clientchat`
+#   en europe-west9 (Paris), et Cloud Run déploie dans cette même région.
+#   Les `gcr.io/cloud-builders/…` ci-dessous sont les images publiques de Google
+#   (builders) — elles ne sont pas concernées, ne pas les modifier.
 
 steps:
   # 1. Build l'image Docker
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/clientchat-v2', '.']
+    args: ['build', '-t', 'europe-west9-docker.pkg.dev/$PROJECT_ID/clientchat/clientchat-v2', '.']
     dir: 'backend'
 
   # 2. Push vers le registre
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/clientchat-v2']
+    args: ['push', 'europe-west9-docker.pkg.dev/$PROJECT_ID/clientchat/clientchat-v2']
 
   # 3. Déploie sur Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -29,12 +40,24 @@ steps:
       - 'deploy'
       - 'clientchat-v2'
       - '--image'
-      - 'gcr.io/$PROJECT_ID/clientchat-v2'
+      - 'europe-west9-docker.pkg.dev/$PROJECT_ID/clientchat/clientchat-v2'
       - '--region'
-      - 'europe-west1'
+      - 'europe-west9'
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated'
+      # ── Identité & config runtime ──────────────────────────────────────
+      # OBLIGATOIRE depuis le passage à europe-west9 : c'est un service Cloud Run
+      # neuf, il n'hérite d'aucune révision précédente. Sans ces trois flags, le
+      # conteneur démarre sans secrets ni compte de service et le backend meurt
+      # au boot. (En europe-west1 ils étaient implicites : `gcloud run deploy`
+      # recopiait la config de la révision d'avant.)
+      - '--service-account'
+      - '${PROJECT_NUMBER}-compute@developer.gserviceaccount.com'
+      - '--set-env-vars'
+      - 'SUPABASE_URL=https://erpjerfvswesipmdqxab.supabase.co,TRANSFORMERS_OFFLINE=1,HF_DATASETS_OFFLINE=1'
+      - '--set-secrets'
+      - 'GOOGLE_API_KEY=GOOGLE_API_KEY:latest,SUPABASE_SERVICE_KEY=SUPABASE_SERVICE_KEY:latest,ANTHROPIC_KEY=ANTHROPIC_KEY:latest,GOOGLE_SA_KEY=GOOGLE_SA_KEY:latest'
       # ── Resources ──
       - '--cpu'
       - '2'
@@ -42,9 +65,9 @@ steps:
       - '8Gi'
       # ── Scaling ──
       - '--min-instances'
-      - '1'
+      - '0'
       - '--max-instances'
-      - '20'
+      - '3'
       - '--concurrency'
       - '80'
       # ── Timeouts & startup ──
@@ -53,7 +76,7 @@ steps:
       - '--cpu-boost'
 
 images:
-  - 'gcr.io/$PROJECT_ID/clientchat-v2'
+  - 'europe-west9-docker.pkg.dev/$PROJECT_ID/clientchat/clientchat-v2'
 
 options:
   logging: CLOUD_LOGGING_ONLY

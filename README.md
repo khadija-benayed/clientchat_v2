@@ -181,7 +181,7 @@ Navigateur (React 18 + Vite)
         │  POST JSON  { action: '...', ... }
         │  Authorization: Bearer <jwt>
         ▼
-Cloud Run — FastAPI Python  (clientchat-v2, europe-west1)
+Cloud Run — FastAPI Python  (clientchat-v2, europe-west9)
   ├── auth_middleware : vérifie JWT via sb.auth.get_user()
   ├── sentence-transformers (embeddings locaux, chargés au démarrage)
   ├── google.generativeai SDK (Gemini 2.5 Flash / Pro)
@@ -605,16 +605,16 @@ git push origin main
 ```bash
 git push origin main
 # → Cloud Build trigger (projet arctic-rite-497707-s6) détecte le push
-# → docker build -t gcr.io/arctic-rite-497707-s6/clientchat-v2 ./backend
-# → Push image vers GCR
-# → gcloud run deploy clientchat-v2 --region europe-west1
+# → docker build -t europe-west9-docker.pkg.dev/arctic-rite-497707-s6/clientchat/clientchat-v2 ./backend
+# → Push image vers Artifact Registry (dépôt `clientchat`, europe-west9)
+# → gcloud run deploy clientchat-v2 --region europe-west9
 # → Nouvelle révision active en ~3-5 min
 ```
 
 **Infra Cloud Run :**
 - Service : `clientchat-v2` | Projet GCP : `arctic-rite-497707-s6`
-- Région : `europe-west1` | Image : `gcr.io/arctic-rite-497707-s6/clientchat-v2`
-- Mémoire : 1 Gi | CPU : 1 | Min instances : 0 | Max instances : 3
+- Région : `europe-west9` (Paris) | Image : `europe-west9-docker.pkg.dev/arctic-rite-497707-s6/clientchat/clientchat-v2`
+- Mémoire : 8 Gi | CPU : 2 | Min instances : 0 | Max instances : 3
 
 > **Note cold start** : avec Min instances = 0, le backend "dort" si personne ne l'utilise. UptimeRobot ping `/health` toutes les 5 min pour éviter un cold start de ~30s.
 
