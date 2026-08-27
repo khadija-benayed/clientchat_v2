@@ -94,10 +94,16 @@ CREATE TABLE IF NOT EXISTS document_chunks (
   source_name      text        NOT NULL,   -- nom affiché dans l'UI
   chunk_text       text        NOT NULL,
   embedding        vector(768),
-  fts              tsvector    GENERATED ALWAYS AS (to_tsvector('simple', coalesce(chunk_text, ''))) STORED,
+  fts              tsvector    GENERATED ALWAYS AS (
+                   to_tsvector('simple', coalesce(source_name, '') || ' ' || coalesce(chunk_text, ''))
+                 ) STORED,
   created_at       timestamptz             DEFAULT now(),
   last_indexed_at  timestamptz             DEFAULT now(),
-  source_id        text                    -- Google Drive file ID (stable, résistant au renommage)
+  source_id        text,                   -- Google Drive file ID (stable, résistant au renommage)
+  drive_modified_at timestamptz,           -- modifiedTime Drive : quand le FICHIER a été touché
+  doc_date         timestamptz,            -- date lue dans le NOM du fichier : de quand date le CONTENU
+                                           -- prioritaire sur drive_modified_at dans le score temporel
+  is_administrative boolean     NOT NULL DEFAULT FALSE  -- pièce comptable/financière → exclue du RAG
 );
 
 -- embedding_logs : traçabilité des indexations (CC-207)
@@ -186,10 +192,23 @@ UPDATE document_chunks
   WHERE lower(source_name) ~ '(facture|devis|bon de commande|invoice|order|avoir|nda|commande|proforma)'
     AND NOT is_administrative;
 
--- Migration : colonne FTS générée pour le hybrid search (pgvector + FTS, fusion RRF)
+-- Migration : doc_date — date portée par le nom du fichier (migration 20260827d).
+-- modifiedTime de Drive dit quand le fichier a été touché, pas de quand date son
+-- contenu : les 6 « Notes point suivi tracking » d'aroma-zone couvrent avril→juillet
+-- 2026 mais partagent toutes drive_modified_at = 2026-07-31. Le backfill depuis les
+-- noms de fichiers vit dans la migration, pas ici.
+ALTER TABLE document_chunks
+  ADD COLUMN IF NOT EXISTS doc_date timestamptz;
+
+-- Migration : colonne FTS générée pour le hybrid search (pgvector + FTS, fusion RRF).
+-- source_name EN TÊTE du tsvector (migration 20260827c) : sans lui le nom du fichier —
+-- donc son sujet et sa date — était invisible au bras mots-clés, et un fichier nommé
+-- « Notes point suivi tracking 31/07/2026 » sortait au rang FTS 279, hors du LIMIT 60.
 ALTER TABLE document_chunks
   ADD COLUMN IF NOT EXISTS fts tsvector
-    GENERATED ALWAYS AS (to_tsvector('simple', coalesce(chunk_text, ''))) STORED;
+    GENERATED ALWAYS AS (
+                   to_tsvector('simple', coalesce(source_name, '') || ' ' || coalesce(chunk_text, ''))
+                 ) STORED;
 
 -- ── Index de performance ──────────────────────────────────────────────────────
 
@@ -285,7 +304,8 @@ RETURNS TABLE (
   content     text,
   metadata    jsonb,
   rrf_score   double precision,
-  embedding   vector(768)
+  embedding   vector(768),
+  drive_modified_at timestamptz
 )
 LANGUAGE plpgsql
 STABLE
@@ -312,7 +332,8 @@ BEGIN
       dc.chunk_text                                               AS content,
       NULL::jsonb                                                  AS metadata,
       (1 - (dc.embedding <=> query_embedding))::double precision  AS rrf_score,
-      dc.embedding
+      dc.embedding,
+      COALESCE(dc.doc_date, dc.drive_modified_at, dc.created_at)  AS drive_modified_at
     FROM document_chunks dc
     WHERE (dc.client_id = p_client_id OR dc.client_id IS NULL)
       AND NOT dc.is_administrative
@@ -362,7 +383,8 @@ BEGIN
     dc.chunk_text   AS content,
     NULL::jsonb     AS metadata,
     rrf.score::double precision,
-    dc.embedding
+    dc.embedding,
+    COALESCE(dc.doc_date, dc.drive_modified_at, dc.created_at) AS drive_modified_at
   FROM        rrf
   JOIN        document_chunks dc ON dc.id = rrf.chunk_id
   ORDER BY    rrf.score DESC

@@ -207,6 +207,13 @@ Correspondances v2 → v4, si tu retrouves du vieux code :
 psql "$DATABASE_URL" -At -c "select pg_get_functiondef(oid) from pg_proc where proname='match_chunks';"
 ```
 
+**Et toute migration doit être reportée dans `seed.sql` dans le même commit.** C'est la contrepartie de la règle ci-dessus : si `seed.sql` est la source de vérité, il ne peut pas être en retard. Le 27/08/2026 il l'était de deux correctifs — son `match_chunks` ne renvoyait même pas de colonne de date, son `fts` ignorait `source_name`, et `doc_date` n'existait pas — de sorte que suivre la consigne « repartir de `seed.sql` » aurait réintroduit les régressions du jour, et qu'un environnement neuf aurait échoué dès la première indexation (`index_source` insère `doc_date`). Contrôle :
+
+```bash
+psql "$DATABASE_URL" -At -c "select string_agg(column_name,' ' order by ordinal_position) from information_schema.columns where table_name='document_chunks';"
+# doit correspondre à la définition de seed.sql
+```
+
 Toute migration qui touche le classement (`fts`, `doc_date`, pondérations) doit être encadrée d'un `backend/eval/run_eval.py --judge` avant / après, comparé sur `source_recall`.
 
 ## Variables d'environnement backend

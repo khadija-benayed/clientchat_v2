@@ -68,6 +68,13 @@ FROM   (
 ) AS x
 WHERE  document_chunks.id = x.id
   AND  x.m IS NOT NULL
+  -- Les classes de caractères admettent 00, 13-19 en mois et 00, 32-39 en jour.
+  -- Sans ce filtre, un seul nom au format américain (« Rapport 01/19/2026 ») ferait
+  -- lever make_timestamptz et annulerait TOUTE la transaction — ALTER TABLE et
+  -- redéfinition de match_chunks comprises. Le pendant Python retourne None sur
+  -- ValueError : ce garde met les deux côtés au même niveau.
+  AND  (x.m[2])::int BETWEEN 1 AND 12
+  AND  (x.m[1])::int BETWEEN 1 AND 31
   AND  document_chunks.doc_date IS NULL;
 
 -- aaaa-mm-jj — dernière occurrence
@@ -82,6 +89,8 @@ FROM   (
 ) AS x
 WHERE  document_chunks.id = x.id
   AND  x.m IS NOT NULL
+  AND  (x.m[2])::int BETWEEN 1 AND 12
+  AND  (x.m[3])::int BETWEEN 1 AND 31
   AND  document_chunks.doc_date IS NULL;
 
 -- ── match_chunks : doc_date en tête du COALESCE ─────────────────────────────

@@ -48,7 +48,12 @@ steps:
         pip install --quiet pyflakes
         # $$ et non $ : Cloud Build réserve $ à ses substitutions et échouerait
         # sur $found avec « key in the template is not a valid built-in substitution ».
-        found=$$(pyflakes main.py extract_worker.py eval/run_eval.py 2>&1 | grep "undefined name" || true)
+        # « invalid syntax » autant que « undefined name » : un fichier que Python ne
+        # peut même pas parser est strictement pire qu'un NameError, et pyflakes le
+        # signale sous un autre libellé. Le reste (imports inutilisés, f-strings sans
+        # placeholder) est du style et ne doit pas bloquer un déploiement.
+        found=$$(pyflakes main.py extract_worker.py eval/run_eval.py 2>&1 \
+                 | grep -E "undefined name|invalid syntax" || true)
         if [ -n "$$found" ]; then
           echo "✗ noms indéfinis détectés — build interrompu :"
           echo "$$found"

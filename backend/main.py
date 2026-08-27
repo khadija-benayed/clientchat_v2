@@ -62,7 +62,13 @@ _sync_state: dict = {}  # key: f"{client_id}|{folder_id}"
 try:
     from langfuse import Langfuse, observe  # noqa: F401
     _langfuse = Langfuse()
-    LANGFUSE_ENABLED = True
+    # Sans clés, le SDK v4 construit un client DÉSACTIVÉ (message d'avertissement) au
+    # lieu de lever : se fier au succès de l'import ferait afficher
+    # langfuse_enabled: true à /health alors que rien n'est enregistré, ce qui vide
+    # cette clé de son intérêt. On exige aussi les identifiants.
+    LANGFUSE_ENABLED = bool(
+        os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")
+    )
 except Exception as _lf_import_err:  # pragma: no cover — chemin de secours
     print(f"Langfuse indisponible, observabilité désactivée : {_lf_import_err}")
     LANGFUSE_ENABLED = False
@@ -318,7 +324,8 @@ def _client_source_names(client_id: str, page_size: int = 1000, max_pages: int =
     nom de fichier, censé rattraper un document nommé dans la question, était
     donc aveugle à 86 % du corpus et ne se déclenchait quasiment jamais.
 
-    `order("source_name")` rend la pagination `range()` déterministe.
+    Tri sur (source_name, id) : `source_name` seul n'est pas un ordre total — les
+    doublons peuvent se réordonner d'une page à l'autre et une source être sautée.
 
     is_administrative exclu : le filet n'a que 3 emplacements, et le fetch par source
     filtre déjà cette colonne. Sans ce filtre, une pièce comptable pouvait consommer
@@ -334,6 +341,7 @@ def _client_source_names(client_id: str, page_size: int = 1000, max_pages: int =
             .eq("is_administrative", False)
             .not_.is_("source_name", "null")
             .order("source_name")
+            .order("id")
             .range(start, start + page_size - 1)
             .execute()
         ).data or []
@@ -3167,9 +3175,9 @@ async def _chat_web_search_stream(system: str, message: str, user_id: Optional[s
     finally:
         cancel_event.set()
         try:
+            # Pas de flush() ici non plus — voir le finally de chat().
             if lf_trace:
                 lf_trace.end()
-            _langfuse.flush()
         except Exception:
             pass
 
@@ -3444,7 +3452,8 @@ async def chat(body: dict, user_id: Optional[str] = None):
                             # exclut, en contournant la colonne.
                             extra = (
                                 sb.table("document_chunks")
-                                .select("source_name, chunk_text, source_type, client_id, drive_modified_at, embedding")
+                                .select("source_name, chunk_text, source_type, client_id, "
+                                        "drive_modified_at, doc_date, embedding")
                                 .eq("client_id", client_id)
                                 .eq("source_name", src)
                                 .eq("is_administrative", False)
@@ -3496,7 +3505,14 @@ async def chat(body: dict, user_id: Optional[str] = None):
                         # la question sur au moins 2 mots est le plus récent de sa série.
                         for _row in _dated_rows:
                             _name = _row.get("source_name") or ""
-                            if sum(1 for w in query_words if w in _name.lower()) >= 2:
+                            # Intersection de MOTS, pas de sous-chaînes. Le filet mots-clés
+                            # se contente d'un `w in nom` — tolérable, il ne fait que
+                            # proposer des candidats à un reranking. Ici la source retenue
+                            # est injectée SANS condition de score et accompagnée d'une
+                            # affirmation dans le prompt, donc « point » ne doit pas
+                            # s'apparier à « pointage » ni « plan » à « planning ».
+                            _name_words = set(re.findall(r'\w{4,}', _name.lower()))
+                            if len(query_words & _name_words) >= 2:
                                 _series_source, _series_date = _name, _row.get("doc_date")
                                 break
                     except Exception as _ser_err:
@@ -3510,6 +3526,8 @@ async def chat(body: dict, user_id: Optional[str] = None):
                                     "drive_modified_at, doc_date, embedding")
                             .eq("client_id", client_id)
                             .eq("source_name", _series_source)
+                            .eq("is_administrative", False)
+                            .order("id")
                             .limit(4)
                             .execute()
                         )
@@ -3550,7 +3568,15 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     if c.get("source_type") == "session":
                         t = 0.5
                     else:
-                        t = _temporal_score(c.get("drive_modified_at"), decay)
+                        # doc_date d'abord. Le RPC renvoie déjà COALESCE(doc_date, …) sous
+                        # la clé drive_modified_at, mais les chunks ramenés par fetch direct
+                        # (série, filet mots-clés) portent la colonne brute : sans ce
+                        # COALESCE côté Python, les 6 notes de suivi — toutes à
+                        # drive_modified_at = 2026-07-31 — retrouvaient un terme temporel
+                        # identique, ce que doc_date existe précisément pour éviter.
+                        t = _temporal_score(
+                            c.get("doc_date") or c.get("drive_modified_at"), decay
+                        )
                     # ⚠️ NE PAS normaliser le logit par sigmoid. Tenté le 27/08/2026,
                     # annulé le jour même sur mesure en production : sigmoid écrase tout
                     # le régime négatif vers 0 (sigmoid(-9.6) ≈ 7e-5), le terme 0.7×r
@@ -3644,6 +3670,12 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     # document, mais un quart de son contenu, ce qui ne répond pas à
                     # « que s'est-il passé lors de… ». `reranked` est déjà post-MMR, les
                     # quasi-doublons sont donc écartés.
+                    #
+                    # Exclure _series_source de guaranteed/normal ne perd rien : `diverse`
+                    # est construit À PARTIR de `reranked`, donc diverse ⊆ reranked. Ce que
+                    # normal aurait pu apporter pour cette source est déjà couvert ici, et
+                    # sans seuil de score. Si MMR a écarté tous ses chunks, ils sont absents
+                    # des deux listes de la même façon.
                     series_chunks = ([c for c in reranked if c["source_name"] == _series_source][:4]
                                      if _series_source else [])
                     guaranteed = [c for c in diverse
@@ -3708,11 +3740,18 @@ async def chat(body: dict, user_id: Optional[str] = None):
                             "trouves pas dans les sources.\n"
                             "- Quand tu utilises une information issue d'un extrait, cite le nom du fichier "
                             "source entre crochets, ex : [NomDuFichier].\n"
-                            "- Les extraits sont une SÉLECTION, pas un inventaire. N'en déduis jamais qu'un "
-                            "document est le plus récent, le premier ou le seul de sa série au motif qu'il "
-                            "t'a été fourni. Si la question porte sur « le dernier » quelque chose et que "
-                            "tu ne vois qu'un document daté, dis de quand il date et précise que tu ne peux "
-                            "pas garantir qu'il s'agit du plus récent.\n\n"
+                            # Cette règle contredirait l'indication de série juste au-dessus,
+                            # qui affirme précisément quel document est le plus récent. On ne
+                            # la pose donc que lorsque cette indication est absente, sinon le
+                            # modèle prend des précautions sur la question même à laquelle le
+                            # mécanisme sert à répondre.
+                            + ("" if _series_hint else
+                               "- Les extraits sont une SÉLECTION, pas un inventaire. N'en déduis jamais qu'un "
+                               "document est le plus récent, le premier ou le seul de sa série au motif qu'il "
+                               "t'a été fourni. Si la question porte sur « le dernier » quelque chose et que "
+                               "tu ne vois qu'un document daté, dis de quand il date et précise que tu ne peux "
+                               "pas garantir qu'il s'agit du plus récent.\n")
+                            + "\n"
                             + doc_block
                         )
                         sources_used = [
@@ -3792,6 +3831,12 @@ async def chat(body: dict, user_id: Optional[str] = None):
     if file_data and file_data.get("data") and file_data.get("mediaType"):
         allowed_types = ["application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp"]
         if file_data["mediaType"] not in allowed_types:
+            # Ce return court-circuite la création de generate() : sans ce .end(),
+            # le span racine ouvert plus haut resterait ouvert indéfiniment.
+            try:
+                _lf_trace.end()
+            except Exception:
+                pass
             return JSONResponse(
                 {"error": f"Type de fichier non supporté : {file_data['mediaType']}"},
                 status_code=400,
@@ -3948,8 +3993,13 @@ async def chat(body: dict, user_id: Optional[str] = None):
             # en plein stream (GeneratorExit levé par FastAPI → finally déclenché).
             cancel_event.set()
             try:
+                # .end() est local (écriture dans le buffer OTel), pas de réseau.
+                # Pas de flush() ici : c'est un aller-retour réseau BLOQUANT, et on est
+                # dans le finally d'un générateur async — il gèlerait la boucle
+                # d'événements pour toutes les requêtes servies par l'instance, exactement
+                # le défaut corrigé pour HyDE en sortant generate_content vers un executor.
+                # Le SDK vide son buffer tout seul, et lifespan flushe au shutdown.
                 _lf_trace.end()      # v4 : la trace reste ouverte sans ça
-                _langfuse.flush()
             except Exception:
                 pass
 

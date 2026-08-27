@@ -145,7 +145,7 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, currentU
     const systemPrompt =
       buildL1({ mStr, mFull, mInitials, maxId, matchContext, tasks, isAction: _isAction, isTaskQuery: _isTaskQuery, currentMember }) +
       (_needL2 ? buildL2(ctxForPrompt, summaries, docCache, _needDocs) : '') +
-      (_needL3 ? buildL3(summaries) : '');
+      (_needL3 ? buildL3(summaries, !_needL2) : '');
 
     // ── Chat history pour Claude (multi-turn) ─────────────────────────────
     const chatHistory = messagesRef.current
@@ -693,14 +693,17 @@ function buildWebSearchSystem(ctxForPrompt) {
     + 'Réponds en français de façon précise et structurée.';
 }
 
-function buildL3(summaries) {
+function buildL3(summaries, withCaveat) {
   if (summaries.length <= 3) return '';
   const older = summaries.slice(0, -3);
   const lines = older.map(s => {
     const d = new Date(s.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
     return '— Session du ' + d + ' :\n' + s.summary_text;
   });
-  return '\n\n[Sessions plus anciennes — NON VÉRIFIÉ]\n' + SESSION_MEM_CAVEAT + '\n' + lines.join('\n\n');
+  // Le cadrage n'est émis qu'une fois : buildL2 le pose déjà dès qu'il a des
+  // résumés, et buildL3 ne s'exécute que s'il y en a plus de 3 — donc L2 en a.
+  return '\n\n[Sessions plus anciennes — NON VÉRIFIÉ]\n'
+    + (withCaveat ? SESSION_MEM_CAVEAT + '\n' : '') + lines.join('\n\n');
 }
 
 /**
