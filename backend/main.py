@@ -3255,6 +3255,7 @@ async def chat(body: dict, user_id: Optional[str] = None):
     reranked: list[dict] = []
     mmr_dropped_count = 0
     _is_temporal_browse = False
+    rag_error: Optional[str] = None
 
     # Skip RAG entirely for task actions — they only need the task list, not documents.
     if message and message_type not in ("task_action", "task_query"):
@@ -3411,6 +3412,11 @@ async def chat(body: dict, user_id: Optional[str] = None):
                 # évite qu'un stopword absent des documents bloque tout le bras FTS.
                 query_words = {w.lower() for w in re.findall(r'\w{4,}', message)}
                 _query_text = ' OR '.join(query_words) if query_words else None
+                # Défini ici et pas plus bas : la sélection « le dernier X » l'utilise
+                # avant le reranking. Le 27/08/2026, l'avoir laissé après a produit un
+                # NameError sur CHAQUE requête, avalé par le try/except du pipeline —
+                # côté utilisateur ça ressemblait à « aucun document pertinent ».
+                query_lower = message.lower()
 
                 result = sb.rpc("match_chunks", {
                     "query_embedding": query_emb,
@@ -3546,7 +3552,6 @@ async def chat(body: dict, user_id: Optional[str] = None):
                 reranked = await loop.run_in_executor(_RERANK_EXECUTOR, _rerank_chunks, message, chunks)
 
                 temporal_keywords = {"récent", "dernier", "actuelle", "actuel", "aujourd", "maintenant", "nouveau", "dernière"}
-                query_lower = message.lower()
                 decay = 30 if any(k in query_lower for k in temporal_keywords) else 180
 
                 for c in reranked:
@@ -3768,8 +3773,14 @@ async def chat(body: dict, user_id: Optional[str] = None):
                         "propose plutôt à l'utilisateur de préciser ou d'indiquer le document concerné."
                     )
         except Exception as e:
+            # Ce except large transforme n'importe quelle erreur de code en « aucun
+            # document pertinent » côté utilisateur — un NameError est passé comme ça
+            # en production le 27/08/2026. On garde le comportement non bloquant, mais
+            # l'erreur devient visible dans le payload debug et dans la trace.
+            rag_error = f"{type(e).__name__}: {e}"
             print(f"RAG pipeline error (non bloquant): {e}")
             print(traceback.format_exc())
+            _rag_log(f"⚠ PIPELINE EN ERREUR — {rag_error}")
 
     # Build history for Gemini — "u"→"user", "a"→"model"; must start with user
     raw_hist = list(chat_history)
@@ -3870,7 +3881,9 @@ async def chat(body: dict, user_id: Optional[str] = None):
             debug_info = None
             if body.get("debug"):
                 injected_names = {s["source_name"] for s in sources_used}
-                if _is_temporal_browse:
+                if rag_error:
+                    debug_info = [{"rag_error": rag_error}]
+                elif _is_temporal_browse:
                     debug_info = [{"temporal_browse": True, "docs_found": len(injected_chunks)}]
                 else:
                     debug_info = [

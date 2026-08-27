@@ -28,6 +28,35 @@
 #   déployé dans une nouvelle région) démarrerait sans secrets ni identité.
 
 steps:
+  # 0. Garde statique — bloque le build sur un nom indéfini
+  #
+  # Il n'y a pas de framework de test sur ce projet, et `main.py` ne peut pas être
+  # importé hors du conteneur (torch + sentence-transformers). Une erreur de nom
+  # partait donc directement en production, où le `try/except` large du pipeline RAG
+  # la transformait en « aucun document pertinent » : indiscernable d'une abstention
+  # légitime. C'est arrivé le 27/08/2026 — un `query_lower` utilisé 130 lignes avant
+  # son affectation a tué la recherche documentaire sans un seul symptôme visible.
+  #
+  # Volontairement limité à `undefined name`, qui est toujours un vrai bug. Le reste
+  # de pyflakes (imports inutilisés, f-strings sans placeholder) est du style et ne
+  # doit pas pouvoir bloquer un déploiement.
+  - name: 'python:3.11-slim'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        pip install --quiet pyflakes
+        # $$ et non $ : Cloud Build réserve $ à ses substitutions et échouerait
+        # sur $found avec « key in the template is not a valid built-in substitution ».
+        found=$$(pyflakes main.py extract_worker.py eval/run_eval.py 2>&1 | grep "undefined name" || true)
+        if [ -n "$$found" ]; then
+          echo "✗ noms indéfinis détectés — build interrompu :"
+          echo "$$found"
+          exit 1
+        fi
+        echo "✓ aucun nom indéfini"
+    dir: 'backend'
+
   # 1. Build l'image Docker
   - name: 'gcr.io/cloud-builders/docker'
     args: ['build', '-t', 'europe-west9-docker.pkg.dev/$PROJECT_ID/clientchat/clientchat-v2', '.']
