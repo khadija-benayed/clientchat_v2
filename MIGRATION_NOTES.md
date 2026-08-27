@@ -92,8 +92,9 @@ Aggravant : les chunks `session` sont insérés sans `drive_modified_at`, le RPC
 | 2 | `_client_source_names()` pagine au lieu de `.limit(500)` ; `is_administrative` filtré dans le filet | `main.py` |
 | 3 | `fts` généré sur `source_name + chunk_text` | `20260827c_fts_source_name.sql` |
 | 4 | Colonne `doc_date`, extraite du nom de fichier, prioritaire dans le score temporel | `20260827d_doc_date.sql`, `_doc_date_from_name()` |
-| 5 | `final_score = 0.7 × sigmoid(rerank) + 0.3 × temporel` | `main.py` |
+| 5 | ~~`final_score = 0.7 × sigmoid(rerank) + 0.3 × temporel`~~ — **annulé, voir ci-dessous** | `main.py` |
 | 6 | Le cross-encoder reçoit le nom de la source dans la paire | `_rerank_chunks()` |
+| 7 | « le dernier X » sélectionne le plus récent d'une série datée | `main.py` |
 | — | Purge des lignes empoisonnées | `oneshot/20260827_purge_boucle_session.sql` |
 
 Sur le **5** : `reranker.predict` renvoie un logit brut (~-11 à +11). La combinaison était donc `0.7 × logit + 0.3 × temporel`, soit un premier terme dans [-7.7, +7.7] contre un second dans [0, 0.3]. Le score temporel ne pouvait réordonner que des chunks à moins de 0.43 d'écart de logit : la pondération 0.7/0.3 était décorative, et c'est pourquoi le correctif de la date restait sans effet mesurable. Le seuil d'injection, lui, continue de porter sur le **logit brut** — c'est sur cette échelle qu'il a été calibré.
@@ -129,10 +130,36 @@ L'unique échec de `source_recall` est `az-projet-Pierre` : le document attendu 
 
 Le testset compte **33 cas** depuis l'ajout de `az-dernier-point-tracking` et `az-point-tracking-19juin`. C'était la lacune qui avait laissé passer tout ça : aucun cas ne couvrait la classe « que s'est-il passé lors du dernier X », dont la réponse dépend d'une date qui n'existe que dans un nom de fichier.
 
+### Le 5 annulé le jour même — ce que la mesure en production a montré
+
+Déployé puis retiré dans l'heure. Normaliser le logit par sigmoid écrase tout le régime négatif vers zéro — `sigmoid(-9.6) ≈ 7 × 10⁻⁵` — donc le terme `0.7 × r` devient négligeable devant `0.3 × t` et **le classement se réduit à un tri par date de modification**. Relevé sur la question d'origine :
+
+```
+rerank=  -9.594  final=  0.290           [Aroma-Zone x Smart Bees] || Fichier de suivi projets
+rerank=  -2.968  final=  0.156           Notes point suivi tracking 19/06/2026
+rerank=  -3.055  final=  0.153           Notes point suivi tracking 31/07/2026
+rerank=  -1.595  final=  0.130  INJECTÉ  Notes point suivi tracking 22/05/2026
+```
+
+Le chunk le moins pertinent du pool classé **premier**, au seul motif que son fichier avait été modifié la veille : `0.290 - 0.00005 = 0.29 → t = 0.967 = exp(-1/30)`.
+
+Conclusion inverse de l'intuition de départ : **l'asymétrie d'échelle entre les deux termes est volontaire.** Un logit dans [-11, +11] face à un temporel dans [0, 1] fait du score temporel un départage entre chunks de pertinence comparable, et non un critère de classement. C'est le comportement voulu, et le commentaire dans `main.py` le dit désormais explicitement pour que personne ne « corrige » à nouveau cette asymétrie.
+
+### Le 7 — « le dernier X » n'est pas une question de similarité
+
+Le 6 a bien fonctionné : le logit du 31/07 est passé de -4.83 à -3.06. Insuffisant, le seuil étant à -2.0. Résultat, seule la note du 22/05 (-1.595) franchissait le seuil, et le chat affirmait « le dernier point de tracking, daté du 22/05/2026 » — la troisième plus ancienne. **Une abstention honnête s'était transformée en affirmation fausse assurée**, ce qui est un recul et non un progrès.
+
+Le fond du problème : un cross-encoder note la proximité d'un texte à une question, il n'ordonne pas des documents entre eux. Aucun réglage de seuil ne lui fera répondre à « le dernier ». Le pipeline avait déjà le bon mécanisme pour ça — `_TEMPORAL_BROWSE_PATTERNS`, qui court-circuite la recherche pour « quoi de neuf » — mais limité à tout le Drive. Le 7 l'étend à une série identifiée par son sujet : parmi les sources dont le **nom** recoupe la question sur ≥ 2 mots et qui portent un `doc_date`, prendre la plus récente et lui garantir sa place dans le prompt indépendamment de son score.
+
+Vérifié avant déploiement, sur les 33 cas : le 7 ne se déclenche que sur **1 cas**, `az-dernier-point-tracking`, et sélectionne bien `Notes point suivi tracking 31/07/2026`. **Aucun cas d'abstention ne le déclenche** — c'est ce qui compte, puisqu'il contourne le seuil qui protège l'abstention.
+
+En complément, une règle de fiabilité ajoutée au prompt traite la cause directe de l'affirmation fausse : le modèle avait déduit « c'est le dernier » du seul fait qu'on lui avait fourni ce document. Les extraits sont désormais présentés comme une sélection et non un inventaire, avec interdiction explicite d'en inférer une position dans une série.
+
 ### Reste à faire
 
 - **Migrations `c`, `d` et purge : appliquées le 27/08/2026.** Vérifié : 463 chunks / 13 sources datés, `fts` regénéré sur `source_name + chunk_text`, `match_chunks` renvoie `COALESCE(doc_date, …)`, plus aucune trace du « 29 juin » en base.
-- **Mesurer les correctifs 5 et 6 après déploiement du backend.** Ils ne sont pas encore en prod. Le **5** est le plus risqué : en normalisant le logit, le terme temporel passe de négligeable (0.3 face à une amplitude de 7.7) à réellement influent, ce qui peut faire primer la fraîcheur sur la pertinence. Avec `source_recall` à 93 % et l'abstention à 100 %, il y a plus à perdre qu'à gagner — à vérifier, et à annuler si la scorecard se dégrade.
+- **Repasser les 33 cas après le déploiement du 7 et de l'annulation du 5**, contre la référence du 27/08 (`source_recall` 14/15, abstention 14/14, `must_contain` 9/10). Le 7 ne touchant qu'un cas et aucun cas d'abstention, la scorecard ne devrait pas bouger ailleurs — c'est précisément ce qu'il faut confirmer.
+- **`testset.json` est dans `.gitignore`** : les deux cas ajoutés le 27/08 (`az-dernier-point-tracking`, `az-point-tracking-19juin`) ne sont pas versionnés. La lacune qui a laissé passer tout cet enchaînement n'est donc pas colmatée pour un autre poste ou après un clone. À trancher : sortir le testset de l'ignore, ou versionner un jeu anonymisé.
 - **`az-projet-Pierre`** — rappel insuffisant sur `PDM WEB`, hors top-15. Défaut distinct, non traité.
 - **Décathlon et Ornikar n'ont aucun chunk indexé** — seul aroma-zone a du contenu. À lancer si ces espaces doivent servir.
 - Le `README.md` décrivait un pipeline RAG antérieur au reranker, à HyDE et au score temporel — mis à jour en même temps.

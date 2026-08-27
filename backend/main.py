@@ -780,27 +780,6 @@ def _parse_modified(f: dict) -> datetime:
         return datetime.min.replace(tzinfo=timezone.utc)
 
 
-def _sigmoid(x: float) -> float:
-    """Logit de cross-encoder → [0, 1].
-
-    `reranker.predict` (mmarco-mMiniLMv2, num_labels=1) renvoie un logit brut, en
-    pratique entre -11 et +11. La combinaison était donc
-        final = 0.7 * logit  +  0.3 * temporel
-    soit un premier terme dans [-7.7, +7.7] contre un second dans [0, 0.3] : le
-    score temporel ne pouvait réordonner que des chunks à moins de 0.43 d'écart de
-    logit. Autrement dit la pondération 0.7/0.3 était décorative, et le correctif
-    de la date (20260827b) restait presque sans effet mesurable.
-
-    Normalisé, les deux termes sont enfin sur la même échelle et les poids veulent
-    dire ce qu'ils annoncent. Le seuil d'injection continue de porter sur le logit
-    BRUT — c'est sur cette échelle qu'il a été calibré (-1.0 / -2.0).
-    """
-    if x >= 0:
-        return 1.0 / (1.0 + math.exp(-x))
-    e = math.exp(x)           # évite exp(+grand) → OverflowError
-    return e / (1.0 + e)
-
-
 # Date portée par le nom du fichier. Deux formats, année sur 4 chiffres seulement.
 # La DERNIÈRE occurrence est retenue : sur une plage (« Audit 10/10/23 - 10/04/24 »)
 # la date de fin est la plus parlante. Les années sur 2 chiffres sont ignorées —
@@ -873,13 +852,12 @@ def _rag_log_pool(title: str, rows: list, limit: int = 15) -> None:
         return
     try:
         _rag_log(f"{title} — {len(rows)} chunks")
-        _rag_log(f"  {'rerank':>8} {'norm':>6} {'temp':>6} {'final':>8}  {'type':<14} {'date':<10} source")
+        _rag_log(f"  {'rerank':>8} {'temp':>6} {'final':>8}  {'type':<14} {'date':<10} source")
         _nan = float("nan")
         for c in rows[:limit]:
             _d = str(c.get("drive_modified_at") or "")[:10] or "—"
             _rag_log(
                 f"  {c.get('rerank_score', _nan):>8.3f}"
-                f" {c.get('_rerank_norm', _nan):>6.2f}"
                 f" {c.get('_temporal', _nan):>6.2f}"
                 f" {c.get('final_score', _nan):>8.3f}"
                 f"  {str(c.get('source_type'))[:14]:<14} {_d:<10} {str(c.get('source_name'))[:60]}"
@@ -3488,6 +3466,65 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     except Exception as _kw_err:
                         print(f"keyword safety net error (non bloquant): {_kw_err}")
 
+                # ── « le dernier X » — série datée, sélection par date ────────────────
+                # « que s'est-il passé lors du DERNIER point de tracking ? » est une
+                # question d'ordre chronologique, pas de similarité sémantique. Le
+                # cross-encoder ne peut pas y répondre : il note la proximité d'un
+                # texte à une question, il n'ordonne pas des documents entre eux.
+                #
+                # Mesuré en production le 27/08/2026 : les 6 notes de suivi obtenaient
+                # entre -1.6 et -4.8, et le seuil d'injection (-2.0) ne laissait passer
+                # que celle du 22/05 — la troisième plus ancienne. Le chat répondait donc
+                # « le dernier point, daté du 22/05/2026 », faux, avec aplomb. Baisser le
+                # seuil n'est pas la réponse : mesuré, il sépare correctement les cas où
+                # il faut répondre de ceux où il faut s'abstenir.
+                #
+                # Ici on fait ce qu'un humain fait : parmi les sources dont le NOM recoupe
+                # la question et qui portent une date, prendre la plus récente, et lui
+                # garantir sa place dans le prompt indépendamment de son score.
+                # Même logique que _TEMPORAL_BROWSE_PATTERNS, mais pour une série
+                # identifiée par son sujet au lieu de tout le Drive.
+                _series_source = None
+                _series_date = None
+                if query_words and re.search(r"\bderni[eè]re?s?\b", query_lower):
+                    try:
+                        _dated_rows = (
+                            sb.table("document_chunks")
+                            .select("source_name, doc_date")
+                            .eq("client_id", client_id)
+                            .eq("is_administrative", False)
+                            .neq("source_type", "session")
+                            .not_.is_("doc_date", "null")
+                            .order("doc_date", desc=True)
+                            .limit(2000)
+                            .execute()
+                        ).data or []
+                        # Déjà trié par doc_date décroissant : le premier nom qui recoupe
+                        # la question sur au moins 2 mots est le plus récent de sa série.
+                        for _row in _dated_rows:
+                            _name = _row.get("source_name") or ""
+                            if sum(1 for w in query_words if w in _name.lower()) >= 2:
+                                _series_source, _series_date = _name, _row.get("doc_date")
+                                break
+                    except Exception as _ser_err:
+                        print(f"série datée (non bloquant): {_ser_err}")
+
+                if _series_source and _series_source not in {c["source_name"] for c in chunks}:
+                    try:
+                        _extra = (
+                            sb.table("document_chunks")
+                            .select("source_name, chunk_text, source_type, client_id, "
+                                    "drive_modified_at, doc_date, embedding")
+                            .eq("client_id", client_id)
+                            .eq("source_name", _series_source)
+                            .limit(4)
+                            .execute()
+                        )
+                        for _row in (_extra.data or []):
+                            chunks.append({**_row, "rrf_score": 0.0})
+                    except Exception as _ser_err:
+                        print(f"série datée, fetch (non bloquant): {_ser_err}")
+
                 # Cross-encoder reranking on the full pool (semantic top-30 + keyword safety
                 # net chunks). Diversity cap (2 per source) applied AFTER reranking so the
                 # reranker score, not insertion order, determines which chunk of a source wins.
@@ -3522,10 +3559,20 @@ async def chat(body: dict, user_id: Optional[str] = None):
                         t = 0.5
                     else:
                         t = _temporal_score(c.get("drive_modified_at"), decay)
-                    r = _sigmoid(c.get("rerank_score", 0.0))
-                    c["_temporal"] = t          # conservés pour la trace uniquement
-                    c["_rerank_norm"] = r
-                    c["final_score"] = 0.7 * r + 0.3 * t
+                    # ⚠️ NE PAS normaliser le logit par sigmoid. Tenté le 27/08/2026,
+                    # annulé le jour même sur mesure en production : sigmoid écrase tout
+                    # le régime négatif vers 0 (sigmoid(-9.6) ≈ 7e-5), le terme 0.7×r
+                    # devient négligeable devant 0.3×t, et le classement se réduit à un
+                    # tri par date de modification. Observé : un chunk à rerank -9.594
+                    # classé PREMIER du pool avec final_score 0.29, uniquement parce que
+                    # son fichier avait été modifié la veille.
+                    #
+                    # L'asymétrie d'échelle entre les deux termes (logit dans [-11, +11]
+                    # contre temporel dans [0, 1]) est donc VOLONTAIRE : elle fait du
+                    # score temporel un départage entre chunks de pertinence comparable,
+                    # et non un critère de classement. C'est le comportement voulu.
+                    c["_temporal"] = t          # conservé pour la trace uniquement
+                    c["final_score"] = 0.7 * c.get("rerank_score", 0.0) + 0.3 * t
 
                 reranked.sort(key=lambda c: c["final_score"], reverse=True)
 
@@ -3595,20 +3642,29 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     # final_score : -1.0 / -2.0 ont été calibrés sur cette échelle.
                     # final_score est désormais dans [0, 1] (sigmoid) et ne s'y
                     # compare plus — l'utiliser ici laisserait tout passer.
+                    # Le plus récent de la série passe sans condition de score : c'est la
+                    # date qui le qualifie, pas la pertinence sémantique de son texte.
+                    series_chunks = ([c for c in diverse if c["source_name"] == _series_source][:4]
+                                     if _series_source else [])
                     guaranteed = [c for c in diverse
                                   if c["source_name"] in safety_net_sources
+                                  and c["source_name"] != _series_source
                                   and c.get("rerank_score", 0.0) >= inject_threshold]
                     normal = [c for c in diverse
                               if c["source_name"] not in safety_net_sources
+                              and c["source_name"] != _series_source
                               and c.get("rerank_score", 0.0) >= inject_threshold]
 
-                    to_inject = (guaranteed + normal)[:MAX_INJECT]
+                    to_inject = (series_chunks + guaranteed + normal)[:MAX_INJECT]
                     injected_chunks = to_inject
 
                     doc_chunks = [c for c in to_inject if c["source_type"] != "session"]
                     session_chunks = [c for c in to_inject if c["source_type"] == "session"]
 
                     if RAG_DEBUG:
+                        if _series_source:
+                            _rag_log(f"série     : plus récent = {_series_source!r} "
+                                     f"({str(_series_date)[:10]}) — {len(series_chunks)} chunks garantis")
                         _rag_log(
                             f"injection : seuil {inject_threshold}, max {MAX_INJECT} → "
                             f"{len(to_inject)} chunks ({len(doc_chunks)} doc, {len(session_chunks)} session)"
@@ -3631,8 +3687,17 @@ async def chat(body: dict, user_id: Optional[str] = None):
                         doc_block = "\n\n".join(
                             f"— {_cite_name(c['source_name'])}\n{c['chunk_text']}" for c in doc_chunks
                         )
+                        _series_hint = ""
+                        if _series_source and any(c["source_name"] == _series_source for c in doc_chunks):
+                            _series_hint = (
+                                f"\nLe document « {_cite_name(_series_source)} » est, parmi ceux dont le nom "
+                                f"correspond à la question, celui dont la date est la plus récente"
+                                + (f" ({_series_date[:10]})" if _series_date else "")
+                                + ". Appuie-toi sur lui pour répondre à « le dernier ».\n"
+                            )
                         system_with_rag += (
                             "\n\n[Documents pertinents]\n"
+                            + _series_hint +
                             "RÈGLE DE FIABILITÉ (impérative) :\n"
                             "- Réponds en t'appuyant UNIQUEMENT sur les extraits ci-dessous, la fiche client "
                             "et l'historique fourni.\n"
@@ -3642,7 +3707,12 @@ async def chat(body: dict, user_id: Optional[str] = None):
                             "étayé par les documents de ce qui ne l'est pas, et dis explicitement ce que tu ne "
                             "trouves pas dans les sources.\n"
                             "- Quand tu utilises une information issue d'un extrait, cite le nom du fichier "
-                            "source entre crochets, ex : [NomDuFichier].\n\n"
+                            "source entre crochets, ex : [NomDuFichier].\n"
+                            "- Les extraits sont une SÉLECTION, pas un inventaire. N'en déduis jamais qu'un "
+                            "document est le plus récent, le premier ou le seul de sa série au motif qu'il "
+                            "t'a été fourni. Si la question porte sur « le dernier » quelque chose et que "
+                            "tu ne vois qu'un document daté, dis de quand il date et précise que tu ne peux "
+                            "pas garantir qu'il s'agit du plus récent.\n\n"
                             + doc_block
                         )
                         sources_used = [
