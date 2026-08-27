@@ -174,16 +174,25 @@ Décisif pour la décision : **le 6 n'apporte rien que le 7 ne fasse déjà.** L
 
 Le nom de la source reste exploité là où il est utile et sans effet de bord : dans l'embedding (préfixe d'`index_source`), dans le tsvector (migration `c`) et dans `_series_source`. Le reranker juge le texte, c'est ce qu'il sait faire.
 
-### Scorecard finale — 33 cas, après annulation des 5 et 6
+### Scorecard finale — mesurée, trois passes comparables
 
-| Métrique | Référence 27/08 | Après |
-|---|---|---|
-| `abstention` | 14/14 | **14/14** |
-| `must_contain` | 9/10 | **9/10** |
-| `source_recall` (cas communs) | 14/15 | **à remesurer** |
-| `az-dernier-point-tracking` | — | **passe** |
+|  | référence (fix 1-4) | avec fix 6 | final (5 et 6 annulés, revue appliquée) |
+|---|---|---|---|
+| `source_recall` (cas communs) | 14/15 | 13/15 | **14/15** |
+| `abstention` | 14/14 | 14/14 | **14/14** |
+| `must_contain` | 9/10 | 9/10 | **9/10** |
 
-Le bug d'origine est corrigé et l'abstention n'a jamais bougé, à aucune étape. Reste à confirmer que l'annulation du 6 ramène bien `source_recall` à 14/15.
+Sur les 33 cas : `source_recall` 15/17, `abstention` 14/14, `must_contain` 9/10, aucune erreur de pipeline. **Zéro régression** par rapport à la référence.
+
+`az-dernier-point-tracking` passe, et proprement : seuls les trois chunks du 31/07 sont injectés. La note du 22/05, qui franchissait le seuil tant que le fix 6 gonflait les scores des fichiers datés, n'y est plus.
+
+**L'abstention est restée à 14/14 à chaque étape**, y compris quand le pipeline était cassé et quand il affirmait une date fausse. C'est une métrique rassurante mais insuffisante : elle ne détecte ni une panne silencieuse, ni une réponse confiante et fausse — les deux pires états traversés ce jour-là. Le `debug` vide et le cas de test dédié les ont attrapés, pas la scorecard.
+
+### Ce que Langfuse a révélé au passage
+
+`/health` renvoie `langfuse_enabled: false` en production. Ce n'est pas une régression : aucun secret Langfuse n'existe dans Secret Manager (`clientchat-v2-prod` n'a que `ANTHROPIC_KEY`, `GOOGLE_API_KEY`, `GOOGLE_SA_KEY`, `SUPABASE_SERVICE_KEY`, `SUPABASE_URL`), et `cloudbuild.yaml` ne les passerait pas de toute façon. Le SDK v4 construit alors un client désactivé avec un simple avertissement, sans lever : **l'intégration tournait à vide en silence**, et l'ancien `/health` affichait `true` par-dessus.
+
+⚠️ Ne PAS ajouter les lignes à `--set-secrets` avant que les secrets existent : Cloud Run refuse de démarrer sur une référence de secret inexistante. Et comme `--set-secrets` remplace l'ensemble complet à chaque déploiement, les poser dans l'UI Cloud Run serait écrasé au build suivant.
 
 ### Manque connu, non traité — question datée en lettres
 
