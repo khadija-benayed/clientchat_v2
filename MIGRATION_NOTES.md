@@ -188,6 +188,32 @@ Sur les 33 cas : `source_recall` 15/17, `abstention` 14/14, `must_contain` 9/10,
 
 **L'abstention est restée à 14/14 à chaque étape**, y compris quand le pipeline était cassé et quand il affirmait une date fausse. C'est une métrique rassurante mais insuffisante : elle ne détecte ni une panne silencieuse, ni une réponse confiante et fausse — les deux pires états traversés ce jour-là. Le `debug` vide et le cas de test dédié les ont attrapés, pas la scorecard.
 
+### Phase 2 — premiers chiffres du LLM-juge (27/08/2026, éval auto-authentifiée)
+
+Jamais mesurés jusque-là : les passes précédentes n'utilisaient que les checks exacts, et la seule tentative avec `--judge` était morte au 3ᵉ cas sur expiration du token.
+
+| Métrique | Résultat | Seuil |
+|---|---|---|
+| `faithful` | **19/19** | ≥ 0.7 |
+| `fabricated` | **14/14** | < 0.3 |
+| `abstained_properly` | **14/14** | ≥ 0.5 |
+| `correctness` | **15/19** | ≥ 0.5 |
+
+`faithful` à 19/19 est le chiffre qui compte : aucune réponse n'invente quoi que ce soit au-delà du contexte qu'on lui a donné. C'est précisément la propriété qu'avait cassée la boucle de rétroaction du matin.
+
+Les 4 échecs de `correctness` :
+
+| Cas | Score | Cause |
+|---|---|---|
+| `az-point-tracking-19juin` | 0.00 | Question datée en lettres — manque connu, voir ci-dessus |
+| `az-projet-Pierre` | 0.00 | Défaut de rappel indépendant, jamais diagnostiqué |
+| `az-b2b-facturation` | 0.33 | `source_recall` OK, réponse incomplète — préexistant |
+| `az-dernier-point-tracking` | 0.40 | **Corrigé, voir ci-dessous** |
+
+Le dernier était instructif : `source_recall` OK, `faithful` 1.00, mais 2 points sur 5. La note du 31/07 a 4 chunks et seuls **3** étaient injectés — le quatrième portant justement Axeptio, les dimensions locales et le cloud mode. Le fetch de série ne se déclenchait que si la source était *absente* du pool ; elle y était, mais partiellement. Rendu inconditionnel, avec déduplication par `id` (le RPC renvoie la colonne) : quand on désigne un document comme LA réponse, on l'injecte en entier plutôt qu'au hasard de ce que le RRF a laissé passer.
+
+Sans les métriques de phase 2, ce défaut serait resté invisible — `source_recall` était vert.
+
 ### Ce que Langfuse a révélé au passage
 
 `/health` renvoie `langfuse_enabled: false` en production. Ce n'est pas une régression : aucun secret Langfuse n'existe dans Secret Manager (`clientchat-v2-prod` n'a que `ANTHROPIC_KEY`, `GOOGLE_API_KEY`, `GOOGLE_SA_KEY`, `SUPABASE_SERVICE_KEY`, `SUPABASE_URL`), et `cloudbuild.yaml` ne les passerait pas de toute façon. Le SDK v4 construit alors un client désactivé avec un simple avertissement, sans lever : **l'intégration tournait à vide en silence**, et l'ancien `/health` affichait `true` par-dessus.

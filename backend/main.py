@@ -3518,11 +3518,19 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     except Exception as _ser_err:
                         print(f"série datée (non bloquant): {_ser_err}")
 
-                if _series_source and _series_source not in {c["source_name"] for c in chunks}:
+                # Fetch INCONDITIONNEL, et non « seulement si la source est absente du
+                # pool ». Mesuré le 27/08/2026 : la note du 31/07 était bien dans les
+                # résultats du RPC, mais avec 3 de ses 4 chunks seulement — le quatrième
+                # portait justement Axeptio, les dimensions locales et le cloud mode.
+                # Résultat, une réponse fidèle (faithful 1.00) mais incomplète
+                # (correctness 0.40, 2 points sur 5). Quand on désigne un document comme
+                # LA réponse, on l'injecte en entier, pas au hasard de ce que le RRF a
+                # laissé passer. Déduplication par id : le RPC renvoie la colonne.
+                if _series_source:
                     try:
                         _extra = (
                             sb.table("document_chunks")
-                            .select("source_name, chunk_text, source_type, client_id, "
+                            .select("id, source_name, chunk_text, source_type, client_id, "
                                     "drive_modified_at, doc_date, embedding")
                             .eq("client_id", client_id)
                             .eq("source_name", _series_source)
@@ -3531,7 +3539,10 @@ async def chat(body: dict, user_id: Optional[str] = None):
                             .limit(4)
                             .execute()
                         )
+                        _known = {c.get("id") for c in chunks if c.get("id")}
                         for _row in (_extra.data or []):
+                            if _row.get("id") in _known:
+                                continue     # déjà ramené par le RPC, avec son vrai score
                             chunks.append({**_row, "rrf_score": 0.0})
                     except Exception as _ser_err:
                         print(f"série datée, fetch (non bloquant): {_ser_err}")
