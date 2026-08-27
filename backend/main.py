@@ -688,6 +688,47 @@ def _temporal_score(drive_modified_at: str | None, decay_days: int = 180) -> flo
     return math.exp(-age_days / decay_days)
 
 
+# ── Trace de diagnostic RAG ───────────────────────────────────────────────────
+# Désactivée par défaut, activée par RAG_DEBUG=1 sur le service Cloud Run.
+#
+# Le pipeline de recherche n'avait aucune observabilité : quatre print() sur 400
+# lignes, tous sur des chemins d'erreur. Diagnostiquer « pourquoi ce document ne
+# remonte pas » se faisait donc en relisant le code et en supposant. Cette trace
+# montre, requête par requête, ce qui est récupéré, comment c'est classé, et ce
+# qui est finalement injecté dans le prompt.
+#
+# flush=True volontaire : sans lui, stdout est bufferisé par blocs et les lignes
+# ressortent groupées dans Cloud Logging, avec des horodatages inexploitables.
+RAG_DEBUG = os.getenv("RAG_DEBUG") == "1"
+
+
+def _rag_log(line: str) -> None:
+    if RAG_DEBUG:
+        print(f"[RAG] {line}", flush=True)
+
+
+def _rag_log_pool(title: str, rows: list, limit: int = 15) -> None:
+    """Tableau compact : scores, type, date, source. Ne doit jamais lever."""
+    if not RAG_DEBUG:
+        return
+    try:
+        _rag_log(f"{title} — {len(rows)} chunks")
+        _rag_log(f"  {'rerank':>8} {'temp':>6} {'final':>8}  {'type':<14} {'date':<10} source")
+        _nan = float("nan")
+        for c in rows[:limit]:
+            _d = str(c.get("drive_modified_at") or "")[:10] or "—"
+            _rag_log(
+                f"  {c.get('rerank_score', _nan):>8.3f}"
+                f" {c.get('_temporal', _nan):>6.2f}"
+                f" {c.get('final_score', _nan):>8.3f}"
+                f"  {str(c.get('source_type'))[:14]:<14} {_d:<10} {str(c.get('source_name'))[:60]}"
+            )
+        if len(rows) > limit:
+            _rag_log(f"  … et {len(rows) - limit} autres")
+    except Exception as exc:
+        print(f"[RAG] trace error (non bloquant): {exc}", flush=True)
+
+
 # ── Local file extraction ──────────────────────────────────────────────────────
 def _download_bytes(req) -> bytes:
     buf = io.BytesIO()
@@ -3170,6 +3211,21 @@ async def chat(body: dict, user_id: Optional[str] = None):
                 # Cross-encoder reranking on the full pool (semantic top-30 + keyword safety
                 # net chunks). Diversity cap (2 per source) applied AFTER reranking so the
                 # reranker score, not insertion order, determines which chunk of a source wins.
+                if RAG_DEBUG:
+                    _n_safety = sum(1 for c in chunks if c.get("rrf_score") == 0.0)
+                    _n_dated = sum(1 for c in chunks if c.get("drive_modified_at"))
+                    _rag_log(f"question : {message[:120]!r}")
+                    _rag_log(f"embed sur : {'HyDE' if query_for_embed != message else 'question brute'}")
+                    _rag_log(f"fts       : {_query_text!r}")
+                    _rag_log(
+                        f"pool      : {len(chunks)} chunks "
+                        f"({len(chunks) - _n_safety} du RPC, {_n_safety} du filet mots-clés) — "
+                        f"{_n_dated} avec une date"
+                    )
+                    if _n_dated == 0 and chunks:
+                        _rag_log("  ⚠ aucun chunk daté : la migration 20260827 n'est pas appliquée, "
+                                 "le score temporel retombera sur 0.5 pour tout le monde")
+
                 reranked = await loop.run_in_executor(_RERANK_EXECUTOR, _rerank_chunks, message, chunks)
 
                 temporal_keywords = {"récent", "dernier", "actuelle", "actuel", "aujourd", "maintenant", "nouveau", "dernière"}
@@ -3178,9 +3234,15 @@ async def chat(body: dict, user_id: Optional[str] = None):
 
                 for c in reranked:
                     t = _temporal_score(c.get("drive_modified_at"), decay)
+                    c["_temporal"] = t          # conservé pour la trace uniquement
                     c["final_score"] = 0.7 * c.get("rerank_score", 0.0) + 0.3 * t
 
                 reranked.sort(key=lambda c: c["final_score"], reverse=True)
+
+                if RAG_DEBUG:
+                    _hit = [k for k in temporal_keywords if k in query_lower]
+                    _rag_log(f"decay     : {decay} j" + (f" (mot temporel : {_hit})" if _hit else " (aucun mot temporel)"))
+                    _rag_log_pool("après rerank + score temporel", reranked)
 
                 # MMR dedup: embeddings are returned by match_chunks RPC (and fetched for
                 # safety net chunks), so no re-encoding needed — dot product only (~10ms).
@@ -3194,6 +3256,12 @@ async def chat(body: dict, user_id: Optional[str] = None):
                         mmr_dropped_count = pre_mmr_count - len(reranked)
                 except Exception as _mmr_err:
                     print(f"MMR filter error (non bloquant, ignoré): {_mmr_err}")
+
+                if RAG_DEBUG:
+                    _rag_log(
+                        f"MMR       : {mmr_dropped_count} écartés (seuil {mmr_threshold}) "
+                        f"→ {len(reranked)} restants"
+                    )
 
                 safety_net_sources = {
                     c["source_name"] for c in chunks
@@ -3241,6 +3309,19 @@ async def chat(body: dict, user_id: Optional[str] = None):
 
                     doc_chunks = [c for c in to_inject if c["source_type"] != "session"]
                     session_chunks = [c for c in to_inject if c["source_type"] == "session"]
+
+                    if RAG_DEBUG:
+                        _rag_log(
+                            f"injection : seuil {inject_threshold}, max {MAX_INJECT} → "
+                            f"{len(to_inject)} chunks ({len(doc_chunks)} doc, {len(session_chunks)} session)"
+                        )
+                        _rag_log_pool("injecté dans le prompt", to_inject, limit=MAX_INJECT)
+                        # Comparaison par identité : deux chunks distincts peuvent avoir
+                        # un contenu identique, `in` sur des dicts les confondrait.
+                        _kept_ids = {id(c) for c in to_inject}
+                        _rejected = [c for c in diverse if id(c) not in _kept_ids]
+                        if _rejected:
+                            _rag_log_pool("écarté (sous le seuil, ou au-delà du max)", _rejected, limit=10)
 
                     if doc_chunks:
                         # Normalize source names for in-text citation: replace [ ] with ( )
