@@ -325,7 +325,7 @@ def _mmr_filter(chunks: list, embeddings: list, threshold: float) -> list:
 
 # ── Sources d'un client ───────────────────────────────────────────────────────
 def _client_source_names(client_id: str, page_size: int = 1000, max_pages: int = 50) -> set:
-    """Noms de sources distincts d'un client, tous confondus.
+    """Noms de sources distincts d'un client, éligibles au RAG.
 
     PostgREST ne sait pas faire DISTINCT : on pagine sur la seule colonne
     `source_name` et on déduplique en Python.
@@ -337,6 +337,10 @@ def _client_source_names(client_id: str, page_size: int = 1000, max_pages: int =
     donc aveugle à 86 % du corpus et ne se déclenchait quasiment jamais.
 
     `order("source_name")` rend la pagination `range()` déterministe.
+
+    is_administrative exclu : le filet n'a que 3 emplacements, et le fetch par source
+    filtre déjà cette colonne. Sans ce filtre, une pièce comptable pouvait consommer
+    un emplacement pour ne ramener aucune ligne — 33 des 122 sources d'aroma-zone.
     """
     names: set = set()
     for page in range(max_pages):
@@ -345,6 +349,7 @@ def _client_source_names(client_id: str, page_size: int = 1000, max_pages: int =
             sb.table("document_chunks")
             .select("source_name")
             .eq("client_id", client_id)
+            .eq("is_administrative", False)
             .not_.is_("source_name", "null")
             .order("source_name")
             .range(start, start + page_size - 1)
@@ -3649,7 +3654,15 @@ async def chat(body: dict, user_id: Optional[str] = None):
                     # compare plus — l'utiliser ici laisserait tout passer.
                     # Le plus récent de la série passe sans condition de score : c'est la
                     # date qui le qualifie, pas la pertinence sémantique de son texte.
-                    series_chunks = ([c for c in diverse if c["source_name"] == _series_source][:4]
+                    #
+                    # Lu sur `reranked` et non sur `diverse` : ses chunks sont ajoutés au
+                    # pool avec rrf_score = 0.0, ce qui les fait entrer dans
+                    # safety_net_sources, où le cap de diversité est de 1. Passer par
+                    # `diverse` n'aurait donc injecté qu'UN chunk sur les quatre — le bon
+                    # document, mais un quart de son contenu, ce qui ne répond pas à
+                    # « que s'est-il passé lors de… ». `reranked` est déjà post-MMR, les
+                    # quasi-doublons sont donc écartés.
+                    series_chunks = ([c for c in reranked if c["source_name"] == _series_source][:4]
                                      if _series_source else [])
                     guaranteed = [c for c in diverse
                                   if c["source_name"] in safety_net_sources
