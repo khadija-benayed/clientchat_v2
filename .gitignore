@@ -17,3 +17,4 @@ backend/eval/testset.json
 backend/eval/.eval_refresh_token
 __pycache__/
 *.pyc
+backend/eval/.eval_credentials

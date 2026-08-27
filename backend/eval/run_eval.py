@@ -27,16 +27,23 @@ BACKEND_URL = os.environ["BACKEND_URL"]
 # nouveau dans le fichier, sinon le suivant échouerait.
 
 _REFRESH_FILE = pathlib.Path(__file__).with_name(".eval_refresh_token")
+_CREDS_FILE = pathlib.Path(__file__).with_name(".eval_credentials")
 _HELP_REFRESH = f"""
-Aucun token d'éval disponible. Deux façons de faire, la première est à faire une fois :
+Aucun token d'éval utilisable. Trois voies, par ordre de robustesse :
 
-  1. Refresh token (recommandé) — dans le navigateur, connecté à l'app :
-       DevTools > Application > Local Storage > sb-<ref>-auth-token
-       copier la valeur du champ "refresh_token", puis :
+  1. Identité dédiée (recommandé, à faire une fois). Un compte propre à l'éval, non
+     partagé avec ta session navigateur — voir backend/eval/README_AUTH.md :
+       printf 'eval@smart-bees.fr\nMOT_DE_PASSE\n' > {_CREDS_FILE}
+       chmod 600 {_CREDS_FILE}
+
+  2. Refresh token de ta propre session — dans le navigateur, connecté à l'app :
+       DevTools > Application > Local Storage > sb-<ref>-auth-token, champ refresh_token
        echo 'LE_REFRESH_TOKEN' > {_REFRESH_FILE}
-     Les lancements suivants n'auront plus rien à faire.
+     ⚠️ Fragile : il partage sa chaîne de rotation avec ton navigateur. Dès que
+     l'onglet de l'app se rafraîchit, ce token est invalidé
+     (« refresh_token_already_used ») et il faut en recopier un.
 
-  2. Token d'accès ponctuel, valable 1 h :
+  3. Token d'accès ponctuel, valable 1 h :
        export EVAL_JWT="..."   (DevTools > Network > en-tête Authorization, sans 'Bearer ')
 """
 
@@ -82,10 +89,54 @@ def _jwt_from_refresh(refresh_token: str) -> str:
     return access
 
 
+def _jwt_from_password(email: str, password: str) -> str:
+    """Grant password : une session neuve à chaque lancement, sans chaîne de rotation.
+
+    C'est ce qui rend l'éval indépendante. Un refresh token partage sa famille avec
+    la session du navigateur : dès que l'onglet de l'app se rafraîchit, celui du
+    fichier est invalidé. Constaté le 27/08/2026 — l'éval a cessé de pouvoir
+    s'authentifier entre deux lancements sans que rien n'ait changé de son côté.
+    """
+    sb_url, anon = _frontend_constants()
+    r = requests.post(
+        f"{sb_url}/auth/v1/token",
+        params={"grant_type": "password"},
+        headers={"apikey": anon, "Content-Type": "application/json"},
+        json={"email": email, "password": password},
+        timeout=30,
+    )
+    if not r.ok:
+        sys.exit(f"Connexion de l'identité d'éval refusée (HTTP {r.status_code}) : "
+                 f"{r.text[:200]}\n" + _HELP_REFRESH)
+    access = r.json().get("access_token")
+    if not access:
+        sys.exit(f"Réponse inattendue de Supabase : {r.text[:200]}")
+    return access
+
+
+def _read_credentials() -> tuple[str, str] | None:
+    """(email, mot de passe) depuis l'env ou le fichier — deux lignes, gitignoré."""
+    email = os.environ.get("EVAL_EMAIL", "").strip()
+    password = os.environ.get("EVAL_PASSWORD", "").strip()
+    if email and password:
+        return email, password
+    if _CREDS_FILE.exists():
+        lines = [l.strip() for l in _CREDS_FILE.read_text(encoding="utf-8").splitlines() if l.strip()]
+        if len(lines) >= 2:
+            return lines[0], lines[1]
+        print(f"  ⚠ {_CREDS_FILE} doit contenir deux lignes : email puis mot de passe")
+    return None
+
+
 def _resolve_jwt() -> str:
     explicit = os.environ.get("EVAL_JWT", "").strip()
     if explicit:
         return explicit
+    creds = _read_credentials()
+    if creds:
+        access = _jwt_from_password(*creds)
+        print(f"  [auth] session ouverte pour l'identité d'éval ({creds[0]})")
+        return access
     refresh = os.environ.get("EVAL_REFRESH_TOKEN", "").strip()
     if not refresh and _REFRESH_FILE.exists():
         refresh = _REFRESH_FILE.read_text(encoding="utf-8").strip()

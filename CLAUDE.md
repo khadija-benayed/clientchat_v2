@@ -76,12 +76,9 @@
     ⚠️ Contrairement au trigger, `builds submit` part de la source **locale** et non du commit poussé : vérifier que le working tree est propre avant.
 - **Backend local** : `cd backend && uvicorn main:app --reload --port 8080` (avec les vars d'env exportées)
 - **Lancer l'éval** : `cd backend && python eval/run_eval.py [--judge] [--mmr-threshold X] [--inject-threshold Y]` (requiert `BACKEND_URL`)
-  - **Authentification, à faire une seule fois.** Le script échange un *refresh* token Supabase contre un token d'accès frais à chaque lancement, avec la clé anon lue dans `src/lib/constants.js` — aucun secret supplémentaire. Récupérer le refresh token dans le navigateur (DevTools > Application > Local Storage > `sb-<ref>-auth-token`, champ `refresh_token`) puis :
-    ```bash
-    echo 'LE_REFRESH_TOKEN' > backend/eval/.eval_refresh_token
-    ```
-    Supabase fait tourner les refresh tokens à chaque usage : le script réécrit le nouveau dans le fichier. Il est donc **à usage unique** — si un autre onglet ou un autre lancement le consomme, en recopier un. Le fichier est gitignoré.
-  - `EVAL_JWT` reste accepté et prioritaire, pour un token d'accès ponctuel (1 h).
+  - **Authentification : identité dédiée, à mettre en place une fois.** Procédure complète dans [`backend/eval/README_AUTH.md`](backend/eval/README_AUTH.md) — création du compte, ligne `client_members`, fichier `.eval_credentials`. Le script ouvre une session par grant `password` à chaque lancement, avec la clé anon lue dans `src/lib/constants.js` : aucun secret supplémentaire, rien à renouveler.
+  - ⚠️ **Ne pas se rabattre sur un refresh token de ta propre session** sauf en dépannage. Un refresh token partage sa chaîne de rotation avec le navigateur : dès que l'onglet de l'app se rafraîchit, celui de l'éval est invalidé (`refresh_token_already_used`). Éprouvé le 27/08/2026 — l'éval a cessé de s'authentifier entre deux lancements sans que rien n'ait changé de son côté.
+  - `EVAL_JWT` reste accepté et prioritaire, pour un essai isolé (1 h).
   - `requests` n'est pas dans le Python système de la machine (PEP 668) : passer par un venv.
   - **Pourquoi c'est important** : tant que mesurer coûtait un aller-retour humain, la tentation de déployer sans mesurer revenait — c'est ainsi que deux correctifs de classement non validés sont partis en production le 27/08/2026.
   - **`--temperature` vaut 0 par défaut, ne pas l'enlever.** La production laisse le défaut de Gemini ; l'éval force 0 pour être reproductible. Sans ça, deux passes du *même* build donnaient des textes différents, donc des `must_contain` et des scores de juge différents.
