@@ -15,7 +15,7 @@
  * @param {Function} onSaveToKb   - Pour passer aux bulles
  * @param {Function} onPromptClick - Clic sur un prompt rapide de bienvenue
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import MessageBubble from './MessageBubble';
 
 export default function MessageList({ messages, isLoading, clientName, client, onSaveToKb, onPromptClick, onWebSearch }) {
@@ -51,13 +51,39 @@ export default function MessageList({ messages, isLoading, clientName, client, o
   );
 }
 
+/**
+ * Étapes annoncées pendant l'attente du premier token, avec leur seuil (ms).
+ *
+ * Avant que le moindre mot puisse s'afficher, le backend enchaîne HyDE (un appel
+ * Gemini complet), l'embedding, la recherche hybride puis le reranking — soit 3 à
+ * 6 s mesurées en production. Les seuils ci-dessous ne pilotent rien : ils décrivent
+ * ce que le backend est déjà en train de faire à cet instant, pour que l'attente ne
+ * soit pas un écran muet. Le passage au vrai texte, lui, reste piloté par l'arrivée
+ * du premier token, pas par un minuteur.
+ */
+const THINKING_STEPS = [
+  { after: 1200, label: 'Recherche dans les documents…' },
+  { after: 4000, label: 'Analyse des extraits pertinents…' },
+  { after: 8000, label: 'Rédaction de la réponse…' },
+];
+
 /** Indicateur "..." pendant la réponse IA */
 function ThinkingIndicator({ clientName }) {
+  const [label, setLabel] = useState(null);
+
+  useEffect(() => {
+    const timers = THINKING_STEPS.map(step =>
+      setTimeout(() => setLabel(step.label), step.after)
+    );
+    return () => timers.forEach(clearTimeout);
+  }, []);
+
   return (
     <div className="msg a">
       <div className="msg-who">Claude · {clientName || ''}</div>
       <div className="thinking">
         <div className="dp" /><div className="dp" /><div className="dp" />
+        {label && <span className="thinking-label">{label}</span>}
       </div>
     </div>
   );

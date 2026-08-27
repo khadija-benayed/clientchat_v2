@@ -2997,11 +2997,18 @@ async def chat(body: dict, user_id: Optional[str] = None):
                             f"qui contiendrait la réponse à cette question : « {message} »\n"
                             f"Réponds uniquement avec l'extrait, sans introduction ni explication."
                         )
-                    _hyde_resp = _hyde_model.generate_content(
-                        hyde_prompt,
-                        generation_config=genai.types.GenerationConfig(
-                            max_output_tokens=120,
-                            temperature=0.0,
+                    # generate_content() est synchrone : appelé directement, il bloquait
+                    # la boucle d'événements pendant 1 à 3 s, donc toutes les requêtes
+                    # servies par la même instance. On le renvoie sur le pool par défaut,
+                    # comme le sont déjà l'embedding et le reranking juste en dessous.
+                    _hyde_resp = await loop.run_in_executor(
+                        None,
+                        lambda: _hyde_model.generate_content(
+                            hyde_prompt,
+                            generation_config=genai.types.GenerationConfig(
+                                max_output_tokens=120,
+                                temperature=0.0,
+                            ),
                         ),
                     )
                     _hyde_text = (_hyde_resp.text or "").strip()

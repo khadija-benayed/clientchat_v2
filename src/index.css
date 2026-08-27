@@ -405,7 +405,13 @@ body {
   padding: 3px 8px; border-radius: 6px; margin-bottom: 4px;
   display: flex; align-items: center; gap: 4px;
 }
-.thinking { display: flex; gap: 5px; padding: 12px 14px; }
+.thinking { display: flex; align-items: center; gap: 5px; padding: 12px 14px; }
+/* Libellé d'étape affiché à côté des points pendant l'attente du premier token */
+.thinking-label {
+  margin-left: 6px; font-size: 12px; color: var(--tx3);
+  animation: thinking-fade .25s ease-in;
+}
+@keyframes thinking-fade { from { opacity: 0 } to { opacity: 1 } }
 .dp {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--tx3); animation: bounce .9s ease-in-out infinite;
