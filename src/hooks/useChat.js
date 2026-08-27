@@ -203,7 +203,7 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, currentU
             }
           },
 
-          onDone({ sources, tasks_json, reply_text }) {
+          onDone({ sources, tasks_json, reply_text, rag_degraded }) {
             cancelPendingRaf();
             const hasWebSearchPrompt = !!(reply_text && /veux[- ]tu que je cherche sur internet\s*\?/i.test(reply_text));
             setMessages(prev => prev.map(m =>
@@ -213,6 +213,10 @@ export function useChat({ client, tasks, summaries, docCache, jwtToken, currentU
                     text: reply_text || '',
                     sources: sources || [],
                     streaming: false,
+                    // Panne de la recherche documentaire : à distinguer d'une recherche
+                    // qui a bien tourné sans rien trouver. Sans ce signal, l'utilisateur
+                    // ne peut pas faire la différence.
+                    ...(rag_degraded ? { ragDegraded: true } : {}),
                     ...(hasWebSearchPrompt ? { webSearchPrompt: true, webSearchQuery: text } : {}),
                   }
                 : m

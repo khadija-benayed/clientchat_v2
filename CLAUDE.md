@@ -75,9 +75,15 @@
     `gcloud builds submit --config cloudbuild.yaml --project=clientchat-v2-prod --service-account="projects/clientchat-v2-prod/serviceAccounts/167005458056-compute@developer.gserviceaccount.com" .`
     ⚠️ Contrairement au trigger, `builds submit` part de la source **locale** et non du commit poussé : vérifier que le working tree est propre avant.
 - **Backend local** : `cd backend && uvicorn main:app --reload --port 8080` (avec les vars d'env exportées)
-- **Lancer l'éval** : `cd backend && python eval/run_eval.py [--judge] [--mmr-threshold X] [--inject-threshold Y]` (requiert `BACKEND_URL` et `EVAL_JWT`)
-  - `EVAL_JWT` se copie depuis le navigateur (DevTools > Network > en-tête `Authorization`, sans `Bearer `) — il ne peut pas être fabriqué, le middleware valide via `sb.auth.get_user`. **Durée de vie 1 h**, et les 33 cas avec `--judge` prennent une dizaine de minutes : prendre un token frais avant de lancer.
+- **Lancer l'éval** : `cd backend && python eval/run_eval.py [--judge] [--mmr-threshold X] [--inject-threshold Y]` (requiert `BACKEND_URL`)
+  - **Authentification, à faire une seule fois.** Le script échange un *refresh* token Supabase contre un token d'accès frais à chaque lancement, avec la clé anon lue dans `src/lib/constants.js` — aucun secret supplémentaire. Récupérer le refresh token dans le navigateur (DevTools > Application > Local Storage > `sb-<ref>-auth-token`, champ `refresh_token`) puis :
+    ```bash
+    echo 'LE_REFRESH_TOKEN' > backend/eval/.eval_refresh_token
+    ```
+    Supabase fait tourner les refresh tokens à chaque usage : le script réécrit le nouveau dans le fichier. Il est donc **à usage unique** — si un autre onglet ou un autre lancement le consomme, en recopier un. Le fichier est gitignoré.
+  - `EVAL_JWT` reste accepté et prioritaire, pour un token d'accès ponctuel (1 h).
   - `requests` n'est pas dans le Python système de la machine (PEP 668) : passer par un venv.
+  - **Pourquoi c'est important** : tant que mesurer coûtait un aller-retour humain, la tentation de déployer sans mesurer revenait — c'est ainsi que deux correctifs de classement non validés sont partis en production le 27/08/2026.
 - **Tests** : aucun framework de test — vérifier manuellement dans le navigateur
 - **Avant tout déploiement backend** : `pyflakes backend/main.py | grep "undefined name"` doit être vide. `main.py` ne s'importe pas hors du conteneur (torch + sentence-transformers), donc rien d'autre n'attrape une erreur de nom — et le `try/except` large du pipeline RAG la déguise en « aucun document pertinent ». Cloud Build refuse désormais le build dans ce cas (étape 0 de `cloudbuild.yaml`), mais autant le voir avant de pousser.
 
@@ -170,7 +176,10 @@ Le RAG vit dans `chat()` (`backend/main.py`). Ordre effectif :
 - **`drive_modified_at` ne dit pas de quand date le contenu.** C'est le `modifiedTime` de Drive. Les 6 « Notes point suivi tracking » d'aroma-zone couvrent avril→juillet 2026 mais ont toutes `drive_modified_at = 2026-07-31` (retouchées le même jour). La date du contenu vit dans `doc_date`, extraite du nom de fichier par `_doc_date_from_name()`. Le RPC renvoie `COALESCE(doc_date, drive_modified_at, created_at)`.
 - **Le `fts` inclut `source_name`.** Sans ça le nom du fichier — donc son sujet et sa date — était invisible au bras mots-clés : le fichier littéralement nommé « Notes point suivi tracking 31/07/2026 » sortait au rang FTS 279, hors du `LIMIT 60`. Toute modification du tsvector doit garder le nom en tête.
 - **Les résumés de session sont du texte généré par le modèle, réinjecté dans ses propres prompts.** Deux chemins : `useChat.js buildL2/buildL3` → `[Sessions récentes]` (inconditionnel, à chaque message) et `summarize_session` → `document_chunks(source_type='session')` → RAG. Une date inventée s'y fixe et se resert indéfiniment (cas du « point de tracking du 29 juin 2026 », 27/08/2026 — date absente de tous les documents Drive). Les deux blocs portent un cadrage « NON VÉRIFIÉ » explicite : **ne pas l'alléger**. Un chunk `session` ne compte jamais comme « document trouvé », et reçoit un score temporel neutre (0.5) plutôt que la fraîcheur de son `created_at`.
-- **Le `try/except` autour du pipeline RAG déguise les bugs en absence de résultat.** Une erreur de code y devient « aucun extrait pertinent trouvé », indiscernable d'une abstention légitime côté utilisateur. Le 27/08/2026 un `NameError` a tué la recherche documentaire en production sans aucun symptôme visible. L'erreur remonte maintenant dans le payload `debug` (`{"rag_error": …}`) et dans la trace `[RAG]` : **un `debug` vide sur une question qui devrait ramener des documents veut dire pipeline en erreur, pas corpus vide.**
+- **Le `try/except` autour du pipeline RAG déguise les bugs en absence de résultat.** Une erreur de code y devenait « aucun extrait pertinent trouvé », indiscernable d'une abstention légitime : le 27/08/2026 un `NameError` a tué la recherche documentaire en production sans aucun symptôme visible. Trois signaux existent maintenant, **ne pas les retirer** :
+  - le prompt reçoit un bloc `[Recherche documentaire INDISPONIBLE]` qui interdit explicitement au modèle de dire « je ne trouve pas cette information » — ce serait laisser croire qu'il a cherché ;
+  - le payload SSE `done` porte `rag_degraded`, **toujours présent et pas seulement en mode debug**, et le front affiche un avertissement (`.msg-rag-warning`) ;
+  - le payload `debug` porte `{"rag_error": …}` et la trace `[RAG]` la ligne `⚠ PIPELINE EN ERREUR`. **Un `debug` vide sur une question qui devrait ramener des documents veut dire pipeline en erreur, pas corpus vide.**
 - **`is_administrative` doit être filtré partout**, y compris dans le filet de sécurité — sinon les pièces comptables exclues par le RPC rentrent par la porte de service.
 
 ### Observabilité

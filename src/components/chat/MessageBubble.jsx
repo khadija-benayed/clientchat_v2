@@ -9,12 +9,12 @@
  * - L'horodatage
  *
  * Props :
- * @param {object}   msg         - Message { id, role, text, sources, badge, time }
+ * @param {object}   msg         - Message { id, role, text, sources, badge, time, ragDegraded }
  * @param {string}   clientName  - Nom du client (affiché dans "Claude · NomClient")
  * @param {Function} onSaveToKb  - Appelée avec le texte pour ouvrir la modal KB
  */
 import React, { useState } from 'react';
-import { Layers } from 'lucide-react';
+import { Layers, AlertTriangle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -99,6 +99,14 @@ export default function MessageBubble({ msg, clientName, onSaveToKb, onWebSearch
             </>
         }
       </div>
+
+      {/* Panne de la recherche documentaire — distincte d'une absence de résultat */}
+      {!isUser && msg.ragDegraded && (
+        <div className="msg-rag-warning">
+          <AlertTriangle size={12} aria-hidden="true" />
+          Recherche documentaire indisponible — cette réponse ne s'appuie sur aucun document.
+        </div>
+      )}
 
       {/* Badge modification de tâches */}
       {msg.badge && (

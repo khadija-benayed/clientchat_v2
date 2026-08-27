@@ -3815,6 +3815,23 @@ async def chat(body: dict, user_id: Optional[str] = None):
             print(f"RAG pipeline error (non bloquant): {e}")
             print(traceback.format_exc())
             _rag_log(f"⚠ PIPELINE EN ERREUR — {rag_error}")
+            # Sans ce bloc, le modèle n'avait aucun contexte documentaire et répondait
+            # « je ne trouve pas cette information » — indiscernable, pour l'utilisateur,
+            # d'une recherche qui a bien tourné et n'a rien trouvé. Un NameError a ainsi
+            # tué la recherche documentaire en production le 27/08/2026 sans un seul
+            # symptôme visible. Une panne doit se dire panne.
+            system_with_rag += (
+                "\n\n[Recherche documentaire INDISPONIBLE]\n"
+                "La recherche dans les documents du client a échoué sur une erreur "
+                "technique. Tu n'as donc AUCUN extrait de document pour cette question — "
+                "ce n'est pas la même chose que « aucun document pertinent ».\n"
+                "- Dis explicitement que la recherche documentaire est momentanément "
+                "indisponible et que tu ne peux donc pas consulter les documents.\n"
+                "- Ne dis PAS « je ne trouve pas cette information » : ce serait laisser "
+                "croire que tu as cherché.\n"
+                "- Réponds uniquement depuis la fiche client et l'historique si tu peux, "
+                "en signalant cette limite, et invite à réessayer."
+            )
 
     # Build history for Gemini — "u"→"user", "a"→"model"; must start with user
     raw_hist = list(chat_history)
@@ -3941,7 +3958,12 @@ async def chat(body: dict, user_id: Optional[str] = None):
                         "mmr_dropped": mmr_dropped_count,
                     })
 
-            done_payload = {"type": "done", "sources": sources_used, "tasks_json": tasks_json, "reply_text": reply_text, "routing": message_type}
+            done_payload = {"type": "done", "sources": sources_used, "tasks_json": tasks_json,
+                            "reply_text": reply_text, "routing": message_type,
+                            # Toujours présent, pas seulement en mode debug : c'est le seul
+                            # signal qui distingue une panne de recherche d'une absence de
+                            # résultat pour quelqu'un qui utilise l'app normalement.
+                            "rag_degraded": bool(rag_error)}
             if debug_info is not None:
                 done_payload["debug"] = debug_info
                 done_payload["injected_context"] = "\n\n".join(

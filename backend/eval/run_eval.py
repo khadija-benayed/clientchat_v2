@@ -8,10 +8,95 @@ Flags :
   --judge   Active la phase 2 : LLM-juge sémantique en plus des checks exacts.
             Requiert expected_points (answer) ou should_abstain (abstain) dans testset.json.
 """
-import argparse, os, json, sys, requests
+import argparse, os, json, re, sys, pathlib, requests
 
 BACKEND_URL = os.environ["BACKEND_URL"]
-JWT = os.environ["EVAL_JWT"]
+
+# ── Authentification de l'éval ────────────────────────────────────────────────
+# Le middleware backend valide le JWT via sb.auth.get_user() : il faut donc un vrai
+# token d'accès Supabase, et ceux-ci vivent une heure. Coller un token à la main à
+# chaque lancement rendait la mesure si coûteuse qu'on finissait par déployer sans
+# mesurer — c'est ainsi que deux correctifs de classement non validés sont partis en
+# production le 27/08/2026.
+#
+# On échange donc un REFRESH token (longue durée) contre un token d'accès frais à
+# chaque lancement. Le refresh token se copie une seule fois. La clé utilisée est la
+# clé anon, publique et déjà dans src/lib/constants.js : aucun secret supplémentaire.
+#
+# Supabase fait tourner les refresh tokens à chaque usage : on réécrit donc le
+# nouveau dans le fichier, sinon le suivant échouerait.
+
+_REFRESH_FILE = pathlib.Path(__file__).with_name(".eval_refresh_token")
+_HELP_REFRESH = f"""
+Aucun token d'éval disponible. Deux façons de faire, la première est à faire une fois :
+
+  1. Refresh token (recommandé) — dans le navigateur, connecté à l'app :
+       DevTools > Application > Local Storage > sb-<ref>-auth-token
+       copier la valeur du champ "refresh_token", puis :
+       echo 'LE_REFRESH_TOKEN' > {_REFRESH_FILE}
+     Les lancements suivants n'auront plus rien à faire.
+
+  2. Token d'accès ponctuel, valable 1 h :
+       export EVAL_JWT="..."   (DevTools > Network > en-tête Authorization, sans 'Bearer ')
+"""
+
+
+def _frontend_constants() -> tuple[str, str]:
+    """(SB_URL, clé anon) lus dans src/lib/constants.js — une seule source de vérité."""
+    consts = pathlib.Path(__file__).resolve().parents[2] / "src" / "lib" / "constants.js"
+    src = consts.read_text(encoding="utf-8")
+    url = re.search(r"SB_URL\s*=\s*['\"]([^'\"]+)['\"]", src)
+    key = re.search(r"SB_KEY\s*=\s*['\"]([^'\"]+)['\"]", src)
+    if not url or not key:
+        sys.exit(f"SB_URL / SB_KEY introuvables dans {consts}")
+    return url.group(1), key.group(1)
+
+
+def _jwt_from_refresh(refresh_token: str) -> str:
+    sb_url, anon = _frontend_constants()
+    r = requests.post(
+        f"{sb_url}/auth/v1/token",
+        params={"grant_type": "refresh_token"},
+        headers={"apikey": anon, "Content-Type": "application/json"},
+        json={"refresh_token": refresh_token},
+        timeout=30,
+    )
+    if not r.ok:
+        sys.exit(
+            f"Échange du refresh token refusé (HTTP {r.status_code}) : {r.text[:200]}\n"
+            "Un refresh token est à usage unique : si un autre onglet ou un autre "
+            "lancement l'a consommé entre-temps, il faut en recopier un.\n" + _HELP_REFRESH
+        )
+    data = r.json()
+    access = data.get("access_token")
+    if not access:
+        sys.exit(f"Réponse inattendue de Supabase : {json.dumps(data)[:200]}")
+    rotated = data.get("refresh_token")
+    if rotated and rotated != refresh_token:
+        try:
+            _REFRESH_FILE.write_text(rotated + "\n", encoding="utf-8")
+            _REFRESH_FILE.chmod(0o600)
+        except OSError as exc:
+            print(f"  ⚠ nouveau refresh token non sauvegardé ({exc}) — "
+                  f"le prochain lancement échouera, à recopier à la main")
+    return access
+
+
+def _resolve_jwt() -> str:
+    explicit = os.environ.get("EVAL_JWT", "").strip()
+    if explicit:
+        return explicit
+    refresh = os.environ.get("EVAL_REFRESH_TOKEN", "").strip()
+    if not refresh and _REFRESH_FILE.exists():
+        refresh = _REFRESH_FILE.read_text(encoding="utf-8").strip()
+    if not refresh:
+        sys.exit(_HELP_REFRESH)
+    access = _jwt_from_refresh(refresh)
+    print("  [auth] token d'accès obtenu depuis le refresh token")
+    return access
+
+
+JWT = _resolve_jwt()
 
 SYSTEM = ("Tu es l'assistant projet de l'équipe sur ce client. Réponds à partir des informations "
           "fournies et dis « je ne trouve pas cette information » si elle n'y est pas.")

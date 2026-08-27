@@ -13,3 +13,7 @@ backend/eval/testset.json
 *~
 *.orig
 *.save
+# Refresh token de l'éval — jamais versionné
+backend/eval/.eval_refresh_token
+__pycache__/
+*.pyc

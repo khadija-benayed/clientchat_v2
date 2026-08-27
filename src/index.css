@@ -400,6 +400,13 @@ body {
   font-size: 11px; background: var(--c-green-bg); color: var(--c-green);
   padding: 2px 8px; border-radius: 20px; font-weight: 500; margin-top: 2px;
 }
+/* Panne du pipeline RAG. Volontairement visible : une recherche documentaire en
+   erreur était jusqu'ici indiscernable d'une recherche sans résultat. */
+.msg-rag-warning {
+  font-size: 11px; background: var(--c-red-bg); color: var(--c-red);
+  padding: 3px 8px; border-radius: 6px; margin-top: 4px;
+  display: flex; align-items: center; gap: 5px;
+}
 .msg-file-badge {
   font-size: 11px; background: var(--sur2); color: var(--tx2);
   padding: 3px 8px; border-radius: 6px; margin-bottom: 4px;
