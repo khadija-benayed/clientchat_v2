@@ -91,7 +91,7 @@ export default function TaskPanel({
 
   const dateInputStyle = {
     marginBottom: 0,
-    fontFamily: "'DM Mono', monospace",
+    fontFamily: "'JetBrains Mono', monospace",
     fontSize: '12px',
     padding: '6px 8px',
     width: '100%',

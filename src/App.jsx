@@ -618,7 +618,7 @@ export default function App() {
           <div style={{
             margin: '-24px -24px 20px',
             padding: '28px 28px 24px',
-            background: 'linear-gradient(135deg, #FFC75A 0%, #F89B1C 55%, #E0820A 100%)',
+            background: 'linear-gradient(135deg, #FFC75A 0%, #FF9E00 55%, #E0820A 100%)',
             borderRadius: 'var(--r) var(--r) 0 0',
             position: 'relative',
             overflow: 'hidden',

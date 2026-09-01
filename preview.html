@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="fr"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ClientChat — recette DA Smart Bees</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Raleway:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<script type="module" src="/src/preview.js"></script>
+</head><body>
+<div class="app-layout" style="height:620px">
+
+  <aside class="sidebar">
+    <div class="sb-top"><span class="sb-brand">Smart Bees Chat</span></div>
+    <div class="sb-section">Clients</div>
+    <div id="cli-list">
+      <div class="cli-item on"><div class="cli-av">GL</div><div class="cli-name">Galeries Lafayette</div></div>
+      <div class="cli-item"><div class="cli-av">AZ</div><div class="cli-name">Aroma-Zone</div></div>
+      <div class="cli-item"><div class="cli-av">PL</div><div class="cli-name">Pennylane</div></div>
+      <div class="cli-item"><div class="cli-av">OR</div><div class="cli-name">Ornikar</div></div>
+      <div class="cli-item"><div class="cli-av">PM</div><div class="cli-name">Parfums de Marly</div></div>
+    </div>
+    <div class="sb-user"><div class="sb-user-av">KB</div>
+      <div class="sb-user-info"><div class="sb-user-name">Khadija</div><div class="sb-user-email">khadija@smart-bees.fr</div></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="tb-av">GL</div><div class="tb-name">Galeries Lafayette</div>
+      <div class="tb-right"><span class="sync-lbl">Synchronisé il y a 2 min</span>
+        <button class="btn-sm">Réglages</button><button class="btn-dark-mode" id="tg">Thème</button></div>
+    </div>
+    <div class="workspace">
+      <section class="chat-panel">
+        <div class="msgs">
+          <div class="msg a"><div class="msg-who">Assistant</div>
+            <div class="bubble">Le plan de marquage GA4 est à jour sur les 5 sites. Trois <code class="md-code">purchase</code> restent en écart côté server-side.
+              <div class="msg-sources"><div class="msg-sources-label">Sources</div>
+                <div class="msg-sources-chips"><span class="src-chip"><span>plan-marquage-v4.xlsx</span></span><span class="src-chip"><span>CR 12/08</span></span></div></div>
+            </div>
+            <div class="msg-badge">Recetté</div><div class="msg-time">09:41</div></div>
+          <div class="msg u"><div class="msg-who">Khadija</div>
+            <div class="bubble">Tu peux me sortir les écarts par canal ?</div><div class="msg-time">09:42</div></div>
+        </div>
+        <div class="chat-foot"><div class="chat-row">
+          <button class="attach-btn">+</button>
+          <textarea class="chat-ta" rows="1" placeholder="Poser une question sur ce client…"></textarea>
+          <button class="send">→</button></div>
+          <div class="hint">Entrée pour envoyer</div>
+        </div>
+      </section>
+
+      <aside class="todo-panel">
+        <div class="todo-head"><div class="todo-top"><span class="todo-title">Tâches</span><span class="todo-cnt">6 ouvertes</span></div>
+          <div class="filters"><div class="filter-row-primary">
+            <button class="fil on">Toutes</button><button class="fil">À faire</button><button class="fil">En cours</button><button class="fil">Bloquées</button></div>
+            <div class="filter-row-secondary"><span class="fil-avatar on">KB</span><span class="fil-avatar">PH</span><span class="fil-avatar">GH</span></div>
+          </div>
+        </div>
+        <div class="todo-body">
+          <div class="grp"><div class="grp-lbl"><span class="gdot" style="background:var(--c-amb)"></span>Cette semaine</div>
+            <div class="task"><div class="ttl">Fiabiliser le tracking server-side</div>
+              <div class="task-meta-row"><span class="prio p1">P1</span><span class="spill s-inp">En cours</span><span class="due-badge soon">J-2</span></div>
+              <div class="tperson"><span class="av" style="background:var(--c-blue-bg);color:var(--c-blue)">PH</span>Pierre-Henry</div></div>
+            <div class="task"><div class="ttl">Recetter les 3 events purchase</div>
+              <div class="task-meta-row"><span class="prio p2">P2</span><span class="spill s-todo">À faire</span><span class="due-badge ok">J-9</span></div>
+              <div class="tperson"><span class="av" style="background:var(--c-pur-bg);color:var(--c-pur)">KB</span>Khadija</div></div>
+            <div class="task"><div class="ttl">Dashboard direction — v2</div>
+              <div class="task-meta-row"><span class="prio p3">P3</span><span class="spill s-blk">Bloquée</span><span class="due-badge overdue">J+3</span></div>
+              <div class="tperson"><span class="meta-unassigned">Non assignée</span></div></div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </main>
+</div>
+
+<div style="padding:32px;display:flex;justify-content:center;background:var(--bg)"><div class="modal" style="position:static">
+  <h2>Réglages du client</h2>
+  <div class="settings-tabs"><button class="stab on">Général</button><button class="stab">Sources</button><button class="stab">Membres</button><button class="stab">Gmail</button></div>
+  <label>Nom du client</label><input type="text" value="Galeries Lafayette">
+  <label>Contact principal</label><input type="email" placeholder="prenom.nom@client.fr">
+  <div class="sources-section"><div class="sources-label">Sources connectées</div>
+    <div class="src-item"><div class="src-info"><div class="src-name">Drive — Dossier Analytics</div><div class="src-meta">42 documents · sync il y a 12 min</div></div><span class="src-status">OK</span></div></div>
+  <div class="modal-foot"><button class="btn btn-sec">Annuler</button><button class="btn">Enregistrer</button></div>
+</div></div>
+
+<div class="welcome-state" style="height:440px;border-top:1px solid var(--brd)">
+  <div class="ws-hex-cluster"><div class="ws-hex ws-hex-c" style="background:var(--sb-orange)"></div>
+    <div class="ws-hex ws-hex-tr" style="background:var(--sb-blue-sky)"></div>
+    <div class="ws-hex ws-hex-bl" style="background:var(--sb-blue-lt)"></div>
+    <div class="ws-hex ws-hex-r" style="background:var(--sb-coral)"></div></div>
+  <div class="ws-greeting">Bonjour Khadija,</div>
+  <div class="ws-client-name">Galeries <span class="sb-mark">Lafayette</span></div>
+  <div class="ws-sub">3 tâches ouvertes · dernière synchro il y a 2 minutes</div>
+  <div class="ws-prompts">
+    <div class="ws-prompt-chip"><span class="ws-prompt-icon">◆</span><span class="ws-prompt-text">Résume les derniers comptes rendus</span><span class="ws-prompt-arrow">→</span></div>
+    <div class="ws-prompt-chip"><span class="ws-prompt-icon">◆</span><span class="ws-prompt-text">Quels events sont en écart ?</span><span class="ws-prompt-arrow">→</span></div>
+  </div>
+</div>
+<script>document.getElementById('tg').onclick=()=>{const h=document.documentElement;h.dataset.theme=h.dataset.theme==='dark'?'':'dark';};</script>
+</body></html>

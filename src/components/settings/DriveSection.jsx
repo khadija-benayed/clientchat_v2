@@ -122,7 +122,7 @@ export default function DriveSection({ client, onClientUpdate, onSyncMessage, sy
   }
 
   const iconMap = {
-    drive: <FolderOpen size={16} style={{ color: 'var(--sb-blue-md)' }} />,
+    drive: <FolderOpen size={16} style={{ color: 'var(--c-blue)' }} />,
     file:  <FileText size={16} style={{ color: 'var(--sb-orange)' }} />,
   };
 

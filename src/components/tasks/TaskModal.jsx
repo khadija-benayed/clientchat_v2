@@ -136,7 +136,7 @@ export default function TaskModal({ taskId, tasks, members, onSave, onDelete, on
         </div>
         <div>
           <div className="task-meta-label">Échéance</div>
-          <input type="date" value={due} onChange={e => setDue(e.target.value)} style={{ marginBottom: 0, fontFamily: "'DM Mono', monospace", fontSize: '12px', padding: '6px 8px', border: '1px solid var(--brd2)', borderRadius: 'var(--rs)', background: 'var(--sur2)', color: 'var(--tx)', width: '100%' }} />
+          <input type="date" value={due} onChange={e => setDue(e.target.value)} style={{ marginBottom: 0, fontFamily: "'JetBrains Mono', monospace", fontSize: '12px', padding: '6px 8px', border: '1px solid var(--brd2)', borderRadius: 'var(--rs)', background: 'var(--sur2)', color: 'var(--tx)', width: '100%' }} />
         </div>
       </div>
 

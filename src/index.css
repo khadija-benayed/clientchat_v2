@@ -16,36 +16,61 @@
 @tailwind utilities;
 
 /* ═══════════════════════════════════════════════════════════════
-   DESIGN TOKENS — source unique de vérité pour les couleurs
-   Ces variables CSS sont utilisées par tous les composants via
-   var(--tx), var(--sur), etc. — similaire à un enum de constantes.
+   DESIGN TOKENS SMART BEES — source unique de vérité
+   ───────────────────────────────────────────────────────────────
+   Toutes les valeurs marquées « mesuré » sont relevées sur
+   smart-bees.fr via getComputedStyle (5 pages, 2026-09-01).
+   Référence complète, preuves et écarts : docs/brand-dna-smart-bees.md
    ═══════════════════════════════════════════════════════════════ */
 :root {
-  --sb-navy:    #193644;
-  --sb-orange:  #F89B1C;
-  --sb-coral:   #FF6772;
-  --sb-blue-lt: #C2E2F5;
-  --sb-blue-md: #00779B;
+  /* ─── Cœur de marque (mesuré 5/5 pages) ─────────────────────── */
+  --sb-navy:      #264653;  /* texte rang 1 + footer + hexagone du logo   */
+  --sb-orange:    #FF9E00;  /* CTA primaire .sbs-btn-1                    */
+  --sb-coral:     #FE6D73;  /* .sbo-xn4 / .sbs-hx-4                       */
+  --sb-blue-lt:   #BDE0FE;  /* .sbx-bar-a / surlignage bleu               */
+  --sb-blue-sky:  #85C4FF;  /* token de marque déclaré --royal-blue       */
+  --sb-green:     #5EC045;  /* token de marque déclaré --lime-green       */
+  --sb-orchid:    #B75DDA;  /* token de marque déclaré --medium-orchid    */
+  --sb-cream:     #FFF3DF;  /* .sbx-bar-c, surligneur chaud               */
+  --sb-sand:      #F1EFEA;  /* .sbs-btn-2, bouton tertiaire               */
 
-  --bg:   #F2F4F6;
-  --sur:  #FFFFFF;
-  --sur2: #EEF1F4;
-  --sur3: #E4E8EC;
+  /* Alias de compatibilité : --sb-blue-md n'existe pas sur le site,
+     l'ancien #00779B était une invention. Le bleu de marque est le ciel. */
+  /* Le bleu ciel #85C4FF est un bleu DÉCORATIF (1,9:1 sur blanc) : réservé aux
+     hexagones et aux aplats. Pour du texte ou une icône, utiliser --c-blue. */
+  --sb-blue-md:   var(--sb-blue-sky);
 
-  --brd:  rgba(25, 54, 68, 0.09);
-  --brd2: rgba(25, 54, 68, 0.18);
+  /* ─── Surfaces (classées par surface rendue sur le site) ────── */
+  --bg:   #F4F9FD;  /* bleu glacé .sbs-hero / .sbs-sec-alt — 18,9 M px²   */
+  --sur:  #FFFFFF;  /* .sbs-page + cartes — 46,9 M px², rang 1            */
+  --sur2: #EDF3F8;  /* .sbp-more, surface creusée                        */
+  --sur3: #E6EDF1;  /* .sbp-av                                           */
+  --sur-input: #FBFDFE; /* input.sbs-input — quasi blanc, à peine bleuté */
 
-  --tx:  #193644;
-  --tx2: #4E6A78;
-  --tx3: #8AA0AB;
+  /* ─── Bordures — la marque sépare à l'anneau, pas à l'ombre ─── */
+  --brd:  rgba(38, 70, 83, 0.13);  /* a.sbo-xrow / .sbx-bitem            */
+  --brd2: rgba(38, 70, 83, 0.16);  /* anneau inset, bas de nav — 29 occ. */
+  --brd-card:  #E6EDF1;            /* .sbp-card / .sbs-panel, 4/5 pages  */
+  --brd-input: #DCE6EC;            /* input.sbs-input                    */
+
+  /* ─── Texte ─────────────────────────────────────────────────── */
+  --tx:  #264653;  /* 7399 car., rang 1 — AAA 10,08:1 sur blanc          */
+  --tx2: #4A5B63;  /* 4639 car., p.sbs-herop / p.sbp-p — AAA 7,08:1      */
+  --tx3: #5C7079;  /* 5131 car., p.sbo-rp / p.sbx-lede — AA 5,19:1       */
+  --tx4: #8FA3AC;  /* .sbo-fdur — 2,62:1, DÉCORATIF UNIQUEMENT           */
+  --tx-eyebrow: #77878E; /* .sbp-eyebrow — OK car 11px/700 uppercase     */
 
   --acc: var(--sb-orange);
 
-  --c-green: #1A7A48;  --c-green-bg: #E4F5EC;
-  --c-blue:  #00779B;  --c-blue-bg:  #E0F0F8;
-  --c-amb:   #C07010;  --c-amb-bg:   #FFF0D6;
-  --c-red:   #D94F5A;  --c-red-bg:   #FDEAEC;
-  --c-pur:   #6B52C8;  --c-pur-bg:   #EFECFB;
+  /* ─── Sémantique ────────────────────────────────────────────────
+     Vert et ambre sont mesurés sur les pills .sbx-pill du site.
+     Bleu, rouge et violet sont DÉRIVÉS (le site n'a pas ces états) :
+     construits sur les teintes de marque, pas sur une palette tierce. */
+  --c-green: #3C8B2B;  --c-green-bg: rgba(94, 192, 69, 0.15);  /* mesuré  */
+  --c-amb:   #A96900;  --c-amb-bg:   rgba(255, 158, 0, 0.18);  /* mesuré  */
+  --c-blue:  #1E6FA8;  --c-blue-bg:  rgba(133, 196, 255, 0.22); /* dérivé */
+  --c-red:   #C94A50;  --c-red-bg:   rgba(254, 109, 115, 0.16); /* dérivé */
+  --c-pur:   #8A46AB;  --c-pur-bg:   rgba(183, 93, 218, 0.14);  /* dérivé */
 
   --green: var(--c-green); --gbg: var(--c-green-bg);
   --blue:  var(--c-blue);  --bbg: var(--c-blue-bg);
@@ -53,48 +78,120 @@
   --red:   var(--c-red);   --rbg: var(--c-red-bg);
   --pur:   var(--c-pur);   --pbg: var(--c-pur-bg);
 
-  --r:  12px;
-  --rs: 8px;
+  /* ─── Typographie — la bi-typo de marque ────────────────────────
+     Montserrat structure (titres, labels, boutons, chiffres),
+     Raleway se lit (corps, liens). Le tracking est la signature :
+     très serré au-dessus de 20px, très ouvert en eyebrow. */
+  --font-display: 'Montserrat', ui-sans-serif, system-ui, sans-serif;
+  --font-sans:    'Raleway', ui-sans-serif, system-ui, sans-serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
+  --ls-tight:   -0.035em;  /* h1 56px / -1,96px                          */
+  --ls-heading: -0.03em;   /* h2 44px / -1,32px                          */
+  --ls-ctrl:    -0.01em;   /* bouton 16px / -0,16px                      */
+  --ls-label:    0.08em;   /* eyebrow large 13px / +1,04px               */
+  --ls-eyebrow:  0.16em;   /* eyebrow 11px / +1,76px                     */
+
+  /* ─── Rayons — contrôles nets, surfaces douces ──────────────── */
+  --r-btn:   4px;   /* .sbs-btn-1/2/3, 25 occ., 5/5 pages                */
+  --r-input: 6px;   /* input.sbs-input, 15 occ.                          */
+  --r-panel: 20px;  /* .sbo-xrow / .sbx-case, 16 occ.                    */
+  --r-modal: 24px;  /* .sbs-panel / .sbp-card, 4/5 pages                 */
+  --r-menu:  14px;  /* .sbs-ddlist                                       */
+  --r-pill:  99px;  /* .sbx-pill, 38 occ.                                */
+  --r:  8px;        /* .sbs-card / .sbs-acard — carte, 21 occ.           */
+  --rs: var(--r-btn); /* alias historique : tous les petits contrôles    */
+
+  /* ─── Élévation (valeurs complètes mesurées) ────────────────── */
+  --e0: inset 0 0 0 1px rgba(38, 70, 83, 0.16);                                  /* anneau, 29 occ. */
+  --e1: 0 4px 20px 0 rgba(38, 70, 83, 0.08), 0 1px 4px 0 rgba(38, 70, 83, 0.04); /* panneau, 5/5   */
+  --e2: 0 12px 32px 0 rgba(38, 70, 83, 0.14), 0 2px 6px 0 rgba(38, 70, 83, 0.06);/* menu           */
+  --e-hard:   4px 4px 0 0 rgba(38, 70, 83, 0.13); /* « cliquable », 23 occ.      */
+  --e-hard-s: 2px 2px 0 0 rgba(38, 70, 83, 0.11); /* variante compacte, 15 occ.  */
+  --e-under:  inset 0 -4px 0 0 var(--sb-orange);  /* soulignement, 12 occ.       */
+  --focus-ring: 0 0 0 3px rgba(255, 158, 0, 0.28);
+
+  /* ─── Motion — les seules valeurs employées par la marque ───── */
+  --t-ctrl: 160ms ease;  /* boutons, 38 occ., 5/5 pages                  */
+  --t-card: 180ms ease;  /* cartes interactives, 24 occ.                 */
+  --t-nav:  200ms ease;  /* liens, 56 occ., 5/5 pages                    */
+
+  /* ─── Texture « blueprint » — papier millimétré, 5/5 pages ──── */
+  --blueprint:
+    radial-gradient(circle, #CFDEE8 1.4px, rgba(0,0,0,0) 1.6px),
+    linear-gradient(#E3EDF4 1px, rgba(0,0,0,0) 1px),
+    linear-gradient(90deg, #E3EDF4 1px, rgba(0,0,0,0) 1px);
+  --blueprint-size: 44px 44px;
+
+  /* ─── Hexagone — le marqueur formel de la marque ────────────── */
+  --hex: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
+
+  /* ─── Sidebar (navy plein, comme le footer du site) ─────────── */
   --sb-bg:          var(--sb-navy);
-  --sb-tx:          rgba(255,255,255,0.75);
+  --sb-tx:          rgba(255, 255, 255, 0.62);  /* a.link-footer mesuré  */
   --sb-tx-active:   #FFFFFF;
-  --sb-brd:         rgba(255,255,255,0.10);
-  --sb-item-hover:  rgba(255,255,255,0.06);
-  --sb-item-active-bg: rgba(248,155,28,0.14);
+  --sb-brd:         rgba(255, 255, 255, 0.12);  /* séparateur du footer  */
+  --sb-item-hover:  rgba(255, 255, 255, 0.07);
+  --sb-item-active-bg:  rgba(255, 158, 0, 0.15);
   --sb-item-active-brd: var(--sb-orange);
-  --sb-av-bg:       rgba(255,255,255,0.12);
+  --sb-av-bg:       rgba(255, 255, 255, 0.12);
   --sb-av-active-bg: var(--sb-orange);
+  --sb-av-active-tx: var(--sb-navy);            /* navy sur orange       */
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   THÈME SOMBRE — ⚠︎ DÉRIVÉ, NON MESURÉ
+   smart-bees.fr n'a pas de mode sombre. Ces valeurs sont
+   reconstruites à partir du navy de marque #264653 (et non d'un gris
+   neutre) pour que le sombre reste reconnaissable comme Smart Bees.
+   Contrastes vérifiés : tx 13,6:1 · tx2 7,8:1 · tx3 4,9:1 sur --sur.
+   ═══════════════════════════════════════════════════════════════ */
 [data-theme="dark"] {
-  --bg:   #1C1C1E;
-  --sur:  #242426;
-  --sur2: #2C2C2E;
-  --sur3: #353538;
+  --bg:   #0E1B22;
+  --sur:  #16272F;
+  --sur2: #1D323C;
+  --sur3: #26414D;
+  --sur-input: #12222A;
 
-  --brd:  rgba(255,255,255,0.06);
-  --brd2: rgba(255,255,255,0.11);
+  --brd:  rgba(189, 224, 254, 0.10);
+  --brd2: rgba(189, 224, 254, 0.17);
+  --brd-card:  rgba(189, 224, 254, 0.12);
+  --brd-input: rgba(189, 224, 254, 0.16);
 
-  --tx:  #F0EDE8;
-  --tx2: #9A9691;
-  --tx3: #58554F;
+  --tx:  #EAF2F6;  /* 13,57:1 sur --sur */
+  --tx2: #A8BCC6;  /*  7,82:1           */
+  --tx3: #7E95A1;  /*  4,91:1           */
+  --tx4: #5F7681;
+  --tx-eyebrow: #7E95A1;
 
-  --c-green: #52C98A;  --c-green-bg: rgba(82,201,138,0.12);
-  --c-blue:  #48B4D4;  --c-blue-bg:  rgba(72,180,212,0.12);
-  --c-amb:   #F0A832;  --c-amb-bg:   rgba(240,168,50,0.12);
-  --c-red:   #E87070;  --c-red-bg:   rgba(232,112,112,0.12);
-  --c-pur:   #A085F0;  --c-pur-bg:   rgba(160,133,240,0.12);
+  --c-green: #7ED694;  --c-green-bg: rgba(94, 192, 69, 0.16);
+  --c-amb:   #FFB33D;  --c-amb-bg:   rgba(255, 158, 0, 0.16);
+  --c-blue:  #85C4FF;  --c-blue-bg:  rgba(133, 196, 255, 0.14);
+  --c-red:   #FE8B90;  --c-red-bg:   rgba(254, 109, 115, 0.15);
+  --c-pur:   #CE97E6;  --c-pur-bg:   rgba(183, 93, 218, 0.15);
 
-  --sb-bg:              #131315;
-  --sb-brd:             rgba(255,255,255,0.06);
-  --sb-tx:              rgba(255,255,255,0.45);
+  --e0: inset 0 0 0 1px rgba(189, 224, 254, 0.13);
+  --e1: 0 4px 20px 0 rgba(0, 0, 0, 0.40), 0 1px 4px 0 rgba(0, 0, 0, 0.24);
+  --e2: 0 12px 32px 0 rgba(0, 0, 0, 0.48), 0 2px 6px 0 rgba(0, 0, 0, 0.28);
+  --e-hard:   4px 4px 0 0 rgba(189, 224, 254, 0.13);
+  --e-hard-s: 2px 2px 0 0 rgba(189, 224, 254, 0.11);
+
+  /* Blueprint inversé : le tracé se lit en clair sur fond sombre */
+  --blueprint:
+    radial-gradient(circle, rgba(189, 224, 254, 0.16) 1.4px, rgba(0,0,0,0) 1.6px),
+    linear-gradient(rgba(189, 224, 254, 0.07) 1px, rgba(0,0,0,0) 1px),
+    linear-gradient(90deg, rgba(189, 224, 254, 0.07) 1px, rgba(0,0,0,0) 1px);
+
+  --sb-bg:              #0A1419;
+  --sb-brd:             rgba(255, 255, 255, 0.08);
+  --sb-tx:              rgba(255, 255, 255, 0.52);
   --sb-tx-active:       #FFFFFF;
-  --sb-item-hover:      rgba(255,255,255,0.04);
-  --sb-item-active-bg:  rgba(248,155,28,0.16);
+  --sb-item-hover:      rgba(255, 255, 255, 0.05);
+  --sb-item-active-bg:  rgba(255, 158, 0, 0.17);
   --sb-item-active-brd: var(--sb-orange);
-  --sb-av-bg:           rgba(255,255,255,0.08);
+  --sb-av-bg:           rgba(255, 255, 255, 0.09);
   --sb-av-active-bg:    var(--sb-orange);
+  --sb-av-active-tx:    var(--sb-navy);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -103,13 +200,16 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-  font-family: 'DM Sans', sans-serif;
+  font-family: var(--font-sans);
   background: var(--bg);
   color: var(--tx);
   font-size: 14px;
+  line-height: 1.55;              /* p.sbp-p mesuré : 14px / 21,7px */
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
-  transition: background .25s, color .25s;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  transition: background var(--t-nav), color var(--t-nav);
 }
 
 .hide { display: none !important; }
@@ -156,23 +256,31 @@ body {
 #cli-list { flex: 1; overflow-y: auto; padding: 0 8px; }
 .cli-item {
   display: flex; align-items: center; gap: 10px;
-  padding: 8px 8px; border-radius: 8px; cursor: pointer;
-  transition: background .12s; margin-bottom: 2px;
-  position: relative; border-left: 2px solid transparent;
+  padding: 8px 10px; border-radius: var(--r); cursor: pointer;
+  transition: background var(--t-ctrl), box-shadow var(--t-ctrl);
+  margin-bottom: 2px; position: relative;
 }
 .cli-item:hover { background: var(--sb-item-hover); }
+/* Le marqueur d'état actif du site est un trait orange plein de 4px posé en
+   box-shadow inset (.sbx-eyebrow, 12 occ.). Ici il est simplement tourné
+   à la verticale pour une liste. */
 .cli-item.on {
   background: var(--sb-item-active-bg);
-  border-left-color: var(--sb-item-active-brd);
+  box-shadow: inset 3px 0 0 0 var(--sb-item-active-brd);
 }
+/* Avatar hexagonal : le marqueur formel de la marque, à la taille de l'UI */
 .cli-av {
-  width: 28px; height: 28px; border-radius: 8px;
+  width: 28px; height: 28px;
+  clip-path: var(--hex);
   background: var(--sb-av-bg); color: var(--sb-tx-active);
-  font-size: 11px; font-weight: 700; display: flex;
-  align-items: center; justify-content: center; flex-shrink: 0;
-  transition: background .12s;
+  font-family: var(--font-display);
+  font-size: 10.5px; font-weight: 700; letter-spacing: .02em;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  transition: background var(--t-ctrl);
 }
-.cli-item.on .cli-av { background: var(--sb-av-active-bg); }
+.cli-item.on .cli-av {
+  background: var(--sb-av-active-bg); color: var(--sb-av-active-tx);
+}
 .cli-name {
   font-size: 13px; color: var(--sb-tx); font-weight: 500;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1;
@@ -199,7 +307,7 @@ body {
   cursor: pointer;
   color: var(--sb-tx);
   font-size: 12px;
-  font-family: 'DM Sans', sans-serif;
+  font-family: var(--font-sans);
   padding: 7px 8px;
   border-radius: 6px;
   text-align: left;
@@ -233,7 +341,7 @@ body {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: rgba(248, 155, 28, .2);
+  background: rgba(255, 158, 0, .2);
   color: var(--sb-orange);
   font-size: 11px;
   font-weight: 700;
@@ -292,20 +400,20 @@ body {
 .drive-outdated-banner {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 8px 16px; font-size: 13px; color: var(--tx2); flex-shrink: 0;
-  background: rgba(248,155,28,.08); border-bottom: 1px solid rgba(248,155,28,.25);
+  background: rgba(255, 158, 0,.08); border-bottom: 1px solid rgba(255, 158, 0,.25);
 }
 .drive-outdated-actions { display: flex; align-items: center; gap: 6px; }
 .drive-outdated-btn {
   padding: 4px 12px; border-radius: var(--rs); border: none;
   background: var(--sb-orange); color: #fff; font-size: 12px; font-weight: 600;
-  cursor: pointer; font-family: 'DM Sans', sans-serif; transition: opacity .15s;
+  cursor: pointer; font-family: var(--font-sans); transition: opacity .15s;
 }
 .drive-outdated-btn:hover:not(:disabled) { opacity: .88; }
 .drive-outdated-btn:disabled { opacity: .55; cursor: default; }
 .drive-outdated-dismiss {
   padding: 3px 7px; border-radius: var(--rs); border: 1px solid var(--brd);
   background: transparent; color: var(--tx3); font-size: 12px;
-  cursor: pointer; font-family: 'DM Sans', sans-serif; transition: opacity .15s;
+  cursor: pointer; font-family: var(--font-sans); transition: opacity .15s;
 }
 .drive-outdated-dismiss:hover { color: var(--tx); }
 
@@ -332,14 +440,14 @@ body {
 }
 .sync-lbl { font-size: 11px; color: var(--tx3); white-space: nowrap; }
 .sync-progress {
-  font-size: 11px; color: var(--sb-blue-md); font-family: 'DM Mono', monospace;
+  font-size: 11px; color: var(--c-blue); font-family: var(--font-mono);
   background: var(--c-blue-bg); border-radius: 4px; padding: 1px 6px;
 }
 .sync-progress:empty { display: none; }
 .btn-sm {
   font-size: 12px; padding: 5px 10px; border-radius: var(--rs);
   border: 1px solid var(--brd2); background: var(--sur2);
-  color: var(--tx2); cursor: pointer; font-family: 'DM Sans', sans-serif;
+  color: var(--tx2); cursor: pointer; font-family: var(--font-sans);
   transition: background .12s, color .12s;
 }
 .btn-sm:hover { background: var(--sur3); color: var(--tx); }
@@ -369,9 +477,12 @@ body {
   padding: 10px 14px; border-radius: var(--r); font-size: 14px;
   line-height: 1.55; white-space: pre-wrap; word-break: break-word;
 }
-.msg.u .bubble { background: var(--sb-navy); color: #fff; border-radius: var(--r) var(--r) 4px var(--r); }
-[data-theme="dark"] .msg.u .bubble { background: #2a4558; }
-.msg.a .bubble { background: var(--sur); border: 1px solid var(--brd); color: var(--tx); border-radius: var(--r) var(--r) var(--r) 4px; white-space: normal; }
+.msg.u .bubble { background: var(--sb-navy); color: #fff; border-radius: 14px 14px 4px 14px; }
+[data-theme="dark"] .msg.u .bubble { background: var(--sur3); color: var(--tx); }
+.msg.a .bubble {
+  background: var(--sur); border: none; box-shadow: var(--e0); color: var(--tx);
+  border-radius: 14px 14px 14px 4px; white-space: normal;
+}
 
 /* Markdown in assistant bubbles */
 .msg.a .bubble p { margin: 0 0 8px; }
@@ -379,7 +490,7 @@ body {
 .msg.a .bubble ol, .msg.a .bubble ul { padding-left: 20px; margin: 4px 0 8px; }
 .msg.a .bubble li { margin: 3px 0; line-height: 1.55; }
 .msg.a .bubble strong { font-weight: 600; }
-.md-code { background: var(--sur2); border: 1px solid var(--brd2); border-radius: 3px; padding: 1px 5px; font-family: 'DM Mono', monospace; font-size: 0.88em; }
+.md-code { background: var(--sur2); border: 1px solid var(--brd2); border-radius: 3px; padding: 1px 5px; font-family: var(--font-mono); font-size: 0.88em; }
 .md-cite { color: var(--tx3); font-size: 0.85em; }
 .bubble pre.md-pre { background: var(--sur2); border: 0.5px solid var(--brd); border-radius: 6px; padding: 12px; overflow-x: auto; font-size: 13px; margin: 8px 0; }
 .bubble h1, .bubble h2, .bubble h3, .bubble h4 { font-weight: 600; margin: 12px 0 4px; }
@@ -457,7 +568,7 @@ body {
   font-size: 10px; padding: 2px 7px; border-radius: 4px;
   border: 1px solid var(--brd2); background: transparent;
   color: var(--tx3); cursor: pointer; margin-top: 4px;
-  transition: all .12s; font-family: 'DM Sans', sans-serif;
+  transition: all .12s; font-family: var(--font-sans);
 }
 .kb-btn:hover { background: var(--c-green-bg); color: var(--c-green); border-color: var(--c-green); }
 .kb-btn.saved { background: var(--c-green-bg); color: var(--c-green); }
@@ -467,7 +578,7 @@ body {
   font-size: 11px; padding: 4px 10px; border-radius: 6px;
   border: 1px solid var(--brd2); background: transparent;
   color: var(--tx2); cursor: pointer; margin-top: 6px; display: inline-block;
-  transition: all .12s; font-family: 'DM Sans', sans-serif;
+  transition: all .12s; font-family: var(--font-sans);
 }
 .web-search-btn:hover { background: var(--sur2); border-color: var(--tx3); }
 
@@ -500,22 +611,25 @@ body {
 .attach-btn:hover { background: var(--sur3); color: var(--tx); }
 .attach-btn:disabled { opacity: .4; cursor: not-allowed; }
 .chat-ta {
-  flex: 1; resize: none; border: 1px solid var(--brd2);
-  border-radius: var(--rs); padding: 8px 12px;
-  font-family: 'DM Sans', sans-serif; font-size: 14px;
-  background: var(--sur2); color: var(--tx); outline: none;
-  line-height: 1.45; max-height: 120px; overflow-y: auto;
-  transition: border-color .15s; margin-bottom: 0;
+  flex: 1; resize: none; border: 1px solid var(--brd-input);
+  border-radius: var(--r-input); padding: 9px 12px;
+  font-family: var(--font-sans); font-size: 14px;
+  background: var(--sur-input); color: var(--tx); outline: none;
+  line-height: 1.55; max-height: 120px; overflow-y: auto;
+  transition: border-color var(--t-ctrl), box-shadow var(--t-ctrl); margin-bottom: 0;
 }
-.chat-ta:focus { border-color: var(--sb-blue-md); }
+.chat-ta:focus { border-color: var(--sb-orange); box-shadow: var(--focus-ring); }
 .send {
-  width: 34px; height: 34px; border-radius: var(--rs);
-  background: var(--sb-navy); border: none; cursor: pointer;
+  width: 34px; height: 34px; border-radius: var(--r-btn);
+  background: var(--sb-navy); color: #fff; border: none; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0; transition: opacity .15s;
+  flex-shrink: 0; transition: background var(--t-ctrl), opacity var(--t-ctrl);
 }
-[data-theme="dark"] .send { background: var(--sb-orange); }
+.send:hover:not(:disabled) { background: #1B343E; }
+/* Orange en sombre → icône navy (4,87:1), jamais blanche (2,07:1) */
+[data-theme="dark"] .send { background: var(--sb-orange); color: var(--sb-navy); }
 .send:disabled { opacity: .45; cursor: not-allowed; }
+.send:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .hint {
   font-size: 11px;
   color: var(--tx3);
@@ -564,16 +678,16 @@ body {
 /* Bouton "+" nouvelle tâche */
 .btn-add-task {
   width: 26px; height: 26px; border-radius: 6px;
-  border: 1px solid rgba(248,155,28,.35);
-  background: rgba(248,155,28,.10);
+  border: 1px solid rgba(255, 158, 0,.35);
+  background: rgba(255, 158, 0,.10);
   color: var(--sb-orange); cursor: pointer; display: flex;
   align-items: center; justify-content: center;
   transition: all .15s;
 }
 .btn-add-task:hover {
-  background: rgba(248,155,28,.20);
-  border-color: rgba(248,155,28,.65);
-  box-shadow: 0 0 0 3px rgba(248,155,28,.10);
+  background: rgba(255, 158, 0,.20);
+  border-color: rgba(255, 158, 0,.65);
+  box-shadow: 0 0 0 3px rgba(255, 158, 0,.10);
 }
 .filters { display: flex; flex-direction: column; gap: 6px; }
 .filter-row-primary { display: flex; gap: 3px; flex-wrap: wrap; }
@@ -582,7 +696,7 @@ body {
 .fil {
   font-size: 11px; padding: 3px 10px; border-radius: 20px;
   border: 1px solid var(--brd2); background: transparent;
-  color: var(--tx3); cursor: pointer; font-family: 'DM Sans', sans-serif;
+  color: var(--tx3); cursor: pointer; font-family: var(--font-sans);
   transition: all .12s;
 }
 .fil:hover { background: var(--sur2); color: var(--tx); }
@@ -603,22 +717,22 @@ body {
   font-size: 8px; font-weight: 700;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; border: 1.5px solid transparent;
-  transition: all .12s; font-family: 'DM Sans', sans-serif;
+  transition: all .12s; font-family: var(--font-sans);
 }
 .fil-avatar:hover { border-color: var(--brd2); }
-.fil-avatar.on { border-color: var(--sb-navy); box-shadow: 0 0 0 1.5px rgba(25,54,68,.15); }
-[data-theme="dark"] .fil-avatar.on { border-color: var(--sb-orange); box-shadow: 0 0 0 1.5px rgba(248,155,28,.15); }
+.fil-avatar.on { border-color: var(--sb-navy); box-shadow: 0 0 0 1.5px rgba(38, 70, 83,.15); }
+[data-theme="dark"] .fil-avatar.on { border-color: var(--sb-orange); box-shadow: 0 0 0 1.5px rgba(255, 158, 0,.15); }
 
 .fil-chip {
   font-size: 10px; padding: 2px 8px; border-radius: 10px;
   border: 1px solid var(--brd2); background: transparent;
-  color: var(--tx3); cursor: pointer; font-family: 'DM Sans', sans-serif;
+  color: var(--tx3); cursor: pointer; font-family: var(--font-sans);
   display: flex; align-items: center; gap: 3px;
   transition: all .12s; white-space: nowrap;
 }
 .fil-chip:hover { background: var(--sur2); color: var(--tx); }
-.fil-chip.on { background: rgba(248,155,28,.1); border-color: rgba(248,155,28,.3); color: var(--c-amb); }
-[data-theme="dark"] .fil-chip.on { background: rgba(248,155,28,.12); border-color: rgba(248,155,28,.25); }
+.fil-chip.on { background: rgba(255, 158, 0,.1); border-color: rgba(255, 158, 0,.3); color: var(--c-amb); }
+[data-theme="dark"] .fil-chip.on { background: rgba(255, 158, 0,.12); border-color: rgba(255, 158, 0,.25); }
 .todo-body { flex: 1; overflow-y: auto; padding: 8px 0; }
 .task-add-row {
   padding: 8px 12px 12px;
@@ -644,11 +758,11 @@ body {
 }
 .todo-search {
   width: calc(100% - 24px); margin: 6px 12px 8px;
-  padding: 6px 10px; font-size: 12px; font-family: 'DM Sans', sans-serif;
+  padding: 6px 10px; font-size: 12px; font-family: var(--font-sans);
   border: 1px solid var(--brd2); border-radius: var(--rs);
   background: var(--sur2); color: var(--tx); outline: none;
 }
-.todo-search:focus { border-color: var(--sb-blue-md); }
+.todo-search:focus { border-color: var(--sb-orange); box-shadow: var(--focus-ring); }
 
 /* Task groups */
 .grp { padding: 0 12px 8px; }
@@ -674,7 +788,7 @@ body {
 .task.p1-urgent { }
 .task.done-late { opacity: .65; }
 .task.dragging { opacity: .4; }
-.task.drag-over { border-color: var(--sb-orange); box-shadow: 0 0 0 2px rgba(248,155,28,.2); }
+.task.drag-over { border-color: var(--sb-orange); box-shadow: 0 0 0 2px rgba(255, 158, 0,.2); }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 
 .ttl { font-size: 13.5px; font-weight: 600; color: var(--tx); line-height: 1.3; margin-bottom: 4px; }
@@ -735,7 +849,7 @@ body {
 /* Due badges */
 .due-badge {
   font-size: 10px; padding: 2px 6px; border-radius: 6px;
-  font-family: 'DM Mono', monospace; flex-shrink: 0;
+  font-family: var(--font-mono); flex-shrink: 0;
 }
 .due-badge.overdue    { background: var(--c-red-bg);   color: var(--c-red); }
 .due-badge.soon       { background: var(--c-amb-bg);   color: var(--c-amb); }
@@ -750,34 +864,59 @@ body {
 .resizer:hover, .resizer.dragging { background: var(--sb-orange); }
 
 /* ─── BUTTONS ───────────────────────────────────────────────────────────── */
+/* Bouton primaire — variante navy du site (.sbj-cta : bg #264653, texte #FFF) */
 .btn {
   display: block; width: 100%; padding: 10px 16px;
   background: var(--sb-navy); color: #fff;
-  border: none; border-radius: var(--rs); cursor: pointer;
-  font-size: 13px; font-weight: 600; font-family: 'DM Sans', sans-serif;
-  text-align: center; transition: opacity .15s;
+  border: none; border-radius: var(--r-btn); cursor: pointer;
+  font-family: var(--font-display);
+  font-size: 13px; font-weight: 600; letter-spacing: var(--ls-ctrl);
+  text-align: center;
+  transition: background var(--t-ctrl), box-shadow var(--t-ctrl), opacity var(--t-ctrl);
 }
-[data-theme="dark"] .btn { background: var(--sb-orange); }
-.btn:hover { opacity: .88; }
+/* En sombre le CTA passe à l'orange : texte NAVY, jamais blanc.
+   Le blanc sur #FF9E00 tombe à 2,07:1 ; le navy est à 4,87:1 (AA). */
+[data-theme="dark"] .btn { background: var(--sb-orange); color: var(--sb-navy); }
+.btn:hover { opacity: .9; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* Bouton secondaire — .sbs-btn-3 : fond blanc, l'anneau inset tient lieu de bordure */
 .btn.btn-sec {
-  background: var(--sur2); color: var(--tx2);
-  border: 1px solid var(--brd2);
+  background: var(--sur); color: var(--tx);
+  border: none; box-shadow: var(--e0);
 }
-.btn.btn-sec:hover { background: var(--sur3); }
-[data-theme="dark"] .btn.btn-sec { background: var(--sur3); }
+.btn.btn-sec:hover { background: var(--sur2); }
+[data-theme="dark"] .btn.btn-sec { background: var(--sur2); }
+[data-theme="dark"] .btn.btn-sec:hover { background: var(--sur3); }
+
+/* Bouton tertiaire — .sbs-btn-2 : sable chaud, sans relief */
+.btn.btn-ter {
+  background: var(--sb-sand); color: var(--sb-navy);
+  border: none; box-shadow: none;
+}
+[data-theme="dark"] .btn.btn-ter { background: var(--sur3); color: var(--tx); }
 
 /* ─── INPUTS ────────────────────────────────────────────────────────────── */
 input[type="text"], input[type="password"], input[type="date"],
 input[type="email"], textarea, select {
-  width: 100%; padding: 8px 10px; font-size: 13px;
-  font-family: 'DM Sans', sans-serif; color: var(--tx);
-  background: var(--sur2); border: 1px solid var(--brd2);
-  border-radius: var(--rs); outline: none; transition: border-color .15s;
+  width: 100%; padding: 9px 12px; font-size: 13px;
+  font-family: var(--font-sans); color: var(--tx);
+  background: var(--sur-input); border: 1px solid var(--brd-input);
+  border-radius: var(--r-input); outline: none;
+  transition: border-color var(--t-ctrl), box-shadow var(--t-ctrl);
   margin-bottom: 10px;
 }
-input:focus, textarea:focus, select:focus { border-color: var(--sb-blue-md); }
-label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; margin-bottom: 4px; }
+input:focus, textarea:focus, select:focus {
+  border-color: var(--sb-orange); box-shadow: var(--focus-ring);
+}
+input::placeholder, textarea::placeholder { color: var(--tx4); }
+label {
+  font-family: var(--font-display);
+  font-size: 11px; font-weight: 700; letter-spacing: var(--ls-label);
+  text-transform: uppercase; color: var(--tx-eyebrow);
+  display: block; margin-bottom: 5px;
+}
 .err { font-size: 12px; color: var(--red); }
 .note-txt { font-size: 11px; color: var(--tx3); line-height: 1.5; margin-bottom: 8px; }
 
@@ -806,11 +945,15 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
 .settings-tabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--brd); }
 .stab {
   font-size: 12px; padding: 8px 11px; border: none; background: transparent;
-  color: var(--tx3); cursor: pointer; font-family: 'DM Sans', sans-serif;
+  color: var(--tx3); cursor: pointer; font-family: var(--font-sans);
   border-bottom: 2px solid transparent; margin-bottom: -1px;
   transition: color .12s, border-color .12s;
 }
-.stab.on { color: var(--tx); border-bottom-color: var(--sb-orange); }
+.stab.on {
+  color: var(--tx); border-bottom-color: transparent;
+  box-shadow: var(--e-under);   /* .sbx-eyebrow : inset 0 -4px 0 #FF9E00 */
+  font-weight: 700;
+}
 .members-wrap { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .mtag {
   display: flex; align-items: center; gap: 5px;
@@ -851,7 +994,7 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
 .src-sync-btn {
   font-size: 11px; padding: 4px 10px; border-radius: var(--rs);
   border: 1px solid var(--brd2); background: var(--sur);
-  color: var(--tx2); cursor: pointer; font-family: 'DM Sans', sans-serif;
+  color: var(--tx2); cursor: pointer; font-family: var(--font-sans);
   transition: all .12s;
 }
 .src-sync-btn:hover { background: var(--sur3); color: var(--tx); }
@@ -877,7 +1020,7 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
 .brief-regen-btn {
   font-size: 11px; padding: 4px 10px; border-radius: var(--rs);
   border: 1px solid var(--brd2); background: transparent;
-  color: var(--tx3); cursor: pointer; font-family: 'DM Sans', sans-serif;
+  color: var(--tx3); cursor: pointer; font-family: var(--font-sans);
   transition: all .12s;
 }
 .brief-regen-btn:hover { color: var(--tx); }
@@ -944,14 +1087,14 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
   font-size: 10px; font-weight: 700; padding: 2px 7px;
   border-radius: 10px; flex-shrink: 0;
 }
-.cm-role-badge.owner  { background: rgba(248,155,28,.15); color: #c07a00; }
-.cm-role-badge.member { background: rgba(0,119,155,.10);  color: var(--sb-blue-md); }
+.cm-role-badge.owner  { background: rgba(255, 158, 0,.15); color: #c07a00; }
+.cm-role-badge.member { background: var(--c-blue-bg);  color: var(--c-blue); }
 [data-theme="dark"] .cm-role-badge.owner { color: var(--sb-orange); }
 .cm-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .cm-role-btn {
   font-size: 11px; padding: 3px 8px; border-radius: var(--rs);
   border: 1px solid var(--brd2); background: transparent;
-  color: var(--tx3); cursor: pointer; font-family: 'DM Sans', sans-serif;
+  color: var(--tx3); cursor: pointer; font-family: var(--font-sans);
   white-space: nowrap; transition: all .12s;
 }
 .cm-role-btn:hover { background: var(--sur); color: var(--tx); border-color: var(--sb-orange); }
@@ -969,13 +1112,13 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
 .cm-claim-banner {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 10px 12px; border-radius: var(--rs);
-  background: rgba(248,155,28,.1); border: 1px solid rgba(248,155,28,.3);
+  background: rgba(255, 158, 0,.1); border: 1px solid rgba(255, 158, 0,.3);
   font-size: 13px; color: var(--tx2);
 }
 .cm-claim-btn {
   padding: 5px 12px; border-radius: var(--rs); border: none;
   background: var(--sb-orange); color: #fff; font-size: 12px; font-weight: 600;
-  cursor: pointer; font-family: 'DM Sans', sans-serif; flex-shrink: 0;
+  cursor: pointer; font-family: var(--font-sans); flex-shrink: 0;
   transition: opacity .15s;
 }
 .cm-claim-btn:hover { opacity: .88; }
@@ -1038,7 +1181,7 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
 .task-modal-del {
   font-size: 12px; padding: 5px 12px; border-radius: var(--rs);
   border: 1px solid var(--brd2); background: transparent;
-  color: var(--tx3); cursor: pointer; font-family: 'DM Sans', sans-serif;
+  color: var(--tx3); cursor: pointer; font-family: var(--font-sans);
   transition: all .12s; flex-shrink: 0;
 }
 .task-modal-del:hover { background: var(--rbg); color: var(--red); border-color: rgba(217,79,90,.4); }
@@ -1054,7 +1197,7 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
 }
 .note-entry { position: relative; padding: 5px 0; border-bottom: 1px solid var(--brd); }
 .note-entry:last-child { border-bottom: none; }
-.note-entry-date { font-size: 10px; color: var(--tx3); font-family: 'DM Mono', monospace; }
+.note-entry-date { font-size: 10px; color: var(--tx3); font-family: var(--font-mono); }
 .note-entry-text { font-size: 12px; color: var(--tx); margin-top: 2px; white-space: pre-wrap; }
 .note-entry-actions {
   position: absolute; top: 4px; right: 4px;
@@ -1072,13 +1215,13 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
   width: 100%; font-size: 12px; padding: 6px 8px;
   border: 1px solid var(--brd2); border-radius: var(--rs);
   background: var(--sur1); color: var(--tx);
-  font-family: 'DM Sans', sans-serif; resize: vertical;
+  font-family: var(--font-sans); resize: vertical;
   min-height: 50px; box-sizing: border-box;
 }
 .note-edit-actions { display: flex; gap: 4px; margin-top: 4px; }
 .note-edit-btn {
   padding: 3px 10px; border-radius: 4px; border: none;
-  cursor: pointer; font-size: 12px; font-family: 'DM Sans', sans-serif;
+  cursor: pointer; font-size: 12px; font-family: var(--font-sans);
 }
 .note-edit-btn.save { background: var(--sb-navy); color: #fff; }
 .note-edit-btn.cancel { background: var(--sur2); color: var(--tx3); }
@@ -1090,7 +1233,7 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
 .note-add-btn {
   padding: 6px 12px; border-radius: var(--rs); border: 1px solid var(--brd2);
   background: var(--sur2); color: var(--tx2); cursor: pointer;
-  font-family: 'DM Sans', sans-serif; font-size: 12px; flex-shrink: 0;
+  font-family: var(--font-sans); font-size: 12px; flex-shrink: 0;
   transition: all .12s;
 }
 .note-add-btn:hover { background: var(--sur3); color: var(--tx); }
@@ -1159,16 +1302,16 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
   background: var(--sur); border: 1px solid var(--brd);
   cursor: pointer; text-align: left; width: 100%;
   transition: border-color .12s, box-shadow .12s;
-  font-family: 'DM Sans', sans-serif;
+  font-family: var(--font-sans);
 }
-.ws-prompt-chip:hover { border-color: var(--sb-orange); box-shadow: 0 1px 6px rgba(248,155,28,.15); }
+.ws-prompt-chip:hover { border-color: var(--sb-orange); box-shadow: 0 1px 6px rgba(255, 158, 0,.15); }
 .ws-prompt-icon {
   width: 28px; height: 28px; border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
   font-size: 14px; flex-shrink: 0;
 }
-.ws-prompt-icon.orange { background: rgba(248,155,28,.12); }
-.ws-prompt-icon.navy   { background: rgba(25,54,68,.08); }
+.ws-prompt-icon.orange { background: rgba(255, 158, 0,.12); }
+.ws-prompt-icon.navy   { background: rgba(38, 70, 83,.08); }
 .ws-prompt-icon.coral  { background: rgba(255,103,114,.10); }
 .ws-prompt-icon.blue   { background: rgba(0,119,155,.10); }
 .ws-prompt-text { flex: 1; font-size: 12px; color: var(--tx2); }
@@ -1179,7 +1322,7 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
 /* ─── HIST ──────────────────────────────────────────────────────────────── */
 .hist-entry { padding: 10px 0; border-bottom: 1px solid var(--brd); }
 .hist-entry:last-child { border-bottom: none; }
-.hist-date { font-size: 10px; color: var(--tx3); font-family: 'DM Mono', monospace; margin-bottom: 3px; }
+.hist-date { font-size: 10px; color: var(--tx3); font-family: var(--font-mono); margin-bottom: 3px; }
 .hist-text { font-size: 12px; color: var(--tx2); line-height: 1.45; white-space: pre-wrap; }
 
 /* ─── LOGIN ─────────────────────────────────────────────────────────────── */
@@ -1187,7 +1330,14 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
   min-height: 100vh;
   display: flex; align-items: center; justify-content: center;
   padding: 24px;
-  background: linear-gradient(145deg, #0c1e2c 0%, #0f2636 45%, #091820 100%);
+  /* Navy de marque plein + blueprint, comme le pied de page du site.
+     Pas de halo coloré : sur #264653 un voile orange vire à l'olive. */
+  background-color: var(--sb-navy);
+  background-image:
+    radial-gradient(circle, rgba(189, 224, 254, 0.10) 1.4px, rgba(0,0,0,0) 1.6px),
+    linear-gradient(rgba(189, 224, 254, 0.04) 1px, rgba(0,0,0,0) 1px),
+    linear-gradient(90deg, rgba(189, 224, 254, 0.04) 1px, rgba(0,0,0,0) 1px);
+  background-size: 44px 44px, 44px 44px, 44px 44px;
   position: relative; overflow: hidden;
 }
 #ln-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
@@ -1196,19 +1346,19 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
 .ln-card {
   position: relative; z-index: 10;
   background: rgba(255,255,255,.06); backdrop-filter: blur(18px);
-  border: 1px solid rgba(194,226,245,.18); border-radius: 20px;
+  border: 1px solid rgba(189, 224, 254,.18); border-radius: 20px;
   padding: 36px 40px 32px; width: 100%; max-width: 360px;
   text-align: center; box-shadow: 0 8px 40px rgba(0,0,0,.3);
 }
 .ln-flower { display: flex; justify-content: center; margin-bottom: 16px; }
 .ln-title { font-size: 22px; font-weight: 700; color: #fff; letter-spacing: -.02em; margin-bottom: 4px; }
-.ln-sub { font-size: 13px; color: rgba(194,226,245,.6); margin-bottom: 16px; }
-.ln-sep { width: 40px; height: 2px; background: rgba(248,155,28,.4); border-radius: 1px; margin: 0 auto 20px; }
+.ln-sub { font-size: 13px; color: rgba(189, 224, 254,.6); margin-bottom: 16px; }
+.ln-sep { width: 40px; height: 2px; background: rgba(255, 158, 0,.4); border-radius: 1px; margin: 0 auto 20px; }
 #google-signin-btn {
   display: flex; align-items: center; justify-content: center; gap: 10px;
   width: 100%; padding: 12px 20px; border-radius: 10px;
   background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.15);
-  color: #fff; font-size: 14px; font-weight: 500; font-family: 'DM Sans', sans-serif;
+  color: #fff; font-size: 14px; font-weight: 500; font-family: var(--font-sans);
   cursor: pointer; transition: background .2s, border-color .2s;
 }
 #google-signin-btn:hover { background: rgba(255,255,255,.14); border-color: rgba(255,255,255,.25); }
@@ -1220,7 +1370,7 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
   font-size: 12px; color: var(--tx3); background: transparent;
   border: 1px dashed var(--brd2); border-radius: var(--rs);
   padding: 6px 12px; cursor: pointer; width: 100%;
-  font-family: 'DM Sans', sans-serif; transition: all .12s; text-align: left;
+  font-family: var(--font-sans); transition: all .12s; text-align: left;
 }
 .btn-add-member:hover { color: var(--tx); border-color: var(--sb-orange); background: var(--sur2); }
 .member-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
@@ -1239,3 +1389,241 @@ label { font-size: 12px; font-weight: 600; color: var(--tx2); display: block; ma
   transition: all .12s; line-height: 1.4;
 }
 .digest-refresh:hover { background: var(--sur2); color: var(--tx); border-color: var(--sb-orange); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   COUCHE DE MARQUE SMART BEES
+   ───────────────────────────────────────────────────────────────────────────
+   Cette couche est posée en dernier volontairement : elle applique la Direction
+   artistique mesurée sur smart-bees.fr par-dessus les règles fonctionnelles
+   ci-dessus, sans les réécrire. Chaque bloc cite ce qui a été mesuré.
+   Référence, preuves et écarts : docs/brand-dna-smart-bees.md
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── 1. BI-TYPOGRAPHIE ─────────────────────────────────────────────────────
+   Règle de marque : Montserrat structure (titres, labels, boutons, chiffres),
+   Raleway se lit (corps, messages, notes). Le tracking est la signature —
+   très serré au-dessus de 20px, très ouvert en eyebrow.
+   Mesuré : Montserrat 257 éléments / Raleway 297 éléments, 5/5 pages. */
+
+.sb-brand, .empty-t, .ws-client-name, .ln-title, .todo-title, .tb-name,
+.ttl, .modal h2, .modal h3, .kb-entry-title, .src-name, .cm-name,
+.brief-hero-value, .cal-day-label, .sb-user-name, .add-src-opt-label,
+.gmail-prefs-title, .stab, .btn, .btn-sm, .btn-cal, .btn-add-task,
+.fil, .fil-chip, .prio, .spill, .due-badge, .msg-badge, .kb-btn,
+.cli-av, .tb-av, .av, .sb-user-av, .cm-avatar, .fil-avatar, .cal-dow,
+.sb-section, .grp-lbl, .task-meta-label, .sources-label, .brief-label,
+.section-divider-label, .notes-label, .msg-sources-label, .cm-role-badge {
+  font-family: var(--font-display);
+}
+
+/* Titres — le tracking négatif est proportionnel (-0,035em constant) */
+.ws-client-name { font-size: 26px; font-weight: 800; letter-spacing: var(--ls-tight); line-height: 1.1; }
+.ln-title       { font-size: 24px; font-weight: 800; letter-spacing: var(--ls-tight); line-height: 1.1; }
+.empty-t        { font-size: 20px; font-weight: 800; letter-spacing: var(--ls-heading); }
+.modal h2       { font-size: 18px; font-weight: 800; letter-spacing: var(--ls-heading); }
+.todo-title     { font-size: 14px; font-weight: 700; letter-spacing: var(--ls-ctrl); }
+.tb-name        { font-size: 14px; font-weight: 700; letter-spacing: var(--ls-ctrl); }
+.ttl            { font-size: 13.5px; font-weight: 700; letter-spacing: var(--ls-ctrl); line-height: 1.3; }
+
+/* Eyebrows — Montserrat 11px/700 + 0,16em, la marque ne fait d'ALL CAPS que là.
+   Sans tracking, l'uppercase se lit mal et fait daté (mesuré : +1,76px à 11px). */
+.sb-section, .task-meta-label, .sources-label, .section-divider-label,
+.brief-label, .notes-label, .msg-sources-label, .grp-lbl, label {
+  font-family: var(--font-display);
+  font-size: 11px; font-weight: 700;
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+.sb-section { opacity: 1; color: var(--sb-tx); font-size: 10px; }
+.grp-lbl    { color: var(--tx-eyebrow); }
+
+/* Corps — Raleway, ce qui se lit vraiment */
+.bubble, .note-entry-text, .hist-text, .kb-entry-content, .brief-field-value,
+.textra, .note-txt, .cli-name, .src-meta, .cm-email {
+  font-family: var(--font-sans);
+}
+
+/* Mono — JetBrains Mono 12,5px/600 (span.sbx-pcode) */
+.md-code, .note-entry-date, .hist-date, .due-badge {
+  font-family: var(--font-mono); font-weight: 600;
+}
+
+/* ─── 2. ÉLÉVATION ──────────────────────────────────────────────────────────
+   La marque sépare à l'anneau inset et au changement de fond, pas à l'ombre.
+   L'ombre est réservée à ce qui doit flotter. */
+
+.modal {
+  border-radius: var(--r-modal);        /* .sbs-panel / .sbp-card mesuré */
+  box-shadow: var(--e1);
+  border: 1px solid var(--brd-card);
+  padding: 28px;
+}
+.modal-bg { background: rgba(38, 70, 83, .45); backdrop-filter: blur(3px); }
+
+.topbar    { background: var(--sur); border-bottom: 1px solid var(--brd2); }
+.chat-foot { background: var(--sur); border-top: 1px solid var(--brd); }
+
+/* ─── 3. LE DÉCALAGE DUR ────────────────────────────────────────────────────
+   `4px 4px 0` sans flou sur les blocs cliquables : c'est le geste le plus
+   caractéristique du système (.sbo-xrow, 23 occ.). Ici en version compacte
+   (2px) parce qu'une liste de tâches est dense. */
+
+.task {
+  background: var(--sur);
+  border: 1px solid var(--brd);
+  border-radius: var(--r);
+  transition: box-shadow var(--t-card), transform var(--t-card),
+              border-color var(--t-card), background var(--t-card);
+}
+.task:hover {
+  box-shadow: var(--e-hard-s);
+  border-color: var(--brd2);
+  transform: translate(-1px, -1px);
+}
+.ws-prompt-chip {
+  transition: box-shadow var(--t-card), transform var(--t-card), border-color var(--t-card);
+}
+.ws-prompt-chip:hover {
+  box-shadow: var(--e-hard-s);
+  border-color: var(--sb-orange);
+  transform: translate(-1px, -1px);
+}
+
+/* ─── 4. HEXAGONE ───────────────────────────────────────────────────────────
+   clip-path exact du site, pointes gauche/droite (jamais pointe en haut).
+   Le logo de nav est un hexagone navy de 18x16 suivi du wordmark. */
+
+.av, .tb-av, .sb-user-av, .cm-avatar, .fil-avatar {
+  border-radius: 0;
+  clip-path: var(--hex);
+  letter-spacing: .02em;
+}
+.fil-avatar { border: none; }
+.fil-avatar.on   { box-shadow: none; outline: 2px solid var(--sb-orange); outline-offset: 1px; }
+[data-theme="dark"] .fil-avatar.on { box-shadow: none; outline: 2px solid var(--sb-orange); }
+.sb-user-av { background: rgba(255, 158, 0, .22); }
+
+/* Hexagone de marque devant le wordmark de la sidebar */
+.sb-brand {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 15px; font-weight: 700; letter-spacing: var(--ls-ctrl);
+}
+.sb-brand::before {
+  content: ''; flex-shrink: 0;
+  width: 14px; height: 13px;
+  clip-path: var(--hex);
+  background: var(--sb-orange);
+}
+
+/* Cluster hexagonal de l'état vide.
+   Sur le site les hexagones ne sont jamais tournés (pointes gauche/droite) et
+   ils sont pleins, pas fantomatiques : les clusters du hero sont à pleine
+   saturation. On reprend les deux règles. */
+.ws-hex-cluster { width: 92px; height: 84px; }
+.ws-hex {
+  border-radius: 0 !important;
+  clip-path: var(--hex);
+  transform: none;
+  opacity: 1;
+  width: 38px; height: 34px;
+}
+.ws-hex-c  { width: 44px; height: 39px; top: 50%; left: 50%;
+             transform: translate(-50%, -50%); opacity: 1; background: var(--sb-orange); z-index: 2; }
+.ws-hex-tr { top: 0; right: 0;    background: var(--sb-blue-sky); opacity: .9; }
+.ws-hex-bl { bottom: 0; left: 0;  background: var(--sb-blue-lt); }
+.ws-hex-r  { top: 24%; right: -6px; width: 26px; height: 23px;
+             background: var(--sb-coral); opacity: .85; }
+
+/* ─── 5. BLUEPRINT ──────────────────────────────────────────────────────────
+   Le papier millimétré d'ingénieur : c'est le fond de tout le site (5/5 pages)
+   et c'est ce qui rend l'outil immédiatement identifiable. Réservé aux zones
+   vides — jamais sous du texte dense. */
+
+.welcome-state, .empty {
+  background-color: var(--bg);
+  background-image: var(--blueprint);
+  background-size: var(--blueprint-size);
+}
+
+/* ─── 6. LE SOULIGNEUR ORANGE ───────────────────────────────────────────────
+   Bloc orange plein derrière un mot-clé du titre, texte navy par-dessus —
+   un feutre passé sur un mot (h1 de la home). */
+
+.sb-mark {
+  background: var(--sb-orange);
+  color: var(--sb-navy);
+  padding: 0 .28em .06em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* ─── 7. PILLS & BADGES ─────────────────────────────────────────────────────
+   Mesuré : radius 99px, Raleway 10,5px/800, fond à 15-18 % de l'accent,
+   texte dans la version assombrie du même accent. */
+
+.spill, .msg-badge, .fil-chip, .brief-tag, .brief-tag-amb, .brief-tag-blue,
+.brief-tag-pur, .kb-tag, .mtag, .fil, .cm-role-badge, .src-chip {
+  border-radius: var(--r-pill);
+}
+.spill, .msg-badge, .fil-chip, .brief-tag, .kb-tag {
+  font-weight: 800; letter-spacing: .02em;
+}
+.prio { border-radius: var(--r-pill); font-weight: 800; letter-spacing: .04em; padding: 1px 7px; }
+.due-badge { border-radius: var(--r-pill); padding: 2px 8px; }
+.s-todo { background: var(--c-blue-bg); color: var(--c-blue); }
+
+/* ─── 8. MOTION ─────────────────────────────────────────────────────────────
+   Le site n'utilise que `ease`, à 0,16s (contrôles) et 0,18s (cartes).
+   Aucun cubic-bezier personnalisé sur tout le site. */
+
+.btn-sm, .btn-cal, .btn-add-task, .attach-btn, .collapse-btn, .stab, .fil,
+.sb-act, .src-sync-btn, .src-del-btn, .note-action-btn, .digest-refresh,
+.btn-add-member, .cm-role-btn, .cm-remove-btn {
+  transition: background var(--t-ctrl), color var(--t-ctrl),
+              border-color var(--t-ctrl), box-shadow var(--t-ctrl);
+}
+
+/* ─── 8bis. ICONOGRAPHIE ────────────────────────────────────────────────────
+   Le site trace ses 24x24 à stroke-width 1.6, cap et join arrondis.
+   lucide-react est à 2 par défaut : posé ici une fois pour toutes plutôt
+   qu'icône par icône (une propriété CSS l'emporte sur l'attribut de présentation). */
+
+svg { stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ─── 9. FOCUS ──────────────────────────────────────────────────────────────
+   Absent du système de marque (le site n'expose pas ses états :focus).
+   Construit ici sur l'orange de marque — nécessaire à l'accessibilité. */
+
+:focus-visible { outline: 2px solid var(--sb-orange); outline-offset: 2px; }
+button:focus-visible, .cli-item:focus-visible, .task:focus-visible {
+  outline: none; box-shadow: var(--focus-ring);
+}
+
+/* ─── 10. ÉCRAN DE CONNEXION ────────────────────────────────────────────────
+   Carte posée sur le navy de marque texturé blueprint. */
+
+.ln-card {
+  background: rgba(12, 28, 36, .55);
+  border: 1px solid rgba(189, 224, 254, .18);
+  border-radius: var(--r-modal);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .34);
+}
+.ln-sub { color: rgba(189, 224, 254, .68); font-family: var(--font-sans); }
+.ln-sep { width: 32px; height: 3px; background: var(--sb-orange); border-radius: 0; }
+#google-signin-btn {
+  border-radius: var(--r-btn);
+  font-family: var(--font-display); font-weight: 600;
+  letter-spacing: var(--ls-ctrl);
+  transition: background var(--t-ctrl), border-color var(--t-ctrl), box-shadow var(--t-ctrl);
+}
+#google-signin-btn:hover { box-shadow: var(--e-hard-s); }
+
+/* ─── 11. DENSITÉ ───────────────────────────────────────────────────────────
+   Divergence délibérée : le site est sur une échelle hand-tuned Webflow
+   (18/10/22/26). Une application a besoin d'une grille reproductible, donc on
+   garde le pas de 4px et on n'emprunte que les valeurs qui y tombent déjà.
+   La respiration de la marque est dans les sections, pas dans les composants —
+   ce qui se transpose parfaitement à une UI dense. */
+
+.modal-foot { padding-top: 20px; }
+.settings-tabs { gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--brd); }

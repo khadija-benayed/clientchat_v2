@@ -51,7 +51,7 @@ export default function CalendarModal({ tasks, onTaskClick, onClose }) {
           const dt = taskMap[ds] || [];
           const cls = ['cal-cell', isToday ? 'cal-today' : '', isPast && dt.length ? 'cal-overdue' : '', dt.length ? 'cal-has-tasks' : ''].filter(Boolean).join(' ');
           const dots = dt.map((t, ti) => {
-            const c = t.prio === 'P1' ? 'var(--red)' : t.prio === 'P3' ? 'var(--sb-blue-md)' : 'var(--amb)';
+            const c = t.prio === 'P1' ? 'var(--red)' : t.prio === 'P3' ? 'var(--c-blue)' : 'var(--amb)';
             return <span key={ti} className="cal-dot" style={{ background: c }} />;
           });
           return (

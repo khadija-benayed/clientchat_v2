@@ -212,7 +212,7 @@ export default function ClientSettings({
                 </>
               ) : (
                 <>
-                  <input type="text" readOnly value={inviteLink} style={{ marginBottom: '6px', fontFamily: "'DM Mono', monospace", fontSize: '12px' }} />
+                  <input type="text" readOnly value={inviteLink} style={{ marginBottom: '6px', fontFamily: "'JetBrains Mono', monospace", fontSize: '12px' }} />
                   <div style={{ fontSize: '12px', color: 'var(--tx3)', marginBottom: '8px' }}>
                     Expire dans 7 jours · Usage unique · Réservé à {inviteEmail}
                   </div>
@@ -252,7 +252,7 @@ export default function ClientSettings({
         <div>
           <label>Contexte client</label>
           <textarea value={ctx} onChange={e => setCtx(e.target.value)}
-            style={{ minHeight: '110px', fontFamily: "'DM Mono', monospace", fontSize: '12px', marginBottom: '4px' }}
+            style={{ minHeight: '110px', fontFamily: "'JetBrains Mono', monospace", fontSize: '12px', marginBottom: '4px' }}
             placeholder="Infos clés : secteur, stack, interlocuteurs, enjeux…" />
 
           <DriveSection client={client} onClientUpdate={handleClientUpdate}

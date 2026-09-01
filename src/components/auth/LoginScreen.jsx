@@ -58,7 +58,7 @@ export default function LoginScreen({ onSignIn }) {
         const ka = Math.PI / 3 * k + Math.PI / 6;
         return `${(fr * Math.cos(ka)).toFixed(1)},${(fr * Math.sin(ka)).toFixed(1)}`;
       }).join(' ');
-      fh += `<polygon points="${cp}" fill="#F89B1C" opacity=".95"
+      fh += `<polygon points="${cp}" fill="#FF9E00" opacity=".95"
         style="animation:lnHexIn .45s .39s cubic-bezier(.34,1.56,.64,1) both"/>`;
       flSvg.innerHTML = fh;
     }
@@ -248,24 +248,24 @@ export default function LoginScreen({ onSignIn }) {
             fill="#C2E2F5" opacity=".75" stroke="#9ec8e0" strokeWidth=".5"/>
 
           {/* ── Abdomen jaune avec rayures navy ── */}
-          <ellipse cx="20" cy="37" rx="9.5" ry="10.5" fill="#F89B1C"/>
-          <rect x="10" y="32" width="20" height="5" fill="#193644" clipPath="url(#ab-clip)"/>
-          <rect x="10" y="39.5" width="20" height="5" fill="#193644" clipPath="url(#ab-clip)"/>
+          <ellipse cx="20" cy="37" rx="9.5" ry="10.5" fill="#FF9E00"/>
+          <rect x="10" y="32" width="20" height="5" fill="#264653" clipPath="url(#ab-clip)"/>
+          <rect x="10" y="39.5" width="20" height="5" fill="#264653" clipPath="url(#ab-clip)"/>
           <polygon points="18.5,47 21.5,47 20,51" fill="#d07a00"/>
 
           {/* ── Thorax ── */}
-          <ellipse cx="20" cy="24" rx="7" ry="6.5" fill="#193644"/>
+          <ellipse cx="20" cy="24" rx="7" ry="6.5" fill="#264653"/>
 
           {/* ── Tête grande et ronde ── */}
-          <circle cx="20" cy="12" r="11" fill="#F89B1C"/>
+          <circle cx="20" cy="12" r="11" fill="#FF9E00"/>
 
           {/* ── Yeux kawaii énormes ── */}
           <circle cx="14.5" cy="11.5" r="4.5" fill="white"/>
-          <circle cx="15.4" cy="12.5" r="2.6" fill="#193644"/>
+          <circle cx="15.4" cy="12.5" r="2.6" fill="#264653"/>
           <circle cx="13.8" cy="10.4" r="1.2" fill="white"/>
           <circle cx="16.2" cy="13.8" r="0.55" fill="white" opacity=".7"/>
           <circle cx="25.5" cy="11.5" r="4.5" fill="white"/>
-          <circle cx="26.4" cy="12.5" r="2.6" fill="#193644"/>
+          <circle cx="26.4" cy="12.5" r="2.6" fill="#264653"/>
           <circle cx="24.8" cy="10.4" r="1.2" fill="white"/>
           <circle cx="27.2" cy="13.8" r="0.55" fill="white" opacity=".7"/>
 
@@ -275,11 +275,11 @@ export default function LoginScreen({ onSignIn }) {
 
           {/* ── Antennes ── */}
           <path d="M15.5 2.5 Q13 -0.5 10.5 -2.5"
-            stroke="#193644" strokeWidth="1.6" strokeLinecap="round" fill="none"/>
-          <circle cx="10" cy="-3" r="2.4" fill="#F89B1C" stroke="#d07a00" strokeWidth=".5"/>
+            stroke="#264653" strokeWidth="1.6" strokeLinecap="round" fill="none"/>
+          <circle cx="10" cy="-3" r="2.4" fill="#FF9E00" stroke="#d07a00" strokeWidth=".5"/>
           <path d="M24.5 2.5 Q27 -0.5 29.5 -2.5"
-            stroke="#193644" strokeWidth="1.6" strokeLinecap="round" fill="none"/>
-          <circle cx="30" cy="-3" r="2.4" fill="#F89B1C" stroke="#d07a00" strokeWidth=".5"/>
+            stroke="#264653" strokeWidth="1.6" strokeLinecap="round" fill="none"/>
+          <circle cx="30" cy="-3" r="2.4" fill="#FF9E00" stroke="#d07a00" strokeWidth=".5"/>
         </svg>
       </div>
 

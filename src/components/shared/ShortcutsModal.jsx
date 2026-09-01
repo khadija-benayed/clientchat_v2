@@ -13,7 +13,7 @@ const SHORTCUTS = [
 ];
 
 const kbdStyle = {
-  fontFamily: "'DM Mono', monospace",
+  fontFamily: "'JetBrains Mono', monospace",
   background: 'var(--sur2)', border: '1px solid var(--brd2)',
   borderRadius: '4px', padding: '2px 7px',
 };

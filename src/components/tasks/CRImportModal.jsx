@@ -116,7 +116,7 @@ export default function CRImportModal({
             rows={12}
             style={{
               width: '100%', resize: 'vertical',
-              fontFamily: "'DM Mono', monospace", fontSize: '13px',
+              fontFamily: "'JetBrains Mono', monospace", fontSize: '13px',
               marginBottom: 0,
             }}
           />
@@ -319,7 +319,7 @@ function ProposalItem({ item, tasks, members, onToggle, onFieldChange }) {
               type="date"
               value={item.fields.due_date || ''}
               onChange={e => onFieldChange('due_date', e.target.value)}
-              style={{ marginBottom: 0, fontSize: '12px', fontFamily: "'DM Mono', monospace" }}
+              style={{ marginBottom: 0, fontSize: '12px', fontFamily: "'JetBrains Mono', monospace" }}
             />
           </div>
           <div>

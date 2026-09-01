@@ -60,7 +60,7 @@ export function KbSaveModal({ isOpen, onClose, initialText, client, jwtToken }) 
       <input type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex : Approche SEO Décathlon" />
       <label>Contenu</label>
       <textarea value={content} onChange={e => setContent(e.target.value)}
-        style={{ minHeight: '100px', fontFamily: "'DM Mono', monospace", fontSize: '12px' }} />
+        style={{ minHeight: '100px', fontFamily: "'JetBrains Mono', monospace", fontSize: '12px' }} />
       <label>Tags (séparés par des virgules)</label>
       <input type="text" value={tags} onChange={e => setTags(e.target.value)} placeholder="Ex : SEO, stratégie, technique" />
       {error && <div className="err" style={{ marginBottom: '8px' }}>{error}</div>}
